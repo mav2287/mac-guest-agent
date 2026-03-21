@@ -1,0 +1,119 @@
+#include "commands.h"
+#include "protocol.h"
+#include "log.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_COMMANDS 64
+
+static command_entry_t registry[MAX_COMMANDS];
+static int num_commands = 0;
+
+/* Forward declarations for all cmd-*.c init functions */
+void cmd_info_init(void);
+void cmd_system_init(void);
+void cmd_power_init(void);
+void cmd_hardware_init(void);
+void cmd_disk_init(void);
+void cmd_fs_init(void);
+void cmd_network_init(void);
+void cmd_file_init(void);
+void cmd_exec_init(void);
+void cmd_ssh_init(void);
+void cmd_user_init(void);
+
+void command_register(const char *name, command_handler_fn handler, int enabled)
+{
+    if (num_commands >= MAX_COMMANDS) {
+        LOG_ERROR("Command registry full, cannot register: %s", name);
+        return;
+    }
+    registry[num_commands].name = name;
+    registry[num_commands].handler = handler;
+    registry[num_commands].enabled = enabled;
+    num_commands++;
+    LOG_DEBUG("Registered command: %s", name);
+}
+
+void commands_init(void)
+{
+    cmd_info_init();
+    cmd_system_init();
+    cmd_power_init();
+    cmd_hardware_init();
+    cmd_disk_init();
+    cmd_fs_init();
+    cmd_network_init();
+    cmd_file_init();
+    cmd_exec_init();
+    cmd_ssh_init();
+    cmd_user_init();
+    LOG_INFO("Registered %d commands", num_commands);
+}
+
+static command_entry_t *find_command(const char *name)
+{
+    for (int i = 0; i < num_commands; i++) {
+        if (strcmp(registry[i].name, name) == 0)
+            return &registry[i];
+    }
+    return NULL;
+}
+
+char *commands_dispatch(const char *cmd_name, cJSON *args, const cJSON *id)
+{
+    if (!cmd_name) {
+        return protocol_build_error("CommandNotFound", "No command specified", id);
+    }
+
+    command_entry_t *cmd = find_command(cmd_name);
+    if (!cmd || !cmd->enabled) {
+        LOG_ERROR("Command not found or disabled: %s", cmd_name);
+        char desc[256];
+        snprintf(desc, sizeof(desc), "The command %s has not been found", cmd_name);
+        return protocol_build_error("CommandNotFound", desc, id);
+    }
+
+    /* Reduce log noise for frequent commands */
+    if (strcmp(cmd_name, "guest-ping") == 0 ||
+        strcmp(cmd_name, "guest-sync") == 0 ||
+        strcmp(cmd_name, "guest-sync-delimited") == 0) {
+        LOG_DEBUG("Handling command: %s", cmd_name);
+    } else {
+        LOG_INFO("Handling command: %s", cmd_name);
+    }
+
+    const char *err_class = NULL;
+    const char *err_desc = NULL;
+    cJSON *result = cmd->handler(args, &err_class, &err_desc);
+
+    if (err_class || err_desc) {
+        if (result) cJSON_Delete(result);
+        return protocol_build_error(
+            err_class ? err_class : "GenericError",
+            err_desc ? err_desc : "Command execution failed",
+            id
+        );
+    }
+
+    return protocol_build_response(result, id);
+}
+
+cJSON *commands_get_list(void)
+{
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < num_commands; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "name", registry[i].name);
+        cJSON_AddBoolToObject(item, "enabled", registry[i].enabled);
+        cJSON_AddBoolToObject(item, "success-response", 1);
+        cJSON_AddItemToArray(arr, item);
+    }
+    return arr;
+}
+
+int commands_count(void)
+{
+    return num_commands;
+}

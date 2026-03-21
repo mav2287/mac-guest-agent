@@ -1,0 +1,29 @@
+# Build output
+build/
+dist/
+*.o
+*.a
+*.dSYM/
+
+# Binary
+mac-guest-agent
+mac-guest-agent-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*
+
+# Logs
+*.log
+
+# Temp
+*.tmp
+*.bak
+*.orig
