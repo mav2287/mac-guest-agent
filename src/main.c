@@ -267,15 +267,18 @@ int main(int argc, char *argv[])
     const os_version_t *ver = compat_os_version();
     LOG_INFO("Detected macOS %d.%d.%d", ver->major, ver->minor, ver->patch);
 
-    /* Check QEMU environment (skip in test mode) */
+    /* Log QEMU environment detection (informational only).
+     * The Linux qemu-ga does NOT gate on environment detection —
+     * it just tries to open the virtio-serial device and fails if
+     * it's not there. We do the same. macOS QEMU VMs typically use
+     * real Mac hardware models (MacPro6,1 etc.) so hw.model won't
+     * say "QEMU" and system_profiler won't say "VIRTUAL". */
     if (!cfg.test_mode) {
-        if (!is_running_in_qemu()) {
-            LOG_ERROR("Not running in a QEMU virtualization environment");
-            LOG_ERROR("Use -t/--test flag to run in test mode outside QEMU");
-            log_close();
-            return 1;
+        if (is_running_in_qemu()) {
+            LOG_INFO("QEMU environment detected");
+        } else {
+            LOG_INFO("QEMU environment not detected via hw.model/system_profiler (this is normal for macOS VMs with custom hardware models)");
         }
-        LOG_INFO("QEMU environment detected");
     }
 
     /* Check root (skip in test mode) */
