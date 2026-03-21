@@ -4,7 +4,7 @@
 
 set -e
 
-REPO="tuzhis/osx-qemu-guest-agent"
+REPO="mav2287/mac-guest-agent"
 BINARY_NAME="mac-guest-agent"
 INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
 
