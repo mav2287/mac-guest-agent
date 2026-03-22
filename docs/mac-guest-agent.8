@@ -1,0 +1,133 @@
+.TH MAC-GUEST-AGENT 8 "March 2026" "mac-guest-agent 2.1.0" "System Administration"
+.SH NAME
+mac-guest-agent \- QEMU Guest Agent for macOS
+.SH SYNOPSIS
+.B mac-guest-agent
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B mac-guest-agent
+is a QEMU Guest Agent (QGA) implementation for macOS virtual machines. It
+enables hypervisors (Proxmox VE, libvirt, QEMU) to manage macOS guests through
+the standard QGA protocol over a serial port.
+.PP
+The agent communicates via an ISA serial port (16550 UART) that macOS supports
+natively on all versions from Mac OS X 10.4 Tiger through current macOS. No
+custom kernel extensions or SIP modifications are required.
+.SH OPTIONS
+.TP
+.BR \-d ", " \-\-daemonize
+Run as a daemon. Log output goes to the log file instead of stderr.
+.TP
+.BR \-p ", " \-\-path " " \fIPATH\fR
+Specify the serial device path. Default: auto-detect from known paths
+including /dev/cu.serial1 (ISA) and /dev/cu.org.qemu.guest_agent.0 (VirtIO).
+.TP
+.BR \-l ", " \-\-logfile " " \fIPATH\fR
+Log file path. Default: /var/log/mac-guest-agent.log when daemonized.
+.TP
+.BR \-f ", " \-\-pidfile " " \fIPATH\fR
+PID file path.
+.TP
+.BR \-v ", " \-\-verbose
+Enable debug logging.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-b ", " \-\-block\-rpcs " " \fILIST\fR
+Comma-separated list of commands to disable. Example:
+.B \-b guest-exec,guest-set-user-password
+.TP
+.BR \-a ", " \-\-allow\-rpcs " " \fILIST\fR
+Comma-separated list of commands to allow. All others are disabled.
+Takes precedence over block-rpcs.
+.TP
+.BR \-c ", " \-\-config " " \fIPATH\fR
+Configuration file path. Default: /etc/qemu/qemu-ga.conf
+.TP
+.BR \-D ", " \-\-dump\-conf
+Print effective configuration and exit.
+.TP
+.BR \-t ", " \-\-test
+Test mode. Uses stdin/stdout instead of a serial device. Does not require
+QEMU or root privileges.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.B \-\-install
+Install as a macOS LaunchDaemon system service.
+.TP
+.B \-\-uninstall
+Remove the LaunchDaemon service and binary.
+.SH CONFIGURATION
+The agent reads an optional configuration file at /etc/qemu/qemu-ga.conf
+(compatible with the Linux qemu-ga format):
+.PP
+.RS
+.nf
+[general]
+daemonize = 0
+path = /dev/cu.serial1
+logfile = /var/log/mac-guest-agent.log
+verbose = 0
+block-rpcs = guest-exec,guest-set-user-password
+.fi
+.RE
+.SH HYPERVISOR SETUP
+On Proxmox VE, set the guest agent to ISA serial mode:
+.PP
+.RS
+.B qm set <vmid> --agent enabled=1,type=isa
+.RE
+.PP
+Then stop and start the VM (QEMU args change requires a full restart).
+On macOS 11.0 (Big Sur) and later, the default virtio-serial mode also
+works via Apple's built-in VirtIO driver.
+.SH SUPPORTED COMMANDS
+The agent supports 44 standard QGA commands including guest-ping,
+guest-get-osinfo, guest-get-host-name, guest-shutdown,
+guest-network-get-interfaces, guest-file-open/read/write,
+guest-exec, and guest-ssh-get/add/remove-authorized-keys.
+.PP
+See
+.B mac-guest-agent --test
+for interactive testing of all commands.
+.SH FILES
+.TP
+.I /usr/local/bin/mac-guest-agent
+Agent binary.
+.TP
+.I /Library/LaunchDaemons/com.macos.guest-agent.plist
+LaunchDaemon configuration.
+.TP
+.I /etc/qemu/qemu-ga.conf
+Optional configuration file.
+.TP
+.I /var/log/mac-guest-agent.log
+Log file.
+.TP
+.I /etc/newsyslog.d/mac-guest-agent.conf
+Log rotation configuration.
+.SH SECURITY
+The agent runs as root and accepts commands from the hypervisor via the
+serial port. The security model assumes the hypervisor is trusted. Sensitive
+commands (guest-exec, guest-set-user-password, guest-ssh-*) can be
+disabled via block-rpcs or allow-rpcs.
+.PP
+Passwords are passed to dscl via stdin, not on the command line.
+.SH EXIT STATUS
+.TP
+.B 0
+Normal exit.
+.TP
+.B 1
+Error (device not found, permission denied, etc).
+.SH SEE ALSO
+.BR qemu-ga (8),
+.BR launchctl (1),
+.BR dscl (1)
+.SH AUTHORS
+mac-guest-agent contributors.
+.SH LICENSE
+MIT License.

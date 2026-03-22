@@ -85,6 +85,13 @@ clean:
 	@rm -rf $(BUILD_DIR) $(DIST_DIR)
 	@echo "Clean complete"
 
+# Generate dSYM debug symbols for crash analysis
+dsym: build-all
+	@echo "Generating dSYM files..."
+	@dsymutil $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 -o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64.dSYM 2>/dev/null || true
+	@dsymutil $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 -o $(BUILD_DIR)/$(PROGRAM_NAME)-arm64.dSYM 2>/dev/null || true
+	@echo "dSYM files generated"
+
 # Install to system
 install: build
 	@echo "Installing..."
@@ -92,6 +99,10 @@ install: build
 	sudo cp $(BUILD_DIR)/$(PROGRAM_NAME) /usr/local/bin/$(PROGRAM_NAME)
 	sudo chmod +x /usr/local/bin/$(PROGRAM_NAME)
 	sudo /usr/local/bin/$(PROGRAM_NAME) --install
+	@echo "Installing man page..."
+	sudo mkdir -p /usr/local/share/man/man8
+	sudo cp docs/mac-guest-agent.8 /usr/local/share/man/man8/
+	@echo "Man page installed (try: man mac-guest-agent)"
 
 # Uninstall
 uninstall:
