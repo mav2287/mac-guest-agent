@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "cmd-fs.h"
 #include "commands.h"
 #include "compat.h"
 #include "log.h"
@@ -296,6 +297,11 @@ int main(int argc, char *argv[])
 
     /* Apply RPC filters */
     commands_apply_filters(cfg.block_rpcs, cfg.allow_rpcs);
+
+    /* In test mode, freeze operations are dry-run (don't touch real filesystems) */
+    if (cfg.test_mode) {
+        fsfreeze_set_test_mode(1);
+    }
 
     /* Write PID file */
     write_pidfile(cfg.pidfile);

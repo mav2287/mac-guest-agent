@@ -37,6 +37,11 @@
 #define AUTO_THAW_SECS 600   /* 10 minutes */
 #define FREEZE_POLL_MS 100
 
+/* Test/dry-run mode — don't touch real filesystems */
+static int test_mode = 0;
+
+void fsfreeze_set_test_mode(int enabled) { test_mode = enabled; }
+
 /* Freeze state */
 static int freeze_status = 0;        /* 0=thawed, 1=frozen */
 static time_t freeze_start_time = 0;
@@ -172,6 +177,11 @@ static int run_hooks(const char *action)
 
 static int sync_all_volumes(int do_fullfsync)
 {
+    if (test_mode) {
+        LOG_DEBUG("Dry-run: would sync all volumes (F_FULLFSYNC=%d)", do_fullfsync);
+        return 1; /* Pretend 1 volume synced */
+    }
+
     sync();
 
     if (!do_fullfsync) return 0;
@@ -210,6 +220,12 @@ static int create_apfs_snapshot(void)
 {
     if (!compat_has_tmutil()) return 0;
 
+    if (test_mode) {
+        LOG_DEBUG("Dry-run: would create APFS snapshot");
+        snprintf(snapshot_date, sizeof(snapshot_date), "dry-run");
+        return 1;
+    }
+
     /* Clean up orphaned snapshots from previous failed runs */
     run_command("tmutil deletelocalsnapshots / 2>/dev/null");
 
@@ -243,6 +259,11 @@ static int create_apfs_snapshot(void)
 static void delete_apfs_snapshot(void)
 {
     if (!snapshot_date[0]) return;
+    if (test_mode || strcmp(snapshot_date, "dry-run") == 0) {
+        LOG_DEBUG("Dry-run: would delete APFS snapshot");
+        snapshot_date[0] = '\0';
+        return;
+    }
 
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "tmutil deletelocalsnapshots %s 2>/dev/null", snapshot_date);
@@ -369,6 +390,7 @@ int fsfreeze_is_frozen(void)
 void fsfreeze_continuous_sync(void)
 {
     if (!freeze_status) return;
+    if (test_mode) return;  /* Don't touch real filesystems in test mode */
     /* Lightweight sync — no F_FULLFSYNC (expensive), just flush dirty buffers */
     sync();
 }
