@@ -122,7 +122,10 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
     for (const char *p = username; *p; p++) {
         if (!(*p >= 'a' && *p <= 'z') && !(*p >= 'A' && *p <= 'Z') &&
             !(*p >= '0' && *p <= '9') && *p != '_' && *p != '-' && *p != '.') {
-            free(decoded_pass);
+            if (decoded_pass) {
+                memset(decoded_pass, 0, strlen(decoded_pass));
+                free(decoded_pass);
+            }
             *err_class = "InvalidParameter";
             *err_desc = "Invalid username characters";
             return NULL;

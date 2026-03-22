@@ -8,18 +8,30 @@
 
 /* ---- guest-get-disks ---- */
 
+static int is_safe_disk_name(const char *name)
+{
+    /* Only allow /dev/diskN format — prevent command injection */
+    if (!name || strncmp(name, "/dev/disk", 9) != 0) return 0;
+    for (const char *p = name + 9; *p; p++) {
+        if (!(*p >= '0' && *p <= '9') && *p != 's') return 0;
+    }
+    return 1;
+}
+
 static char *get_disk_size(const char *disk_name)
 {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "diskutil info %s 2>/dev/null", disk_name);
+    if (!is_safe_disk_name(disk_name)) return NULL;
+
+    char *const argv[] = { "diskutil", "info", (char *)disk_name, NULL };
     char *out = NULL;
-    if (run_command_capture(cmd, &out) != 0 || !out) {
+    if (run_command_v("diskutil", argv, &out, NULL) != 0 || !out) {
         free(out);
         return NULL;
     }
 
     /* Look for "Disk Size" or "Total Size" line with (NNN Bytes) */
-    char *line = strtok(out, "\n");
+    char *save_ptr = NULL;
+    char *line = strtok_r(out, "\n", &save_ptr);
     while (line) {
         if (strstr(line, "Disk Size") || strstr(line, "Total Size")) {
             char *paren = strchr(line, '(');
@@ -34,7 +46,7 @@ static char *get_disk_size(const char *disk_name)
                 }
             }
         }
-        line = strtok(NULL, "\n");
+        line = strtok_r(NULL, "\n", &save_ptr);
     }
     free(out);
     return NULL;

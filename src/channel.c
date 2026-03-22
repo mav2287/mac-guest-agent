@@ -334,7 +334,7 @@ static int channel_write_all(channel_t *ch, const void *data, size_t len)
 {
     int fd = ch->is_test ? STDOUT_FILENO : ch->wfd;
     const char *p = data;
-    (void)0;
+    /* write loop */
     while (len > 0) {
         ssize_t n = write(fd, p, len);
         if (n < 0) {

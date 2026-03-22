@@ -85,8 +85,14 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
     /* Create .ssh directory */
     char ssh_dir[512];
     snprintf(ssh_dir, sizeof(ssh_dir), "%s/.ssh", pw->pw_dir);
-    mkdir(ssh_dir, 0700);
-    chown(ssh_dir, pw->pw_uid, pw->pw_gid);
+    if (mkdir(ssh_dir, 0700) < 0 && errno != EEXIST) {
+        *err_class = "GenericError";
+        *err_desc = "Failed to create .ssh directory";
+        return NULL;
+    }
+    if (chown(ssh_dir, pw->pw_uid, pw->pw_gid) < 0) {
+        LOG_WARN("Failed to chown %s: %s", ssh_dir, strerror(errno));
+    }
 
     char *path = get_authorized_keys_path(user_item->valuestring);
     if (!path) {
@@ -154,7 +160,9 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         return NULL;
     }
 
-    chown(path, pw->pw_uid, pw->pw_gid);
+    if (chown(path, pw->pw_uid, pw->pw_gid) < 0) {
+        LOG_WARN("Failed to chown authorized_keys: %s", strerror(errno));
+    }
     free(content);
     free(path);
 
@@ -233,9 +241,12 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
     free(data);
 
     struct passwd *pw = getpwnam(user_item->valuestring);
-    write_file(path, result_buf, result_len, 0600);
-    if (pw)
-        chown(path, pw->pw_uid, pw->pw_gid);
+    if (write_file(path, result_buf, result_len, 0600) != 0) {
+        LOG_WARN("Failed to write authorized_keys during remove");
+    }
+    if (pw && chown(path, pw->pw_uid, pw->pw_gid) < 0) {
+        LOG_WARN("Failed to chown authorized_keys: %s", strerror(errno));
+    }
 
     free(result_buf);
     free(path);

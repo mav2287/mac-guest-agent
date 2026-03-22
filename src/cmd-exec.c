@@ -19,6 +19,7 @@ typedef struct {
     pid_t   real_pid;
     int     exited;
     int     exit_code;
+    int     wait_status; /* raw wait status for WIFSIGNALED etc. */
     char   *out_data;   /* base64 encoded */
     char   *err_data;   /* base64 encoded */
     time_t  start_time;
@@ -103,8 +104,14 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     if (capture) {
-        pipe(out_pipe);
-        pipe(err_pipe);
+        if (pipe(out_pipe) < 0 || pipe(err_pipe) < 0) {
+            free(argv);
+            if (out_pipe[0] >= 0) { close(out_pipe[0]); close(out_pipe[1]); }
+            if (err_pipe[0] >= 0) { close(err_pipe[0]); close(err_pipe[1]); }
+            *err_class = "GenericError";
+            *err_desc = "Failed to create pipes for output capture";
+            return NULL;
+        }
     }
 
     pid_t pid = fork();
@@ -212,6 +219,7 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
         int status;
         waitpid(pid, &status, 0);
         proc->exited = 1;
+        proc->wait_status = status;
         proc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
         if (stdout_buf && stdout_len > 0)
@@ -254,6 +262,7 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
         pid_t w = waitpid(proc->real_pid, &status, WNOHANG);
         if (w > 0) {
             proc->exited = 1;
+            proc->wait_status = status;
             proc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         }
     }
@@ -267,8 +276,9 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
         if (proc->err_data)
             cJSON_AddStringToObject(result, "err-data", proc->err_data);
 
-        if (WIFSIGNALED(proc->exit_code))
-            cJSON_AddNumberToObject(result, "signal", WTERMSIG(proc->exit_code));
+        /* Use raw wait_status for signal detection, not the extracted exit_code */
+        if (WIFSIGNALED(proc->wait_status))
+            cJSON_AddNumberToObject(result, "signal", WTERMSIG(proc->wait_status));
     }
 
     return result;

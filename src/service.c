@@ -175,13 +175,12 @@ int service_update(const char *new_binary_path)
         printf("  Backed up current binary to %s\n", backup);
     }
 
-    /* Copy new binary */
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "cp '%s' '%s' && chmod 755 '%s'",
-             new_binary_path, BINARY_PATH, BINARY_PATH);
-    if (run_command(cmd) != 0) {
+    /* Copy new binary — use execv, not shell, to prevent injection */
+    char *const cp_argv[] = { "cp", (char *)new_binary_path, BINARY_PATH, NULL };
+    char *const chmod_argv[] = { "chmod", "755", BINARY_PATH, NULL };
+    if (run_command_v("cp", cp_argv, NULL, NULL) != 0 ||
+        run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
         fprintf(stderr, "Error: failed to copy new binary\n");
-        /* Restore backup */
         char backup[512];
         snprintf(backup, sizeof(backup), "%s.backup", BINARY_PATH);
         rename(backup, BINARY_PATH);

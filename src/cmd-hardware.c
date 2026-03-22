@@ -99,12 +99,13 @@ static int get_vm_stat_text(long long *free_pages, long long *active_pages,
         return -1;
     }
 
-    char *line = strtok(out, "\n");
+    char *save_ptr = NULL;
+    char *line = strtok_r(out, "\n", &save_ptr);
     while (line) {
         char *ps = strstr(line, "page size of ");
         if (ps) {
             *page_size = strtoll(ps + 13, NULL, 10);
-            line = strtok(NULL, "\n");
+            line = strtok_r(NULL, "\n", &save_ptr);
             continue;
         }
 
@@ -134,7 +135,7 @@ static int get_vm_stat_text(long long *free_pages, long long *active_pages,
             else if (strstr(line, "Pages stored in compressor"))
                 *compressed_pages = val;
         }
-        line = strtok(NULL, "\n");
+        line = strtok_r(NULL, "\n", &save_ptr);
     }
     free(out);
     return 0;
@@ -212,7 +213,12 @@ static cJSON *handle_get_memory_blocks(cJSON *args, const char **err_class, cons
     long long used = total / 2; /* fallback */
     if (get_vm_stat(&free_p, &active_p, &inactive_p, &wired_p, &compressed_p,
                     &spec_p, &purg_p, &pgsz) == 0) {
-        used = (wired_p + active_p + compressed_p) * pgsz;
+        /* Use safe multiplication to avoid overflow on very large systems */
+        long long pages_used = wired_p + active_p + compressed_p;
+        if (pgsz > 0 && pages_used <= (long long)(0x7FFFFFFFFFFFFFFFLL / pgsz))
+            used = pages_used * pgsz;
+        else
+            used = total / 2; /* overflow fallback */
     }
 
     /* Calculate block size */

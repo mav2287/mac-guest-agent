@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 static cJSON *handle_shutdown(cJSON *args, const char **err_class, const char **err_desc)
 {
@@ -21,7 +22,10 @@ static cJSON *handle_shutdown(cJSON *args, const char **err_class, const char **
 
     /* Fork to execute shutdown after response is sent */
     pid_t pid = fork();
-    if (pid == 0) {
+    if (pid < 0) {
+        LOG_ERROR("fork() failed for shutdown: %s", strerror(errno));
+        /* Still return success — the command was received, execution just failed */
+    } else if (pid == 0) {
         /* Child: brief delay to let response go out, then execute */
         usleep(200000);
         setsid();

@@ -38,13 +38,17 @@ cJSON *protocol_get_id(const cJSON *request)
 char *protocol_build_response(cJSON *return_value, const cJSON *id)
 {
     cJSON *resp = cJSON_CreateObject();
-    if (!resp) return NULL;
-
-    if (return_value) {
-        cJSON_AddItemToObject(resp, "return", return_value);
-    } else {
-        cJSON_AddItemToObject(resp, "return", cJSON_CreateObject());
+    if (!resp) {
+        if (return_value) cJSON_Delete(return_value);
+        return NULL;
     }
+
+    cJSON *ret = return_value ? return_value : cJSON_CreateObject();
+    if (!ret) {
+        cJSON_Delete(resp);
+        return NULL;
+    }
+    cJSON_AddItemToObject(resp, "return", ret);
 
     if (id) {
         cJSON_AddItemToObject(resp, "id", cJSON_Duplicate(id, 1));

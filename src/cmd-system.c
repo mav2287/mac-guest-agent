@@ -94,9 +94,14 @@ static cJSON *handle_get_timezone(cJSON *args, const char **err_class, const cha
 
     time_t now = time(NULL);
     struct tm tm_buf;
-    localtime_r(&now, &tm_buf);
+    if (!localtime_r(&now, &tm_buf)) {
+        *err_class = "GenericError";
+        *err_desc = "Failed to get local time";
+        return NULL;
+    }
 
     cJSON *result = cJSON_CreateObject();
+    if (!result) return NULL;
     if (tm_buf.tm_zone)
         cJSON_AddStringToObject(result, "zone", tm_buf.tm_zone);
     cJSON_AddNumberToObject(result, "offset", (double)tm_buf.tm_gmtoff);
