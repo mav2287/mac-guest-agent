@@ -69,6 +69,14 @@ int service_install(void)
     FILE *logfp = fopen(LOG_PATH, "a");
     if (logfp) fclose(logfp);
 
+    /* Install log rotation config (keeps 5 rotated copies, 1MB max each) */
+    mkdir_p("/etc/newsyslog.d", 0755);
+    const char *logrotate =
+        "# Log rotation for mac-guest-agent\n"
+        "/var/log/mac-guest-agent.log    644  5  1024  *  J\n";
+    write_file("/etc/newsyslog.d/mac-guest-agent.conf",
+               logrotate, strlen(logrotate), 0644);
+
     /* Load and start service */
     printf("Starting service...\n");
     if (run_command("launchctl load " PLIST_PATH) != 0) {

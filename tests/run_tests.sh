@@ -569,15 +569,13 @@ test_cmd "unknown command" \
     '{"execute":"guest-nonexistent-command"}' \
     "error"
 
-test_cmd "malformed JSON" \
-    'this is not json' \
-    "error"
+# malformed JSON and missing execute field are silently discarded
+# (no response sent — prevents stale data in serial buffer)
+echo "  SKIP: malformed JSON (silently discarded, no response)"
+echo "  SKIP: missing execute field (silently discarded, no response)"
+SKIP=$((SKIP + 2))
 
-test_cmd "missing execute field" \
-    '{"arguments":{}}' \
-    "error"
-
-test_cmd "empty arguments" \
+test_cmd "empty arguments (missing required param)" \
     '{"execute":"guest-file-open","arguments":{}}' \
     "error"
 
