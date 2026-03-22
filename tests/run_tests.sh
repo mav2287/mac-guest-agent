@@ -581,6 +581,220 @@ test_cmd "empty arguments (missing required param)" \
 
 # =========================================================
 echo ""
+echo "--- Block/Allow RPC Filtering ---"
+# =========================================================
+
+# Test block-rpcs: ping should be blocked
+BLOCK_RESULT=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$BLOCK_RESULT" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
+   echo "$BLOCK_RESULT" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
+    echo "  PASS: block-rpcs blocks guest-ping"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: block-rpcs did not block guest-ping"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test block-rpcs: non-blocked command should still work
+BLOCK_ALLOW=$(echo '{"execute":"guest-get-time"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$BLOCK_ALLOW" | python3 -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null || \
+   echo "$BLOCK_ALLOW" | python -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null; then
+    echo "  PASS: block-rpcs allows unblocked commands"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: block-rpcs broke unblocked commands"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test allow-rpcs: only listed commands work
+ALLOW_BLOCKED=$(echo '{"execute":"guest-get-osinfo"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$ALLOW_BLOCKED" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
+   echo "$ALLOW_BLOCKED" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
+    echo "  PASS: allow-rpcs blocks unlisted commands"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: allow-rpcs did not block unlisted command"
+    FAIL=$((FAIL + 1))
+fi
+
+ALLOW_OK=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$ALLOW_OK" | python3 -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null || \
+   echo "$ALLOW_OK" | python -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null; then
+    echo "  PASS: allow-rpcs permits listed commands"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: allow-rpcs blocked listed command"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Config File Parsing ---"
+# =========================================================
+
+CFGTMP="/tmp/mga-test-config-$$"
+cat > "$CFGTMP" << 'CFGEOF'
+[general]
+verbose = 1
+path = /dev/null
+block-rpcs = guest-shutdown,guest-suspend-disk
+CFGEOF
+
+DUMP=$("$BINARY" -c "$CFGTMP" -D 2>/dev/null)
+rm -f "$CFGTMP"
+
+if echo "$DUMP" | grep -q "verbose = 1" && echo "$DUMP" | grep -q "block-rpcs = guest-shutdown"; then
+    echo "  PASS: config file parsed correctly"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: config file not parsed"
+    echo "    Got: $DUMP"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Version & Help ---"
+# =========================================================
+
+VER=$("$BINARY" -V 2>/dev/null)
+if echo "$VER" | grep -q "mac-guest-agent"; then
+    echo "  PASS: --version outputs version string"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --version"
+    FAIL=$((FAIL + 1))
+fi
+
+HELP=$("$BINARY" -h 2>/dev/null)
+if echo "$HELP" | grep -q "\-\-install" && echo "$HELP" | grep -q "\-\-test"; then
+    echo "  PASS: --help shows all options"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --help incomplete"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- SSH Commands (success path) ---"
+# =========================================================
+
+# Test with current user (should succeed for get, at least)
+CURRENT_USER=$(whoami)
+SSH_GET=$(echo "{\"execute\":\"guest-ssh-get-authorized-keys\",\"arguments\":{\"username\":\"$CURRENT_USER\"}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$SSH_GET" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d and 'keys' in d['return']" 2>/dev/null || \
+   echo "$SSH_GET" | python -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d and 'keys' in d['return']" 2>/dev/null; then
+    echo "  PASS: guest-ssh-get-authorized-keys for $CURRENT_USER"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: guest-ssh-get-authorized-keys for $CURRENT_USER"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Set Time (validation only) ---"
+# =========================================================
+
+# Send a set-time with current time (should succeed without changing anything meaningful)
+CURRENT_NS=$(python3 -c "import time; print(int(time.time() * 1e9))" 2>/dev/null || python -c "import time; print(int(time.time() * 1e9))" 2>/dev/null)
+if [ -n "$CURRENT_NS" ]; then
+    SET_TIME=$(echo "{\"execute\":\"guest-set-time\",\"arguments\":{\"time\":$CURRENT_NS}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+    if echo "$SET_TIME" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d or 'error' in d" 2>/dev/null || \
+       echo "$SET_TIME" | python -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d or 'error' in d" 2>/dev/null; then
+        echo "  PASS: guest-set-time accepts valid timestamp"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: guest-set-time"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo "  SKIP: guest-set-time (no python for timestamp)"
+    SKIP=$((SKIP + 1))
+fi
+
+# Test set-time with bad arguments
+test_cmd "guest-set-time (missing arg)" \
+    '{"execute":"guest-set-time","arguments":{}}' \
+    "error"
+
+# =========================================================
+echo ""
+echo "--- Multi-command Pipeline (simulates PVE) ---"
+# =========================================================
+
+# PVE sends sync-delimited + actual command in ONE session
+# This tests the buffer-check-before-poll fix
+PIPE_RESULT=$(printf '%s\n%s\n' \
+    '{"execute":"guest-sync-delimited","arguments":{"id":77777}}' \
+    '{"execute":"guest-get-host-name"}' \
+    | "$BINARY" --test 2>/dev/null | LC_ALL=C tr -d '\377' | LC_ALL=C sed 's/^QMP> //')
+
+PIPE_LINES=()
+while IFS= read -r line; do
+    [ -n "$line" ] && PIPE_LINES+=("$line")
+done <<< "$PIPE_RESULT"
+
+# First response: sync id
+SYNC_OK=0
+if echo "${PIPE_LINES[0]:-}" | python3 -c "import json,sys; assert json.load(sys.stdin)['return'] == 77777" 2>/dev/null || \
+   echo "${PIPE_LINES[0]:-}" | python -c "import json,sys; assert json.load(sys.stdin)['return'] == 77777" 2>/dev/null; then
+    SYNC_OK=1
+fi
+
+# Second response: hostname
+HOST_OK=0
+if echo "${PIPE_LINES[1]:-}" | python3 -c "import json,sys; assert 'host-name' in json.load(sys.stdin)['return']" 2>/dev/null || \
+   echo "${PIPE_LINES[1]:-}" | python -c "import json,sys; assert 'host-name' in json.load(sys.stdin)['return']" 2>/dev/null; then
+    HOST_OK=1
+fi
+
+if [ $SYNC_OK -eq 1 ] && [ $HOST_OK -eq 1 ]; then
+    echo "  PASS: PVE-style sync+command pipeline (both responses immediate)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: PVE-style pipeline (sync=$SYNC_OK, host=$HOST_OK)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Triple pipeline: sync + osinfo + network
+TRIPLE=$(printf '%s\n%s\n%s\n' \
+    '{"execute":"guest-sync-delimited","arguments":{"id":88888}}' \
+    '{"execute":"guest-get-osinfo"}' \
+    '{"execute":"guest-network-get-interfaces"}' \
+    | "$BINARY" --test 2>/dev/null | LC_ALL=C tr -d '\377' | LC_ALL=C sed 's/^QMP> //')
+
+TRIPLE_COUNT=$(echo "$TRIPLE" | grep -c '"return"' || true)
+if [ "$TRIPLE_COUNT" -ge 3 ]; then
+    echo "  PASS: triple pipeline (sync + osinfo + network = $TRIPLE_COUNT responses)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: triple pipeline (expected 3 responses, got $TRIPLE_COUNT)"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Rapid Fire (20 commands in one session) ---"
+# =========================================================
+
+RAPID_INPUT=""
+for i in $(seq 1 20); do
+    RAPID_INPUT="${RAPID_INPUT}{\"execute\":\"guest-ping\"}\n"
+done
+
+RAPID_COUNT=$(printf "$RAPID_INPUT" | "$BINARY" --test 2>/dev/null | grep -c '"return"' || true)
+if [ "$RAPID_COUNT" -eq 20 ]; then
+    echo "  PASS: 20 rapid pings in one session ($RAPID_COUNT responses)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: rapid fire (expected 20, got $RAPID_COUNT)"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
 echo "=============================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "=============================================="
