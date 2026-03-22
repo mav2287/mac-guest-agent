@@ -132,6 +132,51 @@ uninstall:
 # Run all tests
 test: build test-unit test-fuzz test-integration
 
+# Code coverage report (llvm-cov)
+test-coverage:
+	@echo "Building with coverage instrumentation..."
+	@mkdir -p $(BUILD_DIR)/coverage
+	@$(CC) -Isrc -Isrc/third_party -fprofile-instr-generate -fcoverage-mapping \
+		-o $(BUILD_DIR)/test_unit_cov tests/test_unit.c \
+		src/util.c src/protocol.c src/compat.c src/third_party/cJSON.c \
+		-framework CoreFoundation
+	@$(CC) $(CFLAGS) $(INCLUDES) -fprofile-instr-generate -fcoverage-mapping \
+		-o $(BUILD_DIR)/mac-guest-agent-cov $(SRCS) $(LDFLAGS)
+	@echo "Running unit tests with coverage..."
+	@LLVM_PROFILE_FILE=$(BUILD_DIR)/coverage/unit.profraw $(BUILD_DIR)/test_unit_cov >/dev/null
+	@echo "Running integration tests with coverage..."
+	@LLVM_PROFILE_FILE=$(BUILD_DIR)/coverage/integration-%p-%m.profraw \
+		./tests/run_tests.sh $(BUILD_DIR)/mac-guest-agent-cov >/dev/null 2>&1 || true
+	@echo "Merging coverage data..."
+	@xcrun llvm-profdata merge -sparse \
+		$(BUILD_DIR)/coverage/*.profraw \
+		-o $(BUILD_DIR)/coverage/merged.profdata
+	@echo ""
+	@echo "=== Coverage Report ==="
+	@xcrun llvm-cov report $(BUILD_DIR)/mac-guest-agent-cov \
+		-instr-profile=$(BUILD_DIR)/coverage/merged.profdata \
+		-ignore-filename-regex='third_party' \
+		src/util.c src/protocol.c src/compat.c src/log.c \
+		src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
+		src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
+		src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
+		src/commands.c src/channel.c src/agent.c src/main.c src/service.c
+	@echo ""
+	@echo "Detailed HTML report: make coverage-html"
+
+# HTML coverage report
+coverage-html: test-coverage
+	@xcrun llvm-cov show $(BUILD_DIR)/mac-guest-agent-cov \
+		-instr-profile=$(BUILD_DIR)/coverage/merged.profdata \
+		-ignore-filename-regex='third_party' \
+		-format=html -output-dir=$(BUILD_DIR)/coverage/html \
+		src/util.c src/protocol.c src/compat.c src/log.c \
+		src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
+		src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
+		src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
+		src/commands.c src/channel.c src/agent.c src/main.c src/service.c
+	@echo "HTML report: $(BUILD_DIR)/coverage/html/index.html"
+
 # Unit tests (individual functions)
 test-unit:
 	@echo "Building unit tests..."
