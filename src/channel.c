@@ -138,6 +138,16 @@ int channel_open(channel_t *ch)
 }
 
 
+void channel_flush_stale_output(channel_t *ch)
+{
+    if (!ch || !ch->is_open || ch->is_test || ch->fd < 0) return;
+    /* Discard any pending output bytes in the serial transmit buffer.
+     * This clears stale responses from previous PVE sessions that
+     * disconnected before reading all data. Only touches OUTPUT —
+     * the input buffer (where the next command may be waiting) is untouched. */
+    tcflush(ch->fd, TCOFLUSH);
+}
+
 void channel_close(channel_t *ch)
 {
     if (!ch || !ch->is_open) return;

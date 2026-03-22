@@ -60,10 +60,14 @@ static void process_message(agent_t *ag, const char *msg)
 
     int use_delimiter = (strcmp(cmd_name, "guest-sync-delimited") == 0);
 
-    /* Note: do NOT flush buffers here. PVE sends sync + the actual
-     * command (e.g. ping) in ONE write. Both commands are in our read
-     * buffer. Flushing would destroy the second command. The \xff
-     * delimiter in our sync response lets PVE skip any stale data. */
+    /* Flush stale OUTPUT before writing the sync response.
+     * Previous PVE sessions may have disconnected before reading all
+     * our responses, leaving stale data in the serial output buffer.
+     * This clears pending output only — does NOT touch the input
+     * buffer where the ping command is waiting. */
+    if (use_delimiter) {
+        channel_flush_stale_output(ag->channel);
+    }
 
     char *resp = commands_dispatch(cmd_name, args, id);
     if (resp) {

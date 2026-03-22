@@ -31,6 +31,9 @@ int channel_send_response(channel_t *ch, const char *data);
 int channel_send_delimited_response(channel_t *ch, const char *data);
 
 
+/* Flush stale output from previous sessions (TCOFLUSH only, does not touch input) */
+void channel_flush_stale_output(channel_t *ch);
+
 /* Check if channel is open */
 int channel_is_open(channel_t *ch);
 
