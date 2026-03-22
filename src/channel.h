@@ -30,6 +30,9 @@ int channel_send_response(channel_t *ch, const char *data);
 /* Send a delimited response (0xFF prefix + data + newline) */
 int channel_send_delimited_response(channel_t *ch, const char *data);
 
+/* Flush any stale output data from the serial port */
+void channel_flush_output(channel_t *ch);
+
 /* Check if channel is open */
 int channel_is_open(channel_t *ch);
 

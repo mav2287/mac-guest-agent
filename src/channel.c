@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <poll.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <stdio.h>
 
 #define READ_BUF_SIZE 4096
@@ -15,7 +17,8 @@
 
 struct channel {
     char  *device_path;
-    int    fd;
+    int    fd;       /* read fd */
+    int    wfd;      /* write fd (separate to avoid termios conflicts) */
     int    is_open;
     int    is_test;
     char   read_buf[READ_BUF_SIZE];
@@ -24,6 +27,7 @@ struct channel {
 };
 
 static const char *known_devices[] = {
+    /* VirtIO serial (Big Sur+ with native AppleVirtIO) */
     "/dev/cu.org.qemu.guest_agent.0",
     "/dev/tty.org.qemu.guest_agent.0",
     "/dev/cu.virtio-console.0",
@@ -34,6 +38,11 @@ static const char *known_devices[] = {
     "/dev/tty.virtio-port",
     "/dev/cu.qemu-guest-agent",
     "/dev/tty.qemu-guest-agent",
+    /* ISA serial (PVE agent type=isa, works on all macOS via Apple16X50Serial) */
+    "/dev/cu.serial1",
+    "/dev/tty.serial1",
+    "/dev/cu.serial",
+    "/dev/tty.serial",
     NULL
 };
 
@@ -89,18 +98,55 @@ int channel_open(channel_t *ch)
         }
     }
 
-    ch->fd = open(ch->device_path, O_RDWR | O_NONBLOCK | O_NOCTTY);
+    ch->fd = open(ch->device_path, O_RDWR | O_NOCTTY);
     if (ch->fd < 0) {
         LOG_ERROR("Failed to open device %s: %s", ch->device_path, strerror(errno));
         return -1;
     }
 
     compat_cloexec(ch->fd);
+
+    /* For serial ports: full raw mode on a single fd.
+     * Disable ALL input and output processing:
+     * - ICANON off: no canonical (line) mode
+     * - ECHO off: no echo
+     * - ISTRIP off: preserve 8th bit (0xFF)
+     * - OPOST off: no \n → \r\n conversion
+     * - IXON/IXOFF off: no software flow control
+     * This matches Linux qemu-ga ISA serial configuration. */
+    ch->wfd = ch->fd;
+    if (isatty(ch->fd)) {
+        struct termios tio;
+        if (tcgetattr(ch->fd, &tio) == 0) {
+            tio.c_iflag = 0;                       /* No input processing */
+            tio.c_oflag = 0;                       /* No output processing */
+            tio.c_lflag = 0;                       /* No line discipline */
+            tio.c_cflag = CS8 | CREAD | CLOCAL;   /* 8-bit, rx on, ignore modem */
+            tio.c_cc[VMIN] = 1;
+            tio.c_cc[VTIME] = 0;
+            tcsetattr(ch->fd, TCSANOW, &tio);
+            tcflush(ch->fd, TCIOFLUSH);
+            LOG_INFO("Serial port: full raw mode (single fd=%d)", ch->fd);
+        }
+    }
+
     ch->is_open = 1;
     ch->read_pos = 0;
     ch->read_len = 0;
     LOG_INFO("Opened device: %s (fd=%d)", ch->device_path, ch->fd);
     return 0;
+}
+
+void channel_flush_output(channel_t *ch)
+{
+    if (!ch || !ch->is_open || ch->is_test) return;
+    /* Discard any pending input (stale commands from previous sessions).
+     * Don't flush OUTPUT — that would discard valid responses still
+     * being transmitted through the serial port. */
+    tcflush(ch->fd, TCIFLUSH);
+    /* Also clear our read buffer of any partial data */
+    ch->read_len = 0;
+    LOG_DEBUG("Flushed serial output buffer");
 }
 
 void channel_close(channel_t *ch)
@@ -111,6 +157,7 @@ void channel_close(channel_t *ch)
         close(ch->fd);
     }
     ch->fd = -1;
+    ch->wfd = -1;
     ch->is_open = 0;
     ch->read_pos = 0;
     ch->read_len = 0;
@@ -168,6 +215,14 @@ char *channel_read_message(channel_t *ch)
             return NULL;
         }
         return strdup(line);
+    }
+
+    /* Check if we already have a complete line in the buffer BEFORE polling.
+     * PVE sends sync-delimited + ping in ONE write. If we read both into
+     * our buffer but only extracted the first line, the second line is
+     * already here — no need to wait for poll(). */
+    if (ch->read_len > 0 && memchr(ch->read_buf, '\n', ch->read_len)) {
+        goto extract_line;
     }
 
     /* Device mode: poll + read */
@@ -229,7 +284,8 @@ char *channel_read_message(channel_t *ch)
     ch->read_len += (size_t)n;
     ch->read_buf[ch->read_len] = '\0';
 
-    /* Look for a complete line */
+extract_line:
+    ;  /* Look for a complete line */
     char *newline = memchr(ch->read_buf, '\n', ch->read_len);
     if (!newline) {
         errno = EAGAIN;
@@ -242,6 +298,16 @@ char *channel_read_message(channel_t *ch)
 
     memcpy(line, ch->read_buf, line_len);
     line[line_len] = '\0';
+
+    /* Log raw received data as hex */
+    {
+        char hex[256];
+        size_t hlen = line_len < 80 ? line_len : 80;
+        for (size_t i = 0; i < hlen; i++)
+            snprintf(hex + i*3, 4, "%02x ", (unsigned char)ch->read_buf[i]);
+        hex[hlen*3] = '\0';
+        LOG_DEBUG("Received raw (%zu bytes): %s", line_len, hex);
+    }
 
     /* Advance past the newline */
     size_t consumed = line_len + 1;
@@ -275,20 +341,22 @@ char *channel_read_message(channel_t *ch)
 
 static int channel_write_all(channel_t *ch, const void *data, size_t len)
 {
-    int fd = ch->is_test ? STDOUT_FILENO : ch->fd;
+    int fd = ch->is_test ? STDOUT_FILENO : ch->wfd;
     const char *p = data;
+    (void)0;
     while (len > 0) {
         ssize_t n = write(fd, p, len);
         if (n < 0) {
+            LOG_ERROR("write() failed: fd=%d errno=%d (%s)", fd, errno, strerror(errno));
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* Brief poll to wait for writability */
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
                 poll(&pfd, 1, 5000);
                 continue;
             }
             return -1;
         }
+        LOG_DEBUG("write(): fd=%d wrote %zd/%zu bytes", fd, n, len);
         p += n;
         len -= (size_t)n;
     }
@@ -303,7 +371,11 @@ int channel_send_response(channel_t *ch, const char *data)
     if (channel_write_all(ch, data, len) < 0) return -1;
     if (channel_write_all(ch, "\n", 1) < 0) return -1;
 
-    LOG_DEBUG("Sent response (%zu bytes)", len);
+    if (!ch->is_test && ch->wfd >= 0)
+        tcdrain(ch->wfd);
+
+    /* Hex dump of what we sent */
+    LOG_DEBUG("Sent response (%zu bytes): %s", len, data);
     return 0;
 }
 
@@ -317,6 +389,9 @@ int channel_send_delimited_response(channel_t *ch, const char *data)
     size_t len = strlen(data);
     if (channel_write_all(ch, data, len) < 0) return -1;
     if (channel_write_all(ch, "\n", 1) < 0) return -1;
+
+    if (!ch->is_test && ch->wfd >= 0)
+        tcdrain(ch->wfd);
 
     LOG_DEBUG("Sent delimited response (%zu bytes)", len);
     return 0;

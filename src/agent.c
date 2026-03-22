@@ -39,12 +39,12 @@ static void process_message(agent_t *ag, const char *msg)
 {
     cJSON *request = protocol_parse_request(msg);
     if (!request) {
-        LOG_ERROR("Failed to parse request: %s", msg);
-        char *resp = protocol_build_error("GenericError", "Invalid message format", NULL);
-        if (resp) {
-            channel_send_response(ag->channel, resp);
-            free(resp);
-        }
+        /* Silently discard malformed messages — do NOT send error responses.
+         * The sync-delimited protocol handles garbage via the \xff delimiter.
+         * Sending error responses for parse failures adds stale data to the
+         * serial pipe that corrupts future sync attempts. This matches
+         * Linux qemu-ga behavior: discard garbage, don't respond. */
+        LOG_DEBUG("Discarding malformed message: %.40s%s", msg, strlen(msg) > 40 ? "..." : "");
         return;
     }
 
@@ -53,16 +53,17 @@ static void process_message(agent_t *ag, const char *msg)
     const cJSON *id = protocol_get_id(request);
 
     if (!cmd_name) {
-        char *resp = protocol_build_error("GenericError", "No execute field", id);
-        if (resp) {
-            channel_send_response(ag->channel, resp);
-            free(resp);
-        }
+        LOG_DEBUG("Discarding message with no execute field");
         cJSON_Delete(request);
         return;
     }
 
     int use_delimiter = (strcmp(cmd_name, "guest-sync-delimited") == 0);
+
+    /* Note: do NOT flush buffers here. PVE sends sync + the actual
+     * command (e.g. ping) in ONE write. Both commands are in our read
+     * buffer. Flushing would destroy the second command. The \xff
+     * delimiter in our sync response lets PVE skip any stale data. */
 
     char *resp = commands_dispatch(cmd_name, args, id);
     if (resp) {

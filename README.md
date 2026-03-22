@@ -2,85 +2,108 @@
 
 A native QEMU Guest Agent for macOS, written in C. Enables hypervisors (Proxmox VE, libvirt, plain QEMU) to manage macOS virtual machines through the standard QGA protocol.
 
-**Supports Mac OS X 10.4 Tiger through macOS Tahoe and beyond.**
+**Supports Mac OS X 10.4 Tiger through macOS Tahoe and beyond.** Works on any macOS VM — OpenCore, Hackintosh, real Apple hardware in Proxmox, doesn't matter.
 
-## Quick Install
+## How It Works
+
+The agent communicates with the hypervisor through an **ISA serial port** — a standard 16550 UART that macOS has built-in drivers for (`Apple16X50Serial.kext`) since day one. No custom kernel extensions, no SIP issues, no code signing required.
+
+## Setup
+
+### 1. Configure PVE Host (one-time)
+
+Set the guest agent to use ISA serial instead of the default virtio-serial:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
+qm set <vmid> --agent enabled=1,type=isa
 ```
 
-Or manually:
+Then restart the VM (QEMU args change requires a full stop/start):
 
 ```bash
-# Download (Intel Mac)
-curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
-# Download (Apple Silicon)
-curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-arm64
+qm stop <vmid> && sleep 5 && qm start <vmid>
+```
 
-chmod +x mac-guest-agent
-sudo cp mac-guest-agent /usr/local/bin/
-sudo mac-guest-agent --install
+> **Note**: The default `agent: 1` uses virtio-serial which requires a VirtIO driver that macOS doesn't have. The `type=isa` option uses a standard serial port that macOS supports natively on every version.
+
+### 2. Install the Agent in the macOS VM
+
+**From another machine on the network** (old macOS can't reach GitHub directly due to TLS):
+
+```bash
+# Download the binary on a modern machine
+curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
+
+# Copy to the VM
+scp mac-guest-agent user@<vm-ip>:/tmp/
+```
+
+**On the macOS VM**:
+
+```bash
+sudo cp /tmp/mac-guest-agent /usr/local/bin/mac-guest-agent
+sudo chmod +x /usr/local/bin/mac-guest-agent
+sudo /usr/local/bin/mac-guest-agent --install
+```
+
+### 3. Verify
+
+From the **PVE host**:
+
+```bash
+qm agent <vmid> ping
+qm agent <vmid> get-osinfo
+qm agent <vmid> network-get-interfaces
 ```
 
 ## Service Management
-
-Mirrors the Linux `systemctl` workflow using macOS `launchctl`:
 
 | Linux (systemd) | macOS (launchctl) |
 |---|---|
 | `systemctl status qemu-guest-agent` | `sudo launchctl list com.macos.guest-agent` |
 | `systemctl start qemu-guest-agent` | `sudo launchctl start com.macos.guest-agent` |
 | `systemctl stop qemu-guest-agent` | `sudo launchctl stop com.macos.guest-agent` |
-| `systemctl restart qemu-guest-agent` | `sudo launchctl stop com.macos.guest-agent && sudo launchctl start com.macos.guest-agent` |
 | `journalctl -u qemu-guest-agent -f` | `tail -f /var/log/mac-guest-agent.log` |
 
 Uninstall:
+
 ```bash
 sudo mac-guest-agent --uninstall
 ```
 
-## Configuration
-
-Configuration file format is compatible with the Linux `/etc/qemu/qemu-ga.conf`:
-
-```bash
-sudo mkdir -p /etc/qemu
-sudo cp configs/qemu-ga.conf /etc/qemu/qemu-ga.conf
-```
-
-```ini
-[general]
-daemonize = 0
-method = virtio-serial
-path = /dev/cu.org.qemu.guest_agent.0
-logfile = /var/log/mac-guest-agent.log
-verbose = 0
-# block-rpcs = guest-exec,guest-set-user-password
-```
-
 ## CLI Flags
 
-Flags are compatible with the Linux `qemu-ga` binary:
+Compatible with the Linux `qemu-ga`:
 
 ```
   -d, --daemonize        Run as daemon
   -m, --method METHOD    Transport method [default: virtio-serial]
   -p, --path PATH        Device/socket path [default: auto-detect]
-  -l, --logfile PATH     Log file path [default: stderr]
+  -l, --logfile PATH     Log file path
   -f, --pidfile PATH     PID file path
-  -v, --verbose          Enable debug logging
+  -v, --verbose          Debug logging
   -V, --version          Show version
   -b, --block-rpcs LIST  Comma-separated RPCs to disable
   -a, --allow-rpcs LIST  Comma-separated RPCs to allow
   -c, --config PATH      Config file [default: /etc/qemu/qemu-ga.conf]
-  -D, --dump-conf        Print effective configuration
+  -D, --dump-conf        Print configuration
   -t, --test             Test mode (stdin/stdout, no QEMU needed)
   -h, --help             Show help
+      --install          Install as LaunchDaemon
+      --uninstall        Uninstall LaunchDaemon
+```
 
-macOS-specific:
-      --install          Install as LaunchDaemon service
-      --uninstall        Uninstall LaunchDaemon service
+## Configuration File
+
+Optional. Compatible with Linux `/etc/qemu/qemu-ga.conf`:
+
+```ini
+[general]
+daemonize = 0
+method = virtio-serial
+path = /dev/cu.serial1
+logfile = /var/log/mac-guest-agent.log
+verbose = 0
 ```
 
 ## Supported Commands
@@ -100,25 +123,6 @@ macOS-specific:
 | **SSH** | `guest-ssh-get-authorized-keys`, `guest-ssh-add-authorized-keys`, `guest-ssh-remove-authorized-keys` |
 | **User** | `guest-set-user-password` |
 
-## Proxmox VE
-
-After installing the agent in a macOS VM, enable the guest agent on the PVE host:
-
-```bash
-qm set <vmid> --agent 1
-```
-
-Then verify from the PVE host:
-
-```bash
-qm agent <vmid> ping
-qm agent <vmid> get-osinfo
-qm agent <vmid> network-get-interfaces
-qm agent <vmid> get-host-name
-```
-
-PVE will also use the agent for graceful shutdown and filesystem freeze during backups.
-
 ## Compatibility
 
 | Binary | Arch | Min OS | Max OS |
@@ -127,18 +131,18 @@ PVE will also use the agent for graceful shutdown and filesystem freeze during b
 | `mac-guest-agent-darwin-arm64` | arm64 | macOS 11.0 Big Sur | Current + future |
 | `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 | Current + future |
 
-Tested on: macOS Tahoe 26.3 (arm64), macOS Tahoe 26.3 (x86_64 via Rosetta 2), Mac OS X El Capitan 10.11.6 (x86_64 native).
+Tested on:
+- macOS Tahoe 26.3 (arm64 native + x86_64 Rosetta 2)
+- Mac OS X El Capitan 10.11.6 (x86_64 native, Proxmox VE)
 
 ## Building from Source
-
-Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/mav2287/mac-guest-agent.git
 cd mac-guest-agent
 make build              # Current architecture
-make build-x86_64      # x86_64 targeting 10.6+
-make build-arm64       # arm64 targeting 11.0+
+make build-x86_64      # Intel, targeting 10.6+
+make build-arm64       # Apple Silicon, targeting 11.0+
 make build-universal   # Fat binary
 make install           # Build + install service
 ```
@@ -146,11 +150,20 @@ make install           # Build + install service
 ## Testing
 
 ```bash
-make test                                           # Automated tests
-./tests/run_tests.sh ./build/mac-guest-agent        # Full test suite
-./tests/safe_test.sh ./build/mac-guest-agent        # Read-only safe test (for production VMs)
-mac-guest-agent --test --verbose                    # Interactive test mode
+make test                                        # Automated quick tests
+./tests/run_tests.sh ./build/mac-guest-agent     # Full test suite
+./tests/safe_test.sh ./build/mac-guest-agent     # Read-only safe test (for production VMs)
+mac-guest-agent -t -v                            # Interactive test mode
 ```
+
+## How It Works (Technical)
+
+1. PVE sets `agent: enabled=1,type=isa` which tells QEMU to create an ISA 16550 serial port connected to the guest agent socket
+2. macOS sees the serial port via its built-in `Apple16X50Serial.kext` driver and creates `/dev/cu.serial1`
+3. Our agent opens `/dev/cu.serial1`, sets raw mode, and speaks the QGA JSON protocol
+4. PVE communicates through the QEMU socket, QEMU bridges to the serial port, the agent responds
+
+No custom kernel extensions. No VirtIO drivers. No SIP modifications. Works on every macOS version from 10.4 to current.
 
 ## File Locations
 
@@ -158,9 +171,8 @@ mac-guest-agent --test --verbose                    # Interactive test mode
 |---|---|
 | Binary | `/usr/local/bin/mac-guest-agent` |
 | LaunchDaemon | `/Library/LaunchDaemons/com.macos.guest-agent.plist` |
-| Config | `/etc/qemu/qemu-ga.conf` |
+| Config (optional) | `/etc/qemu/qemu-ga.conf` |
 | Log | `/var/log/mac-guest-agent.log` |
-| PID | `/var/run/qemu-ga.pid` |
 
 ## License
 
