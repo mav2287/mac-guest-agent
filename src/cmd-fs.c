@@ -409,6 +409,8 @@ int fsfreeze_command_allowed(const char *cmd_name)
         "guest-sync-delimited",
         "guest-info",
         "guest-fsfreeze-status",
+        "guest-fsfreeze-freeze",
+        "guest-fsfreeze-freeze-list",
         "guest-fsfreeze-thaw",
         NULL
     };

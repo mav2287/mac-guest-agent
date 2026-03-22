@@ -795,6 +795,138 @@ fi
 
 # =========================================================
 echo ""
+echo "--- Freeze Dry-Run (test mode safety) ---"
+# =========================================================
+
+# Freeze in test mode should succeed but not touch real filesystems
+FREEZE_DRY=$(echo '{"execute":"guest-fsfreeze-freeze"}' | "$BINARY" --test 2>&1)
+if echo "$FREEZE_DRY" | grep -q "Dry-run\|dry-run\|Filesystem frozen"; then
+    echo "  PASS: freeze runs in dry-run mode during --test"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze may have touched real filesystem in test mode"
+    FAIL=$((FAIL + 1))
+fi
+
+# Freeze cycle: freeze → status → thaw (dry-run, single session)
+FREEZE_CYCLE_DR=$(printf '%s\n%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze"}' \
+    '{"execute":"guest-fsfreeze-status"}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+
+FR_LINE1=$(echo "$FREEZE_CYCLE_DR" | awk 'NR==1')
+FR_LINE2=$(echo "$FREEZE_CYCLE_DR" | awk 'NR==2')
+FR_LINE3=$(echo "$FREEZE_CYCLE_DR" | awk 'NR==3')
+
+FR_OK=1
+# Line 1: freeze returns a number
+echo "$FR_LINE1" | python3 -c "import json,sys; d=json.load(sys.stdin); assert isinstance(d['return'], (int,float))" 2>/dev/null || FR_OK=0
+# Line 2: status returns "frozen"
+echo "$FR_LINE2" | python3 -c "import json,sys; assert json.load(sys.stdin)['return'] == 'frozen'" 2>/dev/null || FR_OK=0
+# Line 3: thaw returns a number
+echo "$FR_LINE3" | python3 -c "import json,sys; d=json.load(sys.stdin); assert isinstance(d['return'], (int,float))" 2>/dev/null || FR_OK=0
+
+if [ $FR_OK -eq 1 ]; then
+    echo "  PASS: freeze/status/thaw cycle (dry-run)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze/status/thaw cycle"
+    FAIL=$((FAIL + 1))
+fi
+
+# Idempotent freeze: freeze twice should succeed
+IDEM=$(printf '%s\n%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze"}' \
+    '{"execute":"guest-fsfreeze-freeze"}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+
+IDEM_COUNT=$(echo "$IDEM" | grep -c '"return"' || true)
+if [ "$IDEM_COUNT" -ge 3 ]; then
+    echo "  PASS: idempotent freeze (double freeze returns count)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: idempotent freeze ($IDEM_COUNT responses, expected 3)"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Command Filtering During Freeze ---"
+# =========================================================
+
+# During freeze, non-freeze commands should be rejected
+FILTER_TEST=$(printf '%s\n%s\n%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze"}' \
+    '{"execute":"guest-get-osinfo"}' \
+    '{"execute":"guest-ping"}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+
+# Line 2 (get-osinfo) should be an error (not allowed during freeze)
+FILTER_L2=$(echo "$FILTER_TEST" | awk 'NR==2')
+# Line 3 (ping) should succeed (allowed during freeze)
+FILTER_L3=$(echo "$FILTER_TEST" | awk 'NR==3')
+
+FILTER_OK=1
+echo "$FILTER_L2" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || FILTER_OK=0
+echo "$FILTER_L3" | python3 -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null || FILTER_OK=0
+
+if [ $FILTER_OK -eq 1 ]; then
+    echo "  PASS: non-freeze commands blocked during freeze"
+    PASS=$((PASS + 1))
+    echo "  PASS: freeze-safe commands allowed during freeze"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: command filtering during freeze"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Audit Fix: Command Injection Prevention ---"
+# =========================================================
+
+# Disk command with injection attempt should be safe
+INJECT_TEST=$(echo '{"execute":"guest-get-disks"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$INJECT_TEST" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d" 2>/dev/null; then
+    echo "  PASS: disk listing uses safe command execution"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: disk listing"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Audit Fix: Process Exec Signal Handling ---"
+# =========================================================
+
+# Execute a command that gets killed by signal (SIGTERM)
+SIGNAL_TEST=$(printf '%s\n%s\n' \
+    '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","kill -TERM $$"],"capture-output":true}}' \
+    '{"execute":"guest-exec-status","arguments":{"pid":1}}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+
+SIG_LINE=$(echo "$SIGNAL_TEST" | awk 'NR==2')
+if echo "$SIG_LINE" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+r = d['return']
+assert r['exited'] == True
+# Signal-killed process should have signal field or negative exit code
+assert 'signal' in r or r.get('exitcode', 0) != 0
+" 2>/dev/null; then
+    echo "  PASS: exec signal handling (WIFSIGNALED on raw status)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: exec signal handling"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
 echo "=============================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "=============================================="

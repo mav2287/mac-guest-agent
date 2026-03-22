@@ -201,6 +201,20 @@ static void test_compat(void)
     free(s);
 
     ASSERT("strndup NULL", compat_strndup(NULL, 5) == NULL);
+
+    /* APFS/tmutil detection */
+    int has_apfs = compat_has_apfs();
+    int has_tmutil = compat_has_tmutil();
+    /* On modern macOS, both should be true. On old macOS, both false. */
+    if (ver->major > 10 || (ver->major == 10 && ver->minor >= 13)) {
+        ASSERT("has_apfs on 10.13+", has_apfs == 1);
+    } else {
+        ASSERT("no_apfs on <10.13", has_apfs == 0);
+    }
+    /* tmutil requires apfs */
+    if (!has_apfs) {
+        ASSERT("no tmutil without apfs", has_tmutil == 0);
+    }
 }
 
 int main(void)
