@@ -24,7 +24,18 @@ Then restart the VM (QEMU args change requires a full stop/start):
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
 
-> **Note**: The default `agent: 1` uses virtio-serial which requires a VirtIO driver that macOS doesn't have. The `type=isa` option uses a standard serial port that macOS supports natively on every version.
+> **Why `type=isa`?** The default `agent: 1` uses virtio-serial, which only works on macOS Big Sur 11.0+ (where Apple ships a built-in VirtIO driver). The `type=isa` option uses a standard serial port that macOS supports natively on **every version** from 10.4 to current. We recommend `type=isa` for universal compatibility.
+
+### Already running Big Sur or newer?
+
+If your VM runs **macOS 11.0 (Big Sur) or later**, the default `agent: 1` (virtio-serial) also works — Apple's built-in `AppleVirtIO.kext` handles it. The agent auto-detects both device types:
+
+| PVE Setting | macOS Driver | Works On |
+|---|---|---|
+| `type=isa` (recommended) | Apple16X50Serial (built-in) | All macOS 10.4+ |
+| default (type=virtio) | AppleVirtIO (built-in) | Big Sur 11.0+ only |
+
+Either way, just install the agent binary. No double-dipping — PVE creates one device type or the other, never both.
 
 ### 2. Install the Agent in the macOS VM
 
