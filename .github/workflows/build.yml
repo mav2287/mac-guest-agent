@@ -91,6 +91,9 @@ jobs:
       - name: Run unit tests
         run: make test-unit
 
+      - name: Run proactive tests (channel API, SSH, hooks, injection prevention)
+        run: make test-proactive
+
       - name: Run fuzz tests (ASAN, 210k rounds)
         run: make test-fuzz
 

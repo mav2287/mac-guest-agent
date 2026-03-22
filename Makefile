@@ -130,7 +130,7 @@ uninstall:
 	@sudo /usr/local/bin/$(PROGRAM_NAME) --uninstall 2>/dev/null || echo "Not installed"
 
 # Run all tests
-test: build test-unit test-fuzz test-integration
+test: build test-unit test-proactive test-fuzz test-integration
 
 # Code coverage report (llvm-cov)
 test-coverage:
@@ -185,6 +185,15 @@ test-unit:
 		-framework CoreFoundation
 	@echo "Running unit tests..."
 	@$(BUILD_DIR)/test_unit
+
+# Proactive tests (PTY channel, SSH temp files, hook validation)
+test-proactive:
+	@echo "Building proactive tests..."
+	@$(CC) -Isrc -Isrc/third_party -o $(BUILD_DIR)/test_proactive tests/test_proactive.c \
+		src/channel.c src/util.c src/protocol.c src/compat.c src/log.c \
+		src/third_party/cJSON.c -framework CoreFoundation -framework IOKit
+	@echo "Running proactive tests..."
+	@$(BUILD_DIR)/test_proactive
 
 # Fuzz tests (random/malformed input with ASAN)
 test-fuzz:
