@@ -291,6 +291,9 @@ int main(int argc, char *argv[])
     /* Initialize commands */
     commands_init();
 
+    /* Apply RPC filters */
+    commands_apply_filters(cfg.block_rpcs, cfg.allow_rpcs);
+
     /* Write PID file */
     write_pidfile(cfg.pidfile);
 

@@ -87,17 +87,16 @@ sudo mac-guest-agent --uninstall
 Compatible with the Linux `qemu-ga`:
 
 ```
-  -d, --daemonize        Run as daemon
-  -m, --method METHOD    Transport method [default: virtio-serial]
-  -p, --path PATH        Device/socket path [default: auto-detect]
+  -d, --daemonize        Run as daemon (log to file)
+  -p, --path PATH        Device path [default: auto-detect]
   -l, --logfile PATH     Log file path
   -f, --pidfile PATH     PID file path
   -v, --verbose          Debug logging
   -V, --version          Show version
   -b, --block-rpcs LIST  Comma-separated RPCs to disable
-  -a, --allow-rpcs LIST  Comma-separated RPCs to allow
+  -a, --allow-rpcs LIST  Comma-separated RPCs to allow (allowlist mode)
   -c, --config PATH      Config file [default: /etc/qemu/qemu-ga.conf]
-  -D, --dump-conf        Print configuration
+  -D, --dump-conf        Print effective configuration
   -t, --test             Test mode (stdin/stdout, no QEMU needed)
   -h, --help             Show help
       --install          Install as LaunchDaemon
@@ -111,10 +110,11 @@ Optional. Compatible with Linux `/etc/qemu/qemu-ga.conf`:
 ```ini
 [general]
 daemonize = 0
-method = virtio-serial
 path = /dev/cu.serial1
 logfile = /var/log/mac-guest-agent.log
 verbose = 0
+# block-rpcs = guest-exec,guest-set-user-password
+# allow-rpcs = guest-ping,guest-info,guest-get-osinfo
 ```
 
 ## Supported Commands
@@ -138,9 +138,9 @@ verbose = 0
 
 | Binary | Arch | Min OS | Max OS |
 |---|---|---|---|
-| `mac-guest-agent-darwin-amd64` | x86_64 | Mac OS X 10.6 Snow Leopard | Current + future |
-| `mac-guest-agent-darwin-arm64` | arm64 | macOS 11.0 Big Sur | Current + future |
-| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 | Current + future |
+| `mac-guest-agent-darwin-amd64` | x86_64 | Mac OS X 10.4 Tiger | macOS 26 Tahoe |
+| `mac-guest-agent-darwin-arm64` | arm64 | macOS 11.0 Big Sur | macOS 26 Tahoe |
+| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.4 / 11.0 | macOS 26 Tahoe |
 
 Tested on:
 - macOS Tahoe 26.3 (arm64 native + x86_64 Rosetta 2)

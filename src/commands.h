@@ -17,6 +17,12 @@ typedef struct {
 /* Initialize all commands (called once at startup) */
 void commands_init(void);
 
+/* Apply block-rpcs and allow-rpcs filters.
+   block_rpcs: comma-separated list of commands to disable.
+   allow_rpcs: comma-separated list of commands to allow (all others disabled).
+   If both are set, allow_rpcs takes precedence. */
+void commands_apply_filters(const char *block_rpcs, const char *allow_rpcs);
+
 /* Dispatch a parsed QMP request. Returns a JSON response string (caller frees). */
 char *commands_dispatch(const char *cmd_name, cJSON *args, const cJSON *id);
 
