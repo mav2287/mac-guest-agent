@@ -1,0 +1,73 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build all architectures
+        run: make build-all
+
+      - name: Check binaries
+        run: |
+          echo "=== x86_64 ==="
+          file build/mac-guest-agent-x86_64
+          otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
+          ls -lh build/mac-guest-agent-x86_64
+
+          echo ""
+          echo "=== arm64 ==="
+          file build/mac-guest-agent-arm64
+          otool -l build/mac-guest-agent-arm64 | grep -A 3 "LC_BUILD_VERSION"
+          ls -lh build/mac-guest-agent-arm64
+
+          echo ""
+          echo "=== universal ==="
+          file build/mac-guest-agent-universal
+          ls -lh build/mac-guest-agent-universal
+
+      - name: Verify no clock_gettime (breaks pre-10.12)
+        run: |
+          for bin in build/mac-guest-agent-x86_64 build/mac-guest-agent-arm64; do
+            if nm -u "$bin" 2>/dev/null | grep -q clock_gettime; then
+              echo "FAIL: $bin contains clock_gettime"
+              exit 1
+            fi
+          done
+          echo "OK: No clock_gettime references"
+
+      - name: Verify no deprecation warnings
+        run: |
+          make clean
+          MACOSX_DEPLOYMENT_TARGET=11.0 clang -Wall -Wextra -Werror -O2 -std=c99 \
+            -DVERSION=\"test\" -Isrc -Isrc/third_party -arch arm64 \
+            -Wdeprecated-declarations \
+            -o /dev/null \
+            src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c \
+            src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
+            src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
+            src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
+            src/util.c src/log.c src/compat.c src/service.c \
+            src/third_party/cJSON.c \
+            -framework CoreFoundation -framework IOKit 2>&1 | grep -i deprecat && exit 1 || echo "OK: No deprecation warnings"
+
+      - name: Run test suite
+        run: |
+          make build
+          ./tests/run_tests.sh ./build/mac-guest-agent
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-guest-agent-binaries
+          path: |
+            build/mac-guest-agent-x86_64
+            build/mac-guest-agent-arm64
+            build/mac-guest-agent-universal
