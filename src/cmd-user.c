@@ -76,7 +76,7 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
         return NULL;
     }
 
-    LOG_INFO("Password changed for user %s", username);
+    LOG_DEBUG("Password changed for user %s", username);
     return cJSON_CreateObject();
 }
 

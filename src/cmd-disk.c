@@ -123,7 +123,7 @@ static cJSON *handle_get_disks(cJSON *args, const char **err_class, const char *
         cJSON_AddItemToArray(disks, current_disk);
 
     free(out);
-    LOG_INFO("Retrieved %d disks", cJSON_GetArraySize(disks));
+    LOG_DEBUG("Retrieved %d disks", cJSON_GetArraySize(disks));
     return disks;
 }
 
@@ -162,7 +162,7 @@ static cJSON *handle_get_fsinfo(cJSON *args, const char **err_class, const char 
         cJSON_AddItemToArray(arr, fs);
     }
 
-    LOG_INFO("Retrieved %d filesystems", cJSON_GetArraySize(arr));
+    LOG_DEBUG("Retrieved %d filesystems", cJSON_GetArraySize(arr));
     return arr;
 }
 

@@ -55,7 +55,7 @@ static cJSON *handle_ssh_get_keys(cJSON *args, const char **err_class, const cha
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddItemToObject(result, "keys", keys);
-    LOG_INFO("Retrieved %d SSH keys for user %s", cJSON_GetArraySize(keys), user_item->valuestring);
+    LOG_DEBUG("Retrieved %d SSH keys for user %s", cJSON_GetArraySize(keys), user_item->valuestring);
     return result;
 }
 
@@ -158,7 +158,7 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
     free(content);
     free(path);
 
-    LOG_INFO("Added SSH keys for user %s", user_item->valuestring);
+    LOG_DEBUG("Added SSH keys for user %s", user_item->valuestring);
     return cJSON_CreateObject();
 }
 
@@ -240,7 +240,7 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
     free(result_buf);
     free(path);
 
-    LOG_INFO("Removed SSH keys for user %s", user_item->valuestring);
+    LOG_DEBUG("Removed SSH keys for user %s", user_item->valuestring);
     return cJSON_CreateObject();
 }
 

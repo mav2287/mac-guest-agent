@@ -13,7 +13,7 @@ static cJSON *handle_fsfreeze_status(cJSON *args, const char **err_class, const 
 static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args; (void)err_class; (void)err_desc;
-    LOG_INFO("Filesystem freeze simulated (no macOS equivalent)");
+    LOG_DEBUG("Filesystem freeze simulated (no macOS equivalent)");
     freeze_status = 1;
     return cJSON_CreateNumber(1);
 }
@@ -24,14 +24,14 @@ static cJSON *handle_fsfreeze_thaw(cJSON *args, const char **err_class, const ch
     int thawed = freeze_status ? 1 : 0;
     freeze_status = 0;
     if (thawed)
-        LOG_INFO("Filesystem thaw simulated");
+        LOG_DEBUG("Filesystem thaw simulated");
     return cJSON_CreateNumber(thawed);
 }
 
 static cJSON *handle_fstrim(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args; (void)err_class; (void)err_desc;
-    LOG_INFO("fstrim is a no-op on macOS (TRIM managed by OS/storage driver)");
+    LOG_DEBUG("fstrim is a no-op on macOS (TRIM managed by OS/storage driver)");
     cJSON *result = cJSON_CreateObject();
     cJSON_AddItemToObject(result, "paths", cJSON_CreateArray());
     return result;

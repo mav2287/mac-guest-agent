@@ -182,7 +182,7 @@ static cJSON *handle_get_vcpus(cJSON *args, const char **err_class, const char *
         cJSON_AddBoolToObject(cpu, "can-offline", 0);
         cJSON_AddItemToArray(arr, cpu);
     }
-    LOG_INFO("Retrieved %d vCPUs", count);
+    LOG_DEBUG("Retrieved %d vCPUs", count);
     return arr;
 }
 

@@ -135,14 +135,7 @@ char *commands_dispatch(const char *cmd_name, cJSON *args, const cJSON *id)
         return protocol_build_error("CommandNotFound", desc, id);
     }
 
-    /* Reduce log noise for frequent commands */
-    if (strcmp(cmd_name, "guest-ping") == 0 ||
-        strcmp(cmd_name, "guest-sync") == 0 ||
-        strcmp(cmd_name, "guest-sync-delimited") == 0) {
-        LOG_DEBUG("Handling command: %s", cmd_name);
-    } else {
-        LOG_INFO("Handling command: %s", cmd_name);
-    }
+    LOG_DEBUG("Handling command: %s", cmd_name);
 
     const char *err_class = NULL;
     const char *err_desc = NULL;

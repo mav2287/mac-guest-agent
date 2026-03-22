@@ -64,7 +64,7 @@ static cJSON *handle_get_osinfo(cJSON *args, const char **err_class, const char 
     free(product_version);
     free(build_version);
 
-    LOG_INFO("Retrieved OS information");
+    LOG_DEBUG("Retrieved OS information");
     return info;
 }
 
@@ -192,7 +192,7 @@ static cJSON *handle_get_users(cJSON *args, const char **err_class, const char *
     }
     endutxent();
 
-    LOG_INFO("Retrieved %d logged-in users", cJSON_GetArraySize(users));
+    LOG_DEBUG("Retrieved %d logged-in users", cJSON_GetArraySize(users));
     return users;
 }
 

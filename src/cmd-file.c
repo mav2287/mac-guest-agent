@@ -82,7 +82,7 @@ static cJSON *handle_file_open(cJSON *args, const char **err_class, const char *
     entry->handle = next_handle++;
     entry->in_use = 1;
 
-    LOG_INFO("Opened file %s as handle %lld", path_item->valuestring, (long long)entry->handle);
+    LOG_DEBUG("Opened file %s as handle %lld", path_item->valuestring, (long long)entry->handle);
 
     return cJSON_CreateNumber((double)entry->handle);
 }

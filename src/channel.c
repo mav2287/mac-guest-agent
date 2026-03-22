@@ -137,17 +137,6 @@ int channel_open(channel_t *ch)
     return 0;
 }
 
-void channel_flush_output(channel_t *ch)
-{
-    if (!ch || !ch->is_open || ch->is_test) return;
-    /* Discard any pending input (stale commands from previous sessions).
-     * Don't flush OUTPUT — that would discard valid responses still
-     * being transmitted through the serial port. */
-    tcflush(ch->fd, TCIFLUSH);
-    /* Also clear our read buffer of any partial data */
-    ch->read_len = 0;
-    LOG_DEBUG("Flushed serial output buffer");
-}
 
 void channel_close(channel_t *ch)
 {
@@ -299,15 +288,7 @@ extract_line:
     memcpy(line, ch->read_buf, line_len);
     line[line_len] = '\0';
 
-    /* Log raw received data as hex */
-    {
-        char hex[256];
-        size_t hlen = line_len < 80 ? line_len : 80;
-        for (size_t i = 0; i < hlen; i++)
-            snprintf(hex + i*3, 4, "%02x ", (unsigned char)ch->read_buf[i]);
-        hex[hlen*3] = '\0';
-        LOG_DEBUG("Received raw (%zu bytes): %s", line_len, hex);
-    }
+    LOG_DEBUG("Received %zu bytes", line_len);
 
     /* Advance past the newline */
     size_t consumed = line_len + 1;
@@ -347,16 +328,15 @@ static int channel_write_all(channel_t *ch, const void *data, size_t len)
     while (len > 0) {
         ssize_t n = write(fd, p, len);
         if (n < 0) {
-            LOG_ERROR("write() failed: fd=%d errno=%d (%s)", fd, errno, strerror(errno));
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
                 poll(&pfd, 1, 5000);
                 continue;
             }
+            LOG_ERROR("Serial write failed: %s", strerror(errno));
             return -1;
         }
-        LOG_DEBUG("write(): fd=%d wrote %zd/%zu bytes", fd, n, len);
         p += n;
         len -= (size_t)n;
     }

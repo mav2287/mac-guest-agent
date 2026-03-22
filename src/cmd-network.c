@@ -175,7 +175,7 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
     }
 
     freeifaddrs(ifap);
-    LOG_INFO("Retrieved %d network interfaces", cJSON_GetArraySize(result));
+    LOG_DEBUG("Retrieved %d network interfaces", cJSON_GetArraySize(result));
     return result;
 }
 
