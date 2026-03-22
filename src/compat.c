@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static os_version_t cached_version = {0, 0, 0};
 static int version_detected = 0;
@@ -37,6 +38,21 @@ int compat_has_compressed_memory(void)
     const os_version_t *v = compat_os_version();
     /* Memory compression was introduced in OS X 10.9 Mavericks */
     return (v->major > 10) || (v->major == 10 && v->minor >= 9);
+}
+
+int compat_has_apfs(void)
+{
+    const os_version_t *v = compat_os_version();
+    /* APFS introduced in macOS 10.13 High Sierra */
+    return (v->major > 10) || (v->major == 10 && v->minor >= 13);
+}
+
+int compat_has_tmutil(void)
+{
+    /* tmutil available since 10.7 Lion, localsnapshot since 10.13 */
+    if (!compat_has_apfs()) return 0;
+    struct stat st;
+    return (stat("/usr/bin/tmutil", &st) == 0 && (st.st_mode & S_IXUSR));
 }
 
 int compat_cloexec(int fd)

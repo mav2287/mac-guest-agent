@@ -77,6 +77,9 @@ int service_install(void)
     write_file("/etc/newsyslog.d/mac-guest-agent.conf",
                logrotate, strlen(logrotate), 0644);
 
+    /* Create fsfreeze hook directory */
+    mkdir_p("/etc/qemu/fsfreeze-hook.d", 0700);
+
     /* Load and start service */
     printf("Starting service...\n");
     if (run_command("launchctl load " PLIST_PATH) != 0) {

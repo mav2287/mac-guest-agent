@@ -21,6 +21,7 @@ struct channel {
     int    wfd;      /* write fd (separate to avoid termios conflicts) */
     int    is_open;
     int    is_test;
+    int    poll_timeout_ms;
     char   read_buf[READ_BUF_SIZE];
     size_t read_pos;
     size_t read_len;
@@ -58,10 +59,16 @@ static char *detect_device(void)
     return NULL;
 }
 
+void channel_set_poll_timeout(channel_t *ch, int timeout_ms)
+{
+    if (ch) ch->poll_timeout_ms = timeout_ms > 0 ? timeout_ms : POLL_TIMEOUT_MS;
+}
+
 channel_t *channel_create(const char *device_path)
 {
     channel_t *ch = calloc(1, sizeof(*ch));
     if (!ch) return NULL;
+    ch->poll_timeout_ms = POLL_TIMEOUT_MS;
     ch->fd = -1;
     if (device_path) {
         ch->device_path = strdup(device_path);
@@ -72,6 +79,7 @@ channel_t *channel_create(const char *device_path)
 channel_t *channel_create_test(void)
 {
     channel_t *ch = calloc(1, sizeof(*ch));
+    if (ch) ch->poll_timeout_ms = POLL_TIMEOUT_MS;
     if (!ch) return NULL;
     ch->fd = -1;
     ch->is_test = 1;
@@ -230,7 +238,7 @@ char *channel_read_message(channel_t *ch)
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    int ret = poll(&pfd, 1, POLL_TIMEOUT_MS);
+    int ret = poll(&pfd, 1, ch->poll_timeout_ms);
     if (ret < 0) {
         if (errno == EINTR) {
             errno = EAGAIN;

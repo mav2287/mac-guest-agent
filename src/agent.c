@@ -1,12 +1,15 @@
 #include "agent.h"
 #include "channel.h"
 #include "commands.h"
+#include "cmd-fs.h"
 #include "protocol.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+
+#define FREEZE_POLL_TIMEOUT_MS 100
 
 struct agent {
     channel_t *channel;
@@ -58,6 +61,18 @@ static void process_message(agent_t *ag, const char *msg)
         return;
     }
 
+    /* During freeze, only allow freeze-safe commands */
+    if (!fsfreeze_command_allowed(cmd_name)) {
+        char *resp = protocol_build_error("GenericError",
+            "Command not allowed while filesystem is frozen", id);
+        if (resp) {
+            channel_send_response(ag->channel, resp);
+            free(resp);
+        }
+        cJSON_Delete(request);
+        return;
+    }
+
     int use_delimiter = (strcmp(cmd_name, "guest-sync-delimited") == 0);
 
     /* Flush stale OUTPUT before writing the sync response.
@@ -95,10 +110,20 @@ int agent_run(agent_t *ag)
     LOG_INFO("Agent started, listening for commands...");
 
     while (ag->running) {
+        /* During freeze: shorten poll timeout and run continuous sync */
+        if (fsfreeze_is_frozen()) {
+            channel_set_poll_timeout(ag->channel, FREEZE_POLL_TIMEOUT_MS);
+        } else {
+            channel_set_poll_timeout(ag->channel, 1000);
+        }
+
         char *msg = channel_read_message(ag->channel);
         if (!msg) {
             if (errno == EAGAIN) {
-                /* Normal timeout, continue polling */
+                /* Normal timeout — run continuous sync if frozen */
+                if (fsfreeze_is_frozen()) {
+                    fsfreeze_continuous_sync();
+                }
                 continue;
             }
             if (errno == 0 && ag->test_mode) {

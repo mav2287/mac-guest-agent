@@ -34,6 +34,9 @@ int channel_send_delimited_response(channel_t *ch, const char *data);
 /* Flush stale output from previous sessions (TCOFLUSH only, does not touch input) */
 void channel_flush_stale_output(channel_t *ch);
 
+/* Set poll timeout in milliseconds (default: 1000ms, use 100ms during freeze) */
+void channel_set_poll_timeout(channel_t *ch, int timeout_ms);
+
 /* Check if channel is open */
 int channel_is_open(channel_t *ch);
 
