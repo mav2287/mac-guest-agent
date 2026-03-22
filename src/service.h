@@ -10,4 +10,7 @@
 int service_install(void);
 int service_uninstall(void);
 
+/* Update from a local binary file. Stops service, replaces binary, restarts. */
+int service_update(const char *new_binary_path);
+
 #endif

@@ -130,3 +130,83 @@ int service_uninstall(void)
     printf("  Log file retained at: %s\n", LOG_PATH);
     return 0;
 }
+
+int service_update(const char *new_binary_path)
+{
+    if (geteuid() != 0) {
+        fprintf(stderr, "Error: root privileges required for update\n");
+        return 1;
+    }
+
+    if (!new_binary_path || !*new_binary_path) {
+        fprintf(stderr, "Error: provide path to new binary\n");
+        fprintf(stderr, "Usage: sudo mac-guest-agent --update /path/to/new/binary\n");
+        fprintf(stderr, "\nTo update from another machine:\n");
+        fprintf(stderr, "  1. Download the new binary on a machine with internet\n");
+        fprintf(stderr, "  2. scp mac-guest-agent-darwin-amd64 user@vm-ip:/tmp/\n");
+        fprintf(stderr, "  3. sudo mac-guest-agent --update /tmp/mac-guest-agent-darwin-amd64\n");
+        return 1;
+    }
+
+    struct stat st;
+    if (stat(new_binary_path, &st) != 0) {
+        fprintf(stderr, "Error: file not found: %s\n", new_binary_path);
+        return 1;
+    }
+
+    /* Verify it's actually an executable */
+    if (!(st.st_mode & S_IXUSR)) {
+        fprintf(stderr, "Error: file is not executable: %s\n", new_binary_path);
+        fprintf(stderr, "Run: chmod +x %s\n", new_binary_path);
+        return 1;
+    }
+
+    printf("Updating macOS Guest Agent...\n");
+
+    /* Stop service */
+    printf("  Stopping service...\n");
+    stop_existing();
+
+    /* Backup current binary */
+    if (stat(BINARY_PATH, &st) == 0) {
+        char backup[512];
+        snprintf(backup, sizeof(backup), "%s.backup", BINARY_PATH);
+        rename(BINARY_PATH, backup);
+        printf("  Backed up current binary to %s\n", backup);
+    }
+
+    /* Copy new binary */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "cp '%s' '%s' && chmod 755 '%s'",
+             new_binary_path, BINARY_PATH, BINARY_PATH);
+    if (run_command(cmd) != 0) {
+        fprintf(stderr, "Error: failed to copy new binary\n");
+        /* Restore backup */
+        char backup[512];
+        snprintf(backup, sizeof(backup), "%s.backup", BINARY_PATH);
+        rename(backup, BINARY_PATH);
+        return 1;
+    }
+
+    /* Verify new binary works */
+    char *version_out = NULL;
+    if (run_command_capture(BINARY_PATH " -V", &version_out) != 0 || !version_out) {
+        fprintf(stderr, "Error: new binary failed to run\n");
+        char backup[512];
+        snprintf(backup, sizeof(backup), "%s.backup", BINARY_PATH);
+        rename(backup, BINARY_PATH);
+        free(version_out);
+        return 1;
+    }
+
+    printf("  Installed: %s", version_out);
+    free(version_out);
+
+    /* Restart service */
+    printf("  Restarting service...\n");
+    run_command("launchctl load " PLIST_PATH " 2>/dev/null");
+    run_command("launchctl start " SERVICE_NAME);
+
+    printf("Update complete.\n");
+    return 0;
+}

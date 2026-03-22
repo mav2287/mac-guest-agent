@@ -1,0 +1,69 @@
+;; macOS sandbox profile for mac-guest-agent
+;;
+;; Usage: sandbox-exec -f /etc/qemu/sandbox.sb /usr/local/bin/mac-guest-agent --daemon
+;;
+;; This restricts the agent even though it runs as root.
+;; The agent needs:
+;;   - Read/write to serial devices (/dev/cu.*, /dev/tty.*)
+;;   - Read/write to log file
+;;   - Read system info (sysctl, sw_vers, vm_stat, etc.)
+;;   - Execute system commands (for guest-exec, shutdown, etc.)
+;;   - Network interface enumeration (getifaddrs)
+
+(version 1)
+
+;; Start with deny-all
+(deny default)
+
+;; Allow reading system files
+(allow file-read*
+    (subpath "/usr")
+    (subpath "/bin")
+    (subpath "/sbin")
+    (subpath "/System")
+    (subpath "/Library")
+    (subpath "/etc")
+    (subpath "/var/run")
+    (subpath "/dev")
+    (subpath "/private/var")
+    (subpath "/private/etc")
+    (literal "/"))
+
+;; Allow writing to specific locations
+(allow file-write*
+    (subpath "/var/log")
+    (subpath "/var/run")
+    (subpath "/private/var/log")
+    (subpath "/private/var/run")
+    (subpath "/tmp")
+    (subpath "/private/tmp")
+    (subpath "/Library/LaunchDaemons")
+    (subpath "/usr/local"))
+
+;; Allow serial device access
+(allow file-read* file-write* file-ioctl
+    (regex #"^/dev/cu\.")
+    (regex #"^/dev/tty\."))
+
+;; Allow process execution (for guest-exec, shutdown, etc.)
+(allow process-exec
+    (subpath "/usr")
+    (subpath "/bin")
+    (subpath "/sbin"))
+
+;; Allow fork/exec
+(allow process-fork)
+
+;; Allow sysctl reads (for hw.memsize, hw.logicalcpu, etc.)
+(allow sysctl-read)
+
+;; Allow network interface enumeration
+(allow system-socket)
+(allow network-outbound)
+(allow network-inbound)
+
+;; Allow signal handling
+(allow signal)
+
+;; Allow mach port access (for host_statistics)
+(allow mach-lookup)

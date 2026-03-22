@@ -104,18 +104,56 @@ install: build
 	sudo cp docs/mac-guest-agent.8 /usr/local/share/man/man8/
 	@echo "Man page installed (try: man mac-guest-agent)"
 
+# Build .pkg installer (double-click or sudo installer -pkg)
+pkg: build-all
+	@./scripts/build-pkg.sh amd64
+	@./scripts/build-pkg.sh arm64
+	@./scripts/build-pkg.sh universal
+
+# Code signing (for users with a Developer ID)
+sign: build-all
+	@echo "Signing binaries..."
+	@if security find-identity -v -p basic 2>/dev/null | grep -q "Developer ID"; then \
+		IDENTITY=$$(security find-identity -v -p basic | grep "Developer ID Application" | head -1 | awk -F'"' '{print $$2}'); \
+		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64; \
+		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-arm64; \
+		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-universal; \
+		echo "Signed with: $$IDENTITY"; \
+	else \
+		echo "No Developer ID found. Install one from developer.apple.com"; \
+		exit 1; \
+	fi
+
 # Uninstall
 uninstall:
 	@echo "Uninstalling..."
 	@sudo /usr/local/bin/$(PROGRAM_NAME) --uninstall 2>/dev/null || echo "Not installed"
 
-# Run tests
-test: build
-	@echo "Running tests..."
-	@echo '{"execute":"guest-ping"}' | $(BUILD_DIR)/$(PROGRAM_NAME) --test 2>/dev/null | grep -q '"return"' && echo "PASS: guest-ping" || echo "FAIL: guest-ping"
-	@echo '{"execute":"guest-info"}' | $(BUILD_DIR)/$(PROGRAM_NAME) --test 2>/dev/null | grep -q 'supported_commands' && echo "PASS: guest-info" || echo "FAIL: guest-info"
-	@echo '{"execute":"guest-sync","arguments":{"id":12345}}' | $(BUILD_DIR)/$(PROGRAM_NAME) --test 2>/dev/null | grep -q '12345' && echo "PASS: guest-sync" || echo "FAIL: guest-sync"
-	@echo "Tests complete"
+# Run all tests
+test: build test-unit test-fuzz test-integration
+
+# Unit tests (individual functions)
+test-unit:
+	@echo "Building unit tests..."
+	@$(CC) -Isrc -Isrc/third_party -o $(BUILD_DIR)/test_unit tests/test_unit.c \
+		src/util.c src/protocol.c src/compat.c src/third_party/cJSON.c \
+		-framework CoreFoundation
+	@echo "Running unit tests..."
+	@$(BUILD_DIR)/test_unit
+
+# Fuzz tests (random/malformed input with ASAN)
+test-fuzz:
+	@echo "Building fuzz tests with ASAN..."
+	@$(CC) -Isrc -Isrc/third_party -fsanitize=address,undefined -O1 -g \
+		-o $(BUILD_DIR)/fuzz_protocol tests/fuzz_protocol.c \
+		src/util.c src/protocol.c src/compat.c src/third_party/cJSON.c \
+		-framework CoreFoundation
+	@echo "Running fuzz tests (210k rounds)..."
+	@$(BUILD_DIR)/fuzz_protocol
+
+# Integration tests (full agent via --test mode)
+test-integration: build
+	@./tests/run_tests.sh ./$(BUILD_DIR)/$(PROGRAM_NAME)
 
 # Run in test mode
 run-test: build
