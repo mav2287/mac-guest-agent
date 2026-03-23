@@ -94,7 +94,8 @@ src/
 ├── cmd-power.c     shutdown, suspend-disk/ram/hybrid
 ├── cmd-hardware.c  vcpus, memory-blocks, cpustats (Mach APIs + sysctl)
 ├── cmd-disk.c      disks (diskutil), fsinfo (getmntinfo), diskstats
-├── cmd-fs.c        fsfreeze (simulated), fstrim (no-op)
+├── cmd-fs.c        fsfreeze (real: sync+F_FULLFSYNC+APFS snapshot+hooks), fstrim
+├── cmd-fs.h        freeze state API for agent.c (continuous sync, command filtering)
 ├── cmd-network.c   interfaces (getifaddrs + AF_LINK for MAC)
 ├── cmd-file.c      file open/close/read/write/seek/flush (handle table)
 ├── cmd-exec.c      exec (fork/execvp with pipe capture), exec-status

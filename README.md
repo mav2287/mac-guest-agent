@@ -167,6 +167,72 @@ make test                                        # Automated quick tests
 mac-guest-agent -t -v                            # Interactive test mode
 ```
 
+## Backup Consistency (Filesystem Freeze)
+
+The agent implements real filesystem quiescing for PVE backups — not a simulation.
+
+**On freeze (`guest-fsfreeze-freeze`):**
+- Runs hook scripts from `/etc/qemu/fsfreeze-hook.d/` (for database flush, service pause, etc.)
+- APFS (10.13+): creates an atomic COW snapshot via `tmutil` — this is the consistency point
+- All versions: `sync()` + `F_FULLFSYNC` flushes all data to physical media
+- Continuous `sync()` every 100ms during the freeze window to catch new writes
+- Auto-thaw after 10 minutes if PVE never sends thaw (safety net)
+- Commands are restricted during freeze (only ping, sync, info, freeze/thaw allowed)
+
+**On thaw (`guest-fsfreeze-thaw`):**
+- Cleans up APFS snapshot
+- Runs thaw hooks in reverse order
+- Restores normal operation
+
+**Hook scripts** (same model as Linux qemu-ga):
+```bash
+# /etc/qemu/fsfreeze-hook.d/mysql.sh
+#!/bin/bash
+case "$1" in
+    freeze) mysql -e "FLUSH TABLES WITH READ LOCK;" ;;
+    thaw)   mysql -e "UNLOCK TABLES;" ;;
+esac
+```
+
+Scripts must be owned by root and not world-writable. 30-second timeout per script.
+
+**Note:** macOS has no kernel-level filesystem freeze (FIFREEZE) like Linux. VMware Tools for Mac never supported quiesced snapshots either. Our implementation using sync + F_FULLFSYNC + APFS snapshots + continuous sync provides the best consistency guarantee available on macOS.
+
+## Thin Disk Provisioning
+
+To reclaim free space from thin-provisioned virtual disks:
+
+### PVE Host — Enable SSD emulation and discard:
+```bash
+qm set <vmid> --sata0 <storage>:vm-<vmid>-disk-1,discard=on,ssd=1
+```
+Requires VM restart (stop + start).
+
+### macOS VM — Enable TRIM (one-time, requires reboot):
+```bash
+sudo trimforce enable
+```
+
+> **Warning:** Apple's `trimforce` displays a disclaimer about potential data loss on non-validated devices. QEMU's TRIM implementation is well-tested, but this is at your own risk. Test on a non-production VM first and ensure you have backups.
+
+### Verify:
+```bash
+diskutil info disk0 | grep -i "Solid State\|TRIM"
+```
+Should show `Solid State: Yes` and `TRIM Support: Yes`.
+
+After this, macOS sends TRIM automatically on every file delete. Space is reclaimed on the host in real-time. No `guest-fstrim` needed.
+
+### Reclaim existing free space (one-time):
+Space freed before TRIM was enabled must be reclaimed manually. Run during a maintenance window:
+```bash
+dd if=/dev/zero of=/tmp/.reclaim bs=4m 2>/dev/null; rm -f /tmp/.reclaim; sync
+```
+This temporarily fills free space with zeros, then deletes the file. QEMU's `detect-zeroes=unmap` reclaims the space on the host. Takes approximately 1 minute per 5GB of free space.
+
+### Without TRIM (no trimforce):
+If you choose not to enable `trimforce`, set `discard=on,ssd=1` on the PVE disk and free space from new file deletions will still be reclaimed via `detect-zeroes=unmap`. However, existing free space won't be reclaimed without the manual zero-fill.
+
 ## How It Works (Technical)
 
 1. PVE sets `agent: enabled=1,type=isa` which tells QEMU to create an ISA 16550 serial port connected to the guest agent socket
@@ -183,6 +249,7 @@ No custom kernel extensions. No VirtIO drivers. No SIP modifications. Works on e
 | Binary | `/usr/local/bin/mac-guest-agent` |
 | LaunchDaemon | `/Library/LaunchDaemons/com.macos.guest-agent.plist` |
 | Config (optional) | `/etc/qemu/qemu-ga.conf` |
+| Freeze hooks | `/etc/qemu/fsfreeze-hook.d/` |
 | Log | `/var/log/mac-guest-agent.log` |
 
 ## License

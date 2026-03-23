@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.2.0 (2026-03-23)
+
+### Major Changes
+- **Real filesystem freeze** — replaces fake no-op with actual quiescing:
+  - APFS (10.13+): atomic COW snapshot via `tmutil localsnapshot`
+  - All versions: `sync()` + `F_FULLFSYNC` flushes data to physical media
+  - Continuous `sync()` every 100ms during freeze window
+  - Auto-thaw safety timeout (10 minutes)
+  - Command filtering: only freeze-safe commands allowed during freeze
+- **Freeze hook scripts** — `/etc/qemu/fsfreeze-hook.d/` (same model as Linux qemu-ga)
+  - Scripts called with "freeze"/"thaw" argument
+  - 30-second per-script timeout
+  - Strict ownership validation (root-owned, not world-writable)
+
+### Security Fixes
+- Fixed password memory exposure (zero on all exit paths)
+- Fixed command injection in diskutil calls (use execv, not shell)
+- Fixed command injection in service update (use execv, not shell)
+- Fixed unchecked `pipe()` in guest-exec (could use uninitialized fds)
+- Fixed unchecked `fork()` in shutdown handler
+- Fixed `WIFSIGNALED` called on extracted exit code instead of raw wait status
+- Check all `mkdir()`, `chown()`, `tcsetattr()` return values
+- Replace all `strtok()` with thread-safe `strtok_r()`
+
+### Testing
+- 48 unit tests + 31 proactive tests + 210,000 fuzz rounds + 61 integration tests
+- Code coverage: 55.74% line, 80.27% function (remaining is untestable-in-CI code)
+- Proactive tests: channel API, SSH key operations, hook validation, injection prevention
+
+### Documentation
+- Backup consistency section in README (freeze behavior, hook scripts, limitations)
+- Thin disk provisioning guide (ssd=1, trimforce, TRIM, zero-fill reclaim)
+- SECURITY.md updated with freeze hook security model
+
 ## v2.1.0 (2026-03-21)
 
 ### Major Changes
