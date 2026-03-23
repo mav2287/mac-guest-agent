@@ -2,11 +2,16 @@
 
 A native QEMU Guest Agent for macOS, written in C. Enables hypervisors (Proxmox VE, libvirt, plain QEMU) to manage macOS virtual machines through the standard QGA protocol.
 
-**Supports Mac OS X 10.4 Tiger through macOS Tahoe and beyond.** Works on any macOS VM — OpenCore, Hackintosh, real Apple hardware in Proxmox, doesn't matter.
+Designed for broad macOS compatibility. Runtime-tested on **El Capitan 10.11.6** (Proxmox VE) and **Tahoe 26.3** (native). Build targets: x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for what has been validated versus what is theoretical.
 
 ## How It Works
 
-The agent communicates with the hypervisor through an **ISA serial port** — a standard 16550 UART that macOS has built-in drivers for (`Apple16X50Serial.kext`) since day one. No custom kernel extensions, no SIP issues, no code signing required.
+The agent communicates with the hypervisor through an **ISA serial port** — a standard 16550 UART that macOS has built-in drivers for (`Apple16X50Serial.kext`). No custom kernel extensions, no SIP modifications, no code signing required.
+
+1. PVE sets `agent: enabled=1,type=isa` which tells QEMU to create an ISA 16550 serial port connected to the guest agent socket
+2. macOS sees the serial port via its built-in `Apple16X50Serial.kext` driver and creates `/dev/cu.serial1`
+3. Our agent opens `/dev/cu.serial1`, sets raw mode, and speaks the QGA JSON protocol
+4. PVE communicates through the QEMU socket, QEMU bridges to the serial port, the agent responds
 
 ## Setup
 
@@ -24,7 +29,7 @@ Then restart the VM (QEMU args change requires a full stop/start):
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
 
-> **Why `type=isa`?** The default `agent: 1` uses virtio-serial, which only works on macOS Big Sur 11.0+ (where Apple ships a built-in VirtIO driver). The `type=isa` option uses a standard serial port that macOS supports natively on **every version** from 10.4 to current. We recommend `type=isa` for universal compatibility.
+> **Why `type=isa`?** The default `agent: 1` uses virtio-serial, which requires macOS Big Sur 11.0+ (where Apple ships a built-in VirtIO driver). The `type=isa` option uses a standard serial port that macOS supports natively via `Apple16X50Serial.kext`. We recommend `type=isa` for broadest compatibility.
 
 ### Already running Big Sur or newer?
 
@@ -32,10 +37,10 @@ If your VM runs **macOS 11.0 (Big Sur) or later**, the default `agent: 1` (virti
 
 | PVE Setting | macOS Driver | Works On |
 |---|---|---|
-| `type=isa` (recommended) | Apple16X50Serial (built-in) | All macOS 10.4+ |
+| `type=isa` (recommended) | Apple16X50Serial (built-in) | Broadly compatible (tested on 10.11.6+) |
 | default (type=virtio) | AppleVirtIO (built-in) | Big Sur 11.0+ only |
 
-Either way, just install the agent binary. No double-dipping — PVE creates one device type or the other, never both.
+Either way, just install the agent binary. PVE creates one device type or the other, never both.
 
 ### 2. Install the Agent in the macOS VM
 
@@ -65,6 +70,12 @@ From the **PVE host**:
 qm agent <vmid> ping
 qm agent <vmid> get-osinfo
 qm agent <vmid> network-get-interfaces
+```
+
+Or run the built-in self-test from inside the VM:
+
+```bash
+sudo mac-guest-agent --self-test
 ```
 
 ## Service Management
@@ -101,6 +112,7 @@ Compatible with the Linux `qemu-ga`:
   -h, --help             Show help
       --install          Install as LaunchDaemon
       --uninstall        Uninstall LaunchDaemon
+      --self-test        Check environment and report readiness
 ```
 
 ## Configuration File
@@ -119,32 +131,35 @@ verbose = 0
 
 ## Supported Commands
 
-44 commands matching the official QEMU Guest Agent protocol:
+44 registered QGA commands including aliases, macOS-specific approximations, and documented deviations from Linux qemu-ga. See [docs/COMMAND_STATUS.md](docs/COMMAND_STATUS.md) for per-command status, Linux parity level, and privilege requirements.
 
 | Category | Commands |
 |---|---|
 | **Protocol** | `guest-ping`, `guest-sync`, `guest-sync-delimited`, `guest-info` |
 | **System** | `guest-get-osinfo`, `guest-get-host-name`, `guest-get-timezone`, `guest-get-time`, `guest-set-time`, `guest-get-users`, `guest-get-load` |
 | **Power** | `guest-shutdown`, `guest-suspend-disk`, `guest-suspend-ram`, `guest-suspend-hybrid` |
-| **CPU & Memory** | `guest-get-vcpus`, `guest-set-vcpus`, `guest-get-memory-blocks`, `guest-get-memory-block-info`, `guest-set-memory-blocks`, `guest-get-cpustats` |
-| **Disk & FS** | `guest-get-disks`, `guest-get-fsinfo`, `guest-get-diskstats`, `guest-fsfreeze-status`, `guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`, `guest-fsfreeze-thaw`, `guest-fstrim` |
+| **CPU & Memory** | `guest-get-vcpus`, `guest-set-vcpus`*, `guest-get-memory-blocks`, `guest-get-memory-block-info`, `guest-set-memory-blocks`*, `guest-get-cpustats` |
+| **Disk & FS** | `guest-get-disks`, `guest-get-fsinfo`, `guest-get-diskstats`, `guest-fsfreeze-status`, `guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`, `guest-fsfreeze-thaw`, `guest-fstrim`** |
 | **Network** | `guest-network-get-interfaces` |
 | **File I/O** | `guest-file-open`, `guest-file-close`, `guest-file-read`, `guest-file-write`, `guest-file-seek`, `guest-file-flush` |
 | **Exec** | `guest-exec`, `guest-exec-status` |
 | **SSH** | `guest-ssh-get-authorized-keys`, `guest-ssh-add-authorized-keys`, `guest-ssh-remove-authorized-keys` |
 | **User** | `guest-set-user-password` |
 
+*\* Returns error (no hardware hotplug on macOS)*
+*\*\* No-op (macOS handles TRIM natively via `discard=on` + `ssd=1`)*
+
+**Summary:** 33 stable, 5 caveated, 1 no-op, 2 error, 3 aliases. 28 commands at full Linux parity, 12 partial, 4 divergent.
+
 ## Compatibility
 
-| Binary | Arch | Min OS | Max OS |
+| Binary | Arch | Build Target | Runtime Tested |
 |---|---|---|---|
-| `mac-guest-agent-darwin-amd64` | x86_64 | Mac OS X 10.4 Tiger | macOS 26 Tahoe |
-| `mac-guest-agent-darwin-arm64` | arm64 | macOS 11.0 Big Sur | macOS 26 Tahoe |
-| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.4 / 11.0 | macOS 26 Tahoe |
+| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard+ | 10.11.6 El Capitan, 26.3 Tahoe (Rosetta) |
+| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur+ | 26.3 Tahoe |
+| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 | Both above |
 
-Tested on:
-- macOS Tahoe 26.3 (arm64 native + x86_64 Rosetta 2)
-- Mac OS X El Capitan 10.11.6 (x86_64 native, Proxmox VE)
+The x86_64 binary targets 10.6 as its deployment target. The arm64 binary targets 11.0. Versions between the deployment target and the tested versions should work based on API compatibility, but have not been runtime-tested. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full matrix with support tiers.
 
 ## Building from Source
 
@@ -161,11 +176,13 @@ make install           # Build + install service
 ## Testing
 
 ```bash
-make test                                        # Automated quick tests
-./tests/run_tests.sh ./build/mac-guest-agent     # Full test suite
+make test                                        # All tests (unit + proactive + fuzz + integration)
+./tests/run_tests.sh ./build/mac-guest-agent     # Full integration suite (61 tests)
 ./tests/safe_test.sh ./build/mac-guest-agent     # Read-only safe test (for production VMs)
 mac-guest-agent -t -v                            # Interactive test mode
 ```
+
+Test coverage: 48 unit tests, 31 proactive tests, 210k fuzz rounds (ASAN), 61 integration tests.
 
 ## Backup Consistency (Filesystem Freeze)
 
@@ -196,7 +213,7 @@ esac
 
 Scripts must be owned by root and not world-writable. 30-second timeout per script.
 
-**Note:** macOS has no kernel-level filesystem freeze (FIFREEZE) like Linux. VMware Tools for Mac never supported quiesced snapshots either. Our implementation using sync + F_FULLFSYNC + APFS snapshots + continuous sync provides the best consistency guarantee available on macOS.
+**Note:** macOS has no kernel-level filesystem freeze (FIFREEZE) like Linux. VMware Tools for Mac never supported quiesced snapshots either. Our implementation using sync + F_FULLFSYNC + APFS snapshots + continuous sync provides the best consistency guarantee available on macOS. Verified on El Capitan 10.11.6 with LVM snapshot + mount test (290/290 stress cycles clean).
 
 ## Thin Disk Provisioning
 
@@ -228,19 +245,7 @@ Space freed before TRIM was enabled must be reclaimed manually. Run during a mai
 ```bash
 dd if=/dev/zero of=/tmp/.reclaim bs=4m 2>/dev/null; rm -f /tmp/.reclaim; sync
 ```
-This temporarily fills free space with zeros, then deletes the file. QEMU's `detect-zeroes=unmap` reclaims the space on the host. Takes approximately 1 minute per 5GB of free space.
-
-### Without TRIM (no trimforce):
-If you choose not to enable `trimforce`, set `discard=on,ssd=1` on the PVE disk and free space from new file deletions will still be reclaimed via `detect-zeroes=unmap`. However, existing free space won't be reclaimed without the manual zero-fill.
-
-## How It Works (Technical)
-
-1. PVE sets `agent: enabled=1,type=isa` which tells QEMU to create an ISA 16550 serial port connected to the guest agent socket
-2. macOS sees the serial port via its built-in `Apple16X50Serial.kext` driver and creates `/dev/cu.serial1`
-3. Our agent opens `/dev/cu.serial1`, sets raw mode, and speaks the QGA JSON protocol
-4. PVE communicates through the QEMU socket, QEMU bridges to the serial port, the agent responds
-
-No custom kernel extensions. No VirtIO drivers. No SIP modifications. Works on every macOS version from 10.4 to current.
+This temporarily fills free space with zeros, then deletes the file. QEMU's `detect-zeroes=unmap` reclaims the space on the host.
 
 ## File Locations
 
@@ -251,6 +256,15 @@ No custom kernel extensions. No VirtIO drivers. No SIP modifications. Works on e
 | Config (optional) | `/etc/qemu/qemu-ga.conf` |
 | Freeze hooks | `/etc/qemu/fsfreeze-hook.d/` |
 | Log | `/var/log/mac-guest-agent.log` |
+
+## Documentation
+
+- [Command Status](docs/COMMAND_STATUS.md) — per-command status, Linux parity, and privilege requirements
+- [Compatibility Matrix](docs/COMPATIBILITY.md) — support tiers and validation evidence per macOS version
+- [Architecture](docs/ARCHITECTURE.md) — data flow, protocol spec, macOS API usage
+- [Security](SECURITY.md) — trust model, hardening profiles, freeze-state restrictions
+- [Changelog](CHANGELOG.md) — release history
+- [Contributing](CONTRIBUTING.md) — build, style, testing guidelines
 
 ## License
 

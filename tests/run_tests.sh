@@ -675,6 +675,16 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+SELFTEST=$("$BINARY" --self-test 2>/dev/null)
+SELFTEST_RC=$?
+if echo "$SELFTEST" | grep -q "self-test" && echo "$SELFTEST" | grep -q "Result:"; then
+    echo "  PASS: --self-test runs and produces structured output"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --self-test"
+    FAIL=$((FAIL + 1))
+fi
+
 # =========================================================
 echo ""
 echo "--- SSH Commands (success path) ---"

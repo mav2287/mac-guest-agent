@@ -1,4 +1,4 @@
-.TH MAC-GUEST-AGENT 8 "March 2026" "mac-guest-agent 2.1.0" "System Administration"
+.TH MAC-GUEST-AGENT 8 "March 2026" "mac-guest-agent 2.2.0" "System Administration"
 .SH NAME
 mac-guest-agent \- QEMU Guest Agent for macOS
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ enables hypervisors (Proxmox VE, libvirt, QEMU) to manage macOS guests through
 the standard QGA protocol over a serial port.
 .PP
 The agent communicates via an ISA serial port (16550 UART) that macOS supports
-natively on all versions from Mac OS X 10.4 Tiger through current macOS. No
+natively through the built-in Apple16X50Serial.kext driver. No
 custom kernel extensions or SIP modifications are required.
 .SH OPTIONS
 .TP
@@ -60,6 +60,12 @@ Install as a macOS LaunchDaemon system service.
 .TP
 .B \-\-uninstall
 Remove the LaunchDaemon service and binary.
+.TP
+.B \-\-self\-test
+Run environment diagnostics and report readiness. Checks macOS version,
+architecture, serial device availability, required tools, filesystem
+capabilities, freeze hook validation, service status, and more.
+Exits 0 if all checks pass, 1 if any fail.
 .SH CONFIGURATION
 The agent reads an optional configuration file at /etc/qemu/qemu-ga.conf
 (compatible with the Linux qemu-ga format):
@@ -85,10 +91,10 @@ Then stop and start the VM (QEMU args change requires a full restart).
 On macOS 11.0 (Big Sur) and later, the default virtio-serial mode also
 works via Apple's built-in VirtIO driver.
 .SH SUPPORTED COMMANDS
-The agent supports 44 standard QGA commands including guest-ping,
-guest-get-osinfo, guest-get-host-name, guest-shutdown,
-guest-network-get-interfaces, guest-file-open/read/write,
-guest-exec, and guest-ssh-get/add/remove-authorized-keys.
+The agent registers 44 QGA commands including aliases, macOS-specific
+approximations, and documented deviations from Linux qemu-ga. Of these,
+33 are stable, 5 caveated, 1 no-op, 2 return errors, and 3 are aliases.
+See docs/COMMAND_STATUS.md for per-command details.
 .PP
 See
 .B mac-guest-agent --test
