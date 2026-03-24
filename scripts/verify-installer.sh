@@ -125,6 +125,45 @@ mount_dmg() {
 }
 
 # Resolve the input to the actual system volume with tools and kexts
+# Extract BaseSystem.dmg from a SharedSupport.dmg zip payload (Big Sur+ format)
+extract_from_sharedsupport() {
+    local vol="$1"
+    local zipfile
+    zipfile=$(find "$vol" -name "*.zip" -maxdepth 2 2>/dev/null | head -1)
+    if [ -z "$zipfile" ]; then
+        return 1
+    fi
+
+    # Find BaseSystem.dmg path inside the zip (varies by macOS version)
+    local basesys_path
+    basesys_path=$(unzip -l "$zipfile" 2>/dev/null | grep -oE 'AssetData/[^ ]*BaseSystem\.dmg' | grep -v '\.ecc' | grep -v 'trustcache' | grep -i 'x86_64\|Restore' | head -1)
+    # Fallback: any BaseSystem.dmg that's not an ecc or trustcache
+    if [ -z "$basesys_path" ]; then
+        basesys_path=$(unzip -l "$zipfile" 2>/dev/null | grep -oE 'AssetData/[^ ]*BaseSystem\.dmg' | grep -v '\.ecc' | grep -v 'trustcache' | head -1)
+    fi
+    if [ -z "$basesys_path" ]; then
+        return 1
+    fi
+
+    # Extract to temp dir
+    EXTRACT_DIR=$(mktemp -d)
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo "Extracting BaseSystem.dmg from SharedSupport payload..." >&2; fi
+    unzip -o -j "$zipfile" "$basesys_path" -d "$EXTRACT_DIR" >/dev/null 2>&1 || return 1
+
+    # Find the extracted DMG (name varies: BaseSystem.dmg, x86_64BaseSystem.dmg, arm64eBaseSystem.dmg)
+    local extracted_dmg
+    extracted_dmg=$(find "$EXTRACT_DIR" -name "*BaseSystem.dmg" -maxdepth 1 2>/dev/null | head -1)
+    if [ -n "$extracted_dmg" ]; then
+        local sys_vol
+        sys_vol=$(mount_dmg "$extracted_dmg") || { rm -rf "$EXTRACT_DIR"; return 1; }
+        SYSTEM_VOL="$sys_vol"
+        return 0
+    fi
+
+    rm -rf "$EXTRACT_DIR"
+    return 1
+}
+
 resolve_input() {
     local esd_vol=""
 
@@ -148,6 +187,10 @@ resolve_input() {
             if [ -z "$SYSTEM_VOL" ] && [ -f "$INPUT/Contents/SharedSupport/BaseSystem.dmg" ]; then
                 SYSTEM_VOL=$(mount_dmg "$INPUT/Contents/SharedSupport/BaseSystem.dmg") || true
             fi
+            # Big Sur+ SharedSupport.dmg: BaseSystem.dmg is inside a zip payload
+            if [ -z "$SYSTEM_VOL" ]; then
+                extract_from_sharedsupport "$esd_vol" || true
+            fi
             if [ -z "$SYSTEM_VOL" ]; then
                 SYSTEM_VOL="$esd_vol"
             fi
@@ -157,7 +200,7 @@ resolve_input() {
             SYSTEM_VOL="$INPUT"
         fi
 
-    elif [[ "$INPUT" == *.dmg ]]; then
+    elif [[ "$INPUT" == *.dmg ]] || [[ "$INPUT" == *.iso ]]; then
         local vol
         vol=$(mount_dmg "$INPUT") || exit 1
         if [ -f "$vol/BaseSystem.dmg" ]; then
@@ -324,9 +367,18 @@ check_symbols() {
     if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[C Library Symbols]${NC}"; fi
 
     local syslib_dir="$SYSTEM_VOL/usr/lib/system"
-    if [ ! -d "$syslib_dir" ]; then
-        warn "System library directory not found ($syslib_dir), skipping symbol check"
-        return
+    local use_libc=0
+
+    if [ ! -d "$syslib_dir" ] || [ "$(ls "$syslib_dir"/*.dylib 2>/dev/null | wc -l)" -lt 5 ]; then
+        # Older macOS (10.5-10.6) or Big Sur+ dyld cache: try libSystem.B.dylib or libc.dylib directly
+        if [ -f "$SYSTEM_VOL/usr/lib/libSystem.B.dylib" ]; then
+            use_libc=1
+        elif [ -f "$SYSTEM_VOL/usr/lib/libc.dylib" ]; then
+            use_libc=2
+        else
+            warn "No system libraries found, skipping symbol check"
+            return
+        fi
     fi
 
     # These are the non-trivial symbols our agent depends on
@@ -341,10 +393,16 @@ check_symbols() {
     local missing=0
     local found=0
 
-    # Dump all exported text symbols from system sub-libraries into a temp file
+    # Dump all exported text symbols into a temp file
     local symfile
     symfile=$(mktemp)
-    nm -g "$syslib_dir"/*.dylib 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
+    if [ "$use_libc" -eq 1 ]; then
+        nm -g "$SYSTEM_VOL/usr/lib/libSystem.B.dylib" 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
+    elif [ "$use_libc" -eq 2 ]; then
+        nm -g "$SYSTEM_VOL/usr/lib/libc.dylib" 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
+    else
+        nm -g "$syslib_dir"/*.dylib 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
+    fi
 
     for sym in "${CRITICAL_SYMBOLS[@]}"; do
         if grep -qx "$sym" "$symfile" 2>/dev/null; then

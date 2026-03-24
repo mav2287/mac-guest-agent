@@ -23,9 +23,9 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| 10.4 Tiger | 3 | i386 target exists | Untested | Untested | Untested | Untested | Untested | Static analysis only |
+| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.6** | Untested | **Kext + IOSerialFamily in Essentials.pkg (not on DVD base image). PPC DVD verified; Intel DVD downloading. i386 binary required.** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
-| 10.6 Snow Leopard | 3 | x86_64 (deployment target) | Untested | Untested | Untested | Untested | Untested | Binary target verified |
+| **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.8 Mountain Lion** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.1** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.9 Mavericks** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -36,9 +36,10 @@ These terms are used consistently throughout all project documentation:
 | **10.14 Mojave** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + APFS + diskutil APFS** |
 | **10.15 Catalina** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + APFS + diskutil APFS** |
 | **11.6 Big Sur** | **2** | **arm64 + x86_64** | Untested | Untested | Untested | **Kext v3.2 + VirtIO** | Untested | **Deep verify 4/4: kext + symbols (dyld cache) + frameworks + VirtIO v74.120.4** |
-| 12.x Monterey | 3 | arm64 | Untested | Untested | Untested | Untested | Untested | Installer downloading |
-| 13.x Ventura | 3 | arm64 | Untested | Untested | Untested | Untested | Untested | Installer downloading |
-| 14.x Sonoma | 3 | arm64 | Untested | Untested | Untested | Untested | Untested | Installer downloading |
+| 12.6 Monterey | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
+| 13.0 Ventura | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
+| 14.0 Sonoma | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
+| 15.7 Sequoia | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
 | **26.3 Tahoe** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **No (test mode only)** | **Kext v3.2** | **Yes (APFS, dry-run)** | **48 unit + 31 proactive + 62 integration tests** |
 
 ## Sub-Evidence Matrix
@@ -47,8 +48,12 @@ Detailed breakdown of what has been verified per version. All installer-verified
 
 | macOS | Serial Driver | C Library Symbols | Frameworks | Required Tools | APFS/VirtIO | Binary Target |
 |---|---|---|---|---|---|---|
+| 10.4 Tiger | v1.6, PCI 0x0700 | in Essentials.pkg | CF + IOKit | in pkg | — | i386 |
+| 10.5 Leopard | v1.9, PCI 0x0700 | in libc.dylib | CF + IOKit | 7/10 | — | i386 |
+| 10.6 Snow Leopard | v3.0, PCI 0x0700 | in libSystem.B | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.7 Lion | v3.0, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.8 Mountain Lion | v3.1, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
+| 10.9 Mavericks | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.10 Yosemite | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.11 El Capitan | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.6 |
 | 10.12 Sierra | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.6 |
@@ -59,9 +64,12 @@ Detailed breakdown of what has been verified per version. All installer-verified
 | 26.3 Tahoe | v3.2, PCI 0x0700 | runtime | CF + IOKit | 10/10 | APFS + VirtIO | arm64 11.0 |
 
 Notes:
+- "in Essentials.pkg": Tiger's DVD base image doesn't include the kext, but the full OS install (Essentials.pkg) does
+- "in libc.dylib" / "in libSystem.B": Pre-10.7 macOS stores symbols in monolithic libraries instead of split sub-libraries
 - "7/10 tools" and "8/10 tools": BaseSystem images don't include osascript, dscl, or tmutil (these are present in the full installed OS)
 - "dyld cache": Big Sur+ moved system libraries into a shared cache; symbols are present but not inspectable via nm
 - "runtime": Tahoe verified by running the agent directly, not from installer inspection
+- Monterey through Sequoia use a new SharedSupport.dmg payload format that cannot be deep-verified without installing into a VM
 
 ## Deep Verification Details
 
@@ -77,7 +85,9 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 | macOS | Apple16X50Serial.kext | IOSerialFamily.kext | PCI Class Match |
 |---|---|---|---|
+| 10.4 Tiger | v1.6 | v8.0.0d28 | 0x07000000&0xFFFF0000 |
 | 10.5.4 Leopard | v1.9 | v9.1 | 0x07000000&0xFFFF0000 |
+| 10.6.3 Snow Leopard | v3.0 | v10.0.3 | 0x07000000&0xFFFF0000 |
 | 10.7.5 Lion | v3.0 | v10.0.5 | 0x07000000&0xFFFF0000 |
 | 10.8.5 Mountain Lion | v3.1 | v10.0.6 | 0x07000000&0xFFFF0000 |
 | 10.9.5 Mavericks | v3.2 | v11 | 0x07000000&0xFFFF0000 |
@@ -90,7 +100,7 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 | 11.6 Big Sur | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 | 26.3 Tahoe | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 
-The ISA serial driver has been unchanged across all verified versions — same version, same PCI class match, same IOSerialFamily dependency.
+The ISA serial driver has been present since Mac OS X 10.4 Tiger (2005). The PCI class match (`0x07000000&0xFFFF0000`) has been identical across every version — the driver recognizes QEMU's ISA serial port the same way on Tiger as it does on Tahoe. The kext version has evolved (v1.6 → v3.2) but the PCI personality is functionally unchanged.
 
 ### Binary Evidence
 
@@ -109,17 +119,20 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 | No SIP → SIP | 10.11 El Capitan | Kext loading restricted | Not applicable (ISA serial uses built-in kext) |
 | Intel → Apple Silicon | 11.0 Big Sur | Architecture change | Separate arm64 binary, universal fat binary |
 | No VirtIO → Native VirtIO | 11.0 Big Sur | Communication path | ISA serial primary, VirtIO auto-detected as secondary |
+| PPC → Intel | 10.4.4 Tiger | Architecture change | i386 Makefile target for 10.4–10.5, x86_64 from 10.6 |
 | 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 target from 10.6, i386 Makefile target for older |
+| Monolithic libc → split sub-libs | 10.7 Lion | Library layout | Symbol check adapts: libc.dylib → libSystem.B → sub-libraries |
+| Split sub-libs → dyld shared cache | 11.0 Big Sur | Library layout | Symbols not inspectable via nm but resolve at runtime |
 | bash → zsh default | 10.15 Catalina | Shell for guest-exec | Uses /bin/sh (always available), not login shell |
 
 ## Recommended Anchor VMs for Expanded Validation
 
 | macOS | Priority | Why |
 |---|---|---|
-| 10.7 Lion | Medium | Oldest available installer, pre-SIP |
-| 10.13 High Sierra | High | APFS transition — validates freeze snapshot path |
-| 11.0 Big Sur | High | Apple Silicon + native VirtIO — validates arm64 + both transports |
-| 14.x Sonoma | Medium | Recent Intel/AS — validates current compatibility |
+| 10.4 Tiger | High | Oldest supported, kext v1.6, i386 binary, validates floor |
+| 10.13 High Sierra | High | APFS transition — validates freeze snapshot path via tmutil |
+| 11.0 Big Sur | High | VirtIO + modern stack — validates both transports |
+| 15.x Sequoia | High | Current stable release — validates nothing has regressed |
 
 ## Verification Workflow
 
