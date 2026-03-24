@@ -24,11 +24,11 @@ These terms are used consistently throughout all project documentation:
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
 | 10.4 Tiger | 3 | i386 target exists | Untested | Untested | Untested | Untested | Untested | Static analysis only |
-| 10.5 Leopard | 3 | — | Untested | Untested | Untested | Untested | Untested | No installer |
+| **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | 10.6 Snow Leopard | 3 | x86_64 (deployment target) | Untested | Untested | Untested | Untested | Untested | Binary target verified |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.8 Mountain Lion** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.1** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
-| 10.9 Mavericks | 3 | x86_64 | Untested | Untested | Untested | Untested | Untested | Installer downloading |
+| **10.9 Mavericks** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.10 Yosemite** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.11 El Capitan** | **1** | **x86_64** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v3.2** | **Yes (HFS+)** | **290/290 stress, mount-verified snapshot. Deep verify 4/4** |
 | **10.12 Sierra** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -77,8 +77,10 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 | macOS | Apple16X50Serial.kext | IOSerialFamily.kext | PCI Class Match |
 |---|---|---|---|
+| 10.5.4 Leopard | v1.9 | v9.1 | 0x07000000&0xFFFF0000 |
 | 10.7.5 Lion | v3.0 | v10.0.5 | 0x07000000&0xFFFF0000 |
 | 10.8.5 Mountain Lion | v3.1 | v10.0.6 | 0x07000000&0xFFFF0000 |
+| 10.9.5 Mavericks | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 | 10.10.5 Yosemite | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 | 10.11.6 El Capitan | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 | 10.12.6 Sierra | v3.2 | v11 | 0x07000000&0xFFFF0000 |
