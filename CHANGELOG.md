@@ -3,7 +3,7 @@
 ## v2.2.0 (2026-03-23)
 
 ### Major Changes
-- **Real filesystem freeze** — replaces fake no-op with actual quiescing:
+- **Real filesystem freeze** — replaces fake no-op with actual freeze:
   - APFS (10.13+): atomic COW snapshot via `tmutil localsnapshot`
   - All versions: `sync()` + `F_FULLFSYNC` flushes data to physical media
   - Continuous `sync()` every 100ms during freeze window
@@ -25,7 +25,7 @@
 - Replace all `strtok()` with thread-safe `strtok_r()`
 
 ### Testing
-- 48 unit tests + 31 proactive tests + 210,000 fuzz rounds + 61 integration tests
+- 48 unit tests + 31 proactive tests + 210,000 fuzz rounds + 62 integration tests
 - Code coverage: 55.74% line, 80.27% function (remaining is untestable-in-CI code)
 - Proactive tests: channel API, SSH key operations, hook validation, injection prevention
 
@@ -37,7 +37,7 @@
 ## v2.1.0 (2026-03-21)
 
 ### Major Changes
-- **ISA serial transport** — uses Apple's built-in `Apple16X50Serial.kext` instead of VirtIO serial. No custom kernel extensions, no SIP issues, no code signing required. Works on every macOS from 10.4 to current.
+- **ISA serial transport** — uses Apple's built-in `Apple16X50Serial.kext` instead of VirtIO serial. No custom kernel extensions, no SIP issues, no code signing required. Works on macOS versions with the built-in Apple16X50Serial.kext driver.
 - **PVE setup**: `qm set <vmid> --agent enabled=1,type=isa`
 
 ### Security
@@ -64,7 +64,7 @@
 
 ### Initial Release
 - Native C implementation of the QEMU Guest Agent protocol
-- 44 commands matching the official Linux `qemu-ga`
+- 44 registered QGA commands (34 stable, 5 caveated, 1 no-op, 2 error, 2 aliases)
 - Zero external dependencies (cJSON embedded)
 - CLI flags compatible with Linux `qemu-ga`
 - Configuration file compatible with `/etc/qemu/qemu-ga.conf`

@@ -1,6 +1,6 @@
 #!/bin/bash
 # macOS Guest Agent - Installation Script
-# Supports Mac OS X 10.4 Tiger through current macOS
+# Supports macOS (x86_64 10.6+, arm64 11.0+)
 
 set -e
 

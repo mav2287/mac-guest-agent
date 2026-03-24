@@ -12,7 +12,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/mac-guest-agent</string>
-        <string>--daemon</string>
+        <string>--daemonize</string>
     </array>
     
     <key>RunAtLoad</key>

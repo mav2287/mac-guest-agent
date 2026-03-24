@@ -2,7 +2,7 @@
 
 A native QEMU Guest Agent for macOS, written in C. Enables hypervisors (Proxmox VE, libvirt, plain QEMU) to manage macOS virtual machines through the standard QGA protocol.
 
-Designed for broad macOS compatibility. Runtime-tested on **El Capitan 10.11.6** (Proxmox VE) and **Tahoe 26.3** (native). Build targets: x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for what has been validated versus what is theoretical.
+Designed for broad macOS compatibility. **Runtime-tested** on El Capitan 10.11.6 (PVE-integrated) and Tahoe 26.3 (native). **Installer-verified** on 10.7 through 11.6. Build targets: x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for evidence levels per version.
 
 ## How It Works
 
@@ -149,7 +149,7 @@ verbose = 0
 *\* Returns error (no hardware hotplug on macOS)*
 *\*\* No-op (macOS handles TRIM natively via `discard=on` + `ssd=1`)*
 
-**Summary:** 33 stable, 5 caveated, 1 no-op, 2 error, 3 aliases. 28 commands at full Linux parity, 12 partial, 4 divergent.
+**Summary:** 34 stable, 5 caveated, 1 no-op, 2 error, 2 aliases. 28 commands at full Linux parity, 12 partial, 4 divergent.
 
 ## Compatibility
 
@@ -159,7 +159,7 @@ verbose = 0
 | `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur+ | 26.3 Tahoe |
 | `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 | Both above |
 
-The x86_64 binary targets 10.6 as its deployment target. The arm64 binary targets 11.0. Versions between the deployment target and the tested versions should work based on API compatibility, but have not been runtime-tested. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full matrix with support tiers.
+The x86_64 binary targets 10.6 as its deployment target. The arm64 binary targets 11.0. Versions between the deployment target and the runtime-tested versions are installer-verified (kext, symbols, frameworks confirmed) but have not been runtime-tested. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-version evidence levels.
 
 ## Building from Source
 
@@ -182,7 +182,7 @@ make test                                        # All tests (unit + proactive +
 mac-guest-agent -t -v                            # Interactive test mode
 ```
 
-Test coverage: 48 unit tests, 31 proactive tests, 210k fuzz rounds (ASAN), 61 integration tests.
+Test coverage: 48 unit tests, 31 proactive tests, 210k fuzz rounds (ASAN), 62 integration tests.
 
 ## Backup Consistency (Filesystem Freeze)
 
@@ -256,6 +256,7 @@ This temporarily fills free space with zeros, then deletes the file. QEMU's `det
 | Config (optional) | `/etc/qemu/qemu-ga.conf` |
 | Freeze hooks | `/etc/qemu/fsfreeze-hook.d/` |
 | Log | `/var/log/mac-guest-agent.log` |
+| Log rotation | `/etc/newsyslog.d/mac-guest-agent.conf` |
 
 ## Documentation
 

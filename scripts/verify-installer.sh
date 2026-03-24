@@ -33,26 +33,62 @@ else
     GREEN='' YELLOW='' RED='' BOLD='' NC=''
 fi
 
-pass() { echo -e "  ${GREEN}PASS${NC}  $1"; PASSES=$((PASSES + 1)); }
-warn() { echo -e "  ${YELLOW}WARN${NC}  $1"; WARNS=$((WARNS + 1)); }
-fail() { echo -e "  ${RED}FAIL${NC}  $1"; FAILS=$((FAILS + 1)); }
-info() { echo -e "  ${BOLD}INFO${NC}  $1"; }
-
 PASSES=0
 WARNS=0
 FAILS=0
+JSON_CHECKS=""
+
+json_add() {
+    local level="$1" name="$2"
+    # Escape quotes for JSON
+    name=$(echo "$name" | sed 's/"/\\"/g')
+    local entry="{\"level\":\"$level\",\"name\":\"$name\"}"
+    if [ -n "$JSON_CHECKS" ]; then
+        JSON_CHECKS="$JSON_CHECKS,$entry"
+    else
+        JSON_CHECKS="$entry"
+    fi
+}
+
+pass() {
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "  ${GREEN}PASS${NC}  $1"; fi
+    json_add "pass" "$1"
+    PASSES=$((PASSES + 1))
+}
+warn() {
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "  ${YELLOW}WARN${NC}  $1"; fi
+    json_add "warn" "$1"
+    WARNS=$((WARNS + 1))
+}
+fail() {
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "  ${RED}FAIL${NC}  $1"; fi
+    json_add "fail" "$1"
+    FAILS=$((FAILS + 1))
+}
+info() {
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "  ${BOLD}INFO${NC}  $1"; fi
+    json_add "info" "$1"
+}
+
+JSON_OUTPUT=0
 
 usage() {
-    echo "Usage: $0 <installer-path>"
-    echo ""
-    echo "  installer-path: Path to one of:"
+    echo "Usage: $0 [--json] <installer-path>"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    echo "  --json            Output machine-readable JSON"
+    echo "  installer-path:   Path to one of:"
     echo "    - Install macOS *.app bundle"
     echo "    - InstallESD.dmg or BaseSystem.dmg"
     echo "    - Already-mounted installer volume"
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
     echo "Results can be used to update docs/COMPATIBILITY.md"
     exit 1
 }
+
+if [ "$1" = "--json" ]; then
+    JSON_OUTPUT=1
+    shift
+fi
 
 [ -z "$1" ] && usage
 
@@ -62,7 +98,7 @@ SYSTEM_VOL=""
 
 cleanup() {
     for ((i=${#MOUNTS_TO_DETACH[@]}-1; i>=0; i--)); do
-        echo "Cleaning up: detaching ${MOUNTS_TO_DETACH[$i]}"
+        if [ "$JSON_OUTPUT" -eq 0 ]; then echo "Cleaning up: detaching ${MOUNTS_TO_DETACH[$i]}"; fi
         hdiutil detach "${MOUNTS_TO_DETACH[$i]}" -quiet 2>/dev/null || true
     done
 }
@@ -71,7 +107,7 @@ trap cleanup EXIT
 # Mount a DMG and return the volume path
 mount_dmg() {
     local dmg="$1"
-    echo "Mounting $dmg..." >&2
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo "Mounting $dmg..." >&2; fi
     local mount_out
     mount_out=$(hdiutil attach "$dmg" -nobrowse -readonly 2>&1) || {
         echo "Failed to mount $dmg" >&2
@@ -152,13 +188,13 @@ resolve_input() {
         exit 1
     fi
 
-    echo "System volume: $SYSTEM_VOL"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo "System volume: $SYSTEM_VOL"; fi
 }
 
 # Detect macOS version from the installer
 detect_version() {
-    echo ""
-    echo -e "${BOLD}[Version]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[Version]${NC}"; fi
 
     VERSION=""
     BUILD=""
@@ -203,8 +239,8 @@ detect_version() {
 
 # Check for required tools in the installer's system
 check_tools() {
-    echo ""
-    echo -e "${BOLD}[Tools]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[Tools]${NC}"; fi
 
     TOOLS=(
         "usr/bin/sw_vers:OS version detection:required"
@@ -237,8 +273,8 @@ check_tools() {
 
 # Check for Apple16X50Serial.kext and verify PCI class matching
 check_serial_kext() {
-    echo ""
-    echo -e "${BOLD}[ISA Serial Driver]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[ISA Serial Driver]${NC}"; fi
 
     local kext="$SYSTEM_VOL/System/Library/Extensions/Apple16X50Serial.kext"
     local ioserial="$SYSTEM_VOL/System/Library/Extensions/IOSerialFamily.kext"
@@ -284,8 +320,8 @@ check_serial_kext() {
 
 # Deep check: verify critical C library symbols exist in the installer's system libraries
 check_symbols() {
-    echo ""
-    echo -e "${BOLD}[C Library Symbols]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[C Library Symbols]${NC}"; fi
 
     local syslib_dir="$SYSTEM_VOL/usr/lib/system"
     if [ ! -d "$syslib_dir" ]; then
@@ -330,8 +366,8 @@ check_symbols() {
 
 # Check required frameworks
 check_frameworks() {
-    echo ""
-    echo -e "${BOLD}[Frameworks]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[Frameworks]${NC}"; fi
 
     local fw_dir="$SYSTEM_VOL/System/Library/Frameworks"
 
@@ -350,8 +386,8 @@ check_frameworks() {
 
 # Check LaunchDaemon plist compatibility
 check_launchdaemon() {
-    echo ""
-    echo -e "${BOLD}[LaunchDaemon Support]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[LaunchDaemon Support]${NC}"; fi
 
     LAUNCHD_DIR="$SYSTEM_VOL/System/Library/LaunchDaemons"
     if [ -d "$LAUNCHD_DIR" ]; then
@@ -379,8 +415,8 @@ check_launchdaemon() {
 
 # Detect default filesystem type
 check_filesystem() {
-    echo ""
-    echo -e "${BOLD}[Filesystem]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[Filesystem]${NC}"; fi
 
     if [ -z "$VERSION" ] || [ "$VERSION" = "GM" ]; then
         warn "Cannot determine filesystem (version unknown)"
@@ -410,8 +446,8 @@ check_filesystem() {
 
 # Detect architecture support
 check_architecture() {
-    echo ""
-    echo -e "${BOLD}[Architecture]${NC}"
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo -e "${BOLD}[Architecture]${NC}"; fi
 
     for binary in "$SYSTEM_VOL/usr/bin/sw_vers" "$SYSTEM_VOL/bin/ls" "$SYSTEM_VOL/usr/bin/true"; do
         if [ -f "$binary" ]; then
@@ -440,15 +476,58 @@ check_architecture() {
     fi
 }
 
+# Resolve codename from version
+get_codename() {
+    local major minor
+    major=$(echo "${VERSION:-0}" | cut -d. -f1)
+    minor=$(echo "${VERSION:-0}" | cut -d. -f2)
+
+    if [ "$major" -eq 10 ] 2>/dev/null; then
+        case "$minor" in
+            4) echo "Tiger" ;;       5) echo "Leopard" ;;
+            6) echo "Snow Leopard" ;; 7) echo "Lion" ;;
+            8) echo "Mountain Lion" ;; 9) echo "Mavericks" ;;
+            10) echo "Yosemite" ;;    11) echo "El Capitan" ;;
+            12) echo "Sierra" ;;      13) echo "High Sierra" ;;
+            14) echo "Mojave" ;;      15) echo "Catalina" ;;
+        esac
+    else
+        case "$major" in
+            11) echo "Big Sur" ;;     12) echo "Monterey" ;;
+            13) echo "Ventura" ;;     14) echo "Sonoma" ;;
+            15) echo "Sequoia" ;;     26) echo "Tahoe" ;;
+        esac
+    fi
+}
+
+# Print JSON output
+print_json() {
+    local codename verdict
+    codename=$(get_codename)
+    [ "$FAILS" -eq 0 ] && verdict="pass" || verdict="fail"
+
+    # Escape special chars in VERSION/BUILD
+    local v="${VERSION:-unknown}"
+    local b="${BUILD:-unknown}"
+
+    printf '{"version":"%s","build":"%s","codename":"%s","status":"%s","passes":%d,"warnings":%d,"failures":%d,"checks":[%s]}\n' \
+        "$v" "$b" "$codename" "$verdict" "$PASSES" "$WARNS" "$FAILS" "$JSON_CHECKS"
+}
+
 # Print summary for COMPATIBILITY.md
 print_summary() {
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 1 ]; then
+        print_json
+        return
+    fi
+
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
     echo "========================================="
     echo -e "${BOLD}Verification Result${NC}"
     echo "========================================="
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
     echo "  $PASSES passed, $WARNS warnings, $FAILS failures"
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
 
     if [ "$FAILS" -eq 0 ]; then
         echo -e "  ${GREEN}VERDICT: Agent should work on this macOS version${NC}"
@@ -464,33 +543,14 @@ print_summary() {
         return
     fi
 
-    local major minor NAME
-    major=$(echo "$VERSION" | cut -d. -f1)
-    minor=$(echo "$VERSION" | cut -d. -f2)
-    NAME=""
+    local NAME
+    NAME=$(get_codename)
 
-    if [ "$major" -eq 10 ]; then
-        case "$minor" in
-            4) NAME="Tiger" ;;       5) NAME="Leopard" ;;
-            6) NAME="Snow Leopard" ;; 7) NAME="Lion" ;;
-            8) NAME="Mountain Lion" ;; 9) NAME="Mavericks" ;;
-            10) NAME="Yosemite" ;;    11) NAME="El Capitan" ;;
-            12) NAME="Sierra" ;;      13) NAME="High Sierra" ;;
-            14) NAME="Mojave" ;;      15) NAME="Catalina" ;;
-        esac
-    else
-        case "$major" in
-            11) NAME="Big Sur" ;;     12) NAME="Monterey" ;;
-            13) NAME="Ventura" ;;     14) NAME="Sonoma" ;;
-            15) NAME="Sequoia" ;;     26) NAME="Tahoe" ;;
-        esac
-    fi
-
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
     echo -e "${BOLD}COMPATIBILITY.md row:${NC}"
-    echo "| $VERSION ${NAME:+$NAME} | 2 | Installer verified | Untested | Untested | Untested | Untested | Untested | Deep verify $PASSES/$((PASSES+WARNS+FAILS)) ($(date +%Y-%m-%d)) |"
+    echo "| $VERSION ${NAME:+$NAME} | 2 | Installer-verified | Untested | Untested | Untested | Untested | Untested | Deep verify $PASSES/$((PASSES+WARNS+FAILS)) ($(date +%Y-%m-%d)) |"
 
-    echo ""
+    if [ "$JSON_OUTPUT" -eq 0 ]; then echo ""; fi
     echo "To upgrade to Tier 1, run the agent in a VM:"
     echo "  1. Install the binary"
     echo "  2. Run: sudo mac-guest-agent --self-test"
@@ -500,8 +560,10 @@ print_summary() {
 }
 
 # Main
-echo "macOS Installer Verification for Guest Agent Compatibility"
-echo "==========================================================="
+if [ "$JSON_OUTPUT" -eq 0 ]; then
+    echo "macOS Installer Verification for Guest Agent Compatibility"
+    echo "==========================================================="
+fi
 
 resolve_input
 detect_version

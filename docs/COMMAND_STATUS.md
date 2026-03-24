@@ -1,6 +1,6 @@
 # Command Status
 
-All 44 registered commands with their actual status, Linux parity, and requirements.
+All 44 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
 
 ## Status Key
 
@@ -71,11 +71,11 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 
 ## Summary
 
-- **Stable:** 33 commands
-- **Caveated:** 5 commands (freeze, diskstats, password)
+- **Stable:** 34 commands
+- **Caveated:** 5 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, get-diskstats, set-user-password)
 - **No-op:** 1 command (fstrim)
 - **Error:** 2 commands (set-vcpus, set-memory-blocks)
-- **Alias:** 3 commands (sync-id, hostname, freeze-list shares handler)
+- **Alias:** 2 commands (sync-id, get-hostname)
 - **Full Linux parity:** 28 commands
 - **Partial parity:** 12 commands
 - **Divergent:** 4 commands
