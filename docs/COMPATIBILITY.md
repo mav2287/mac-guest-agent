@@ -23,7 +23,7 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.6** | Untested | **Kext + IOSerialFamily in Essentials.pkg (not on DVD base image). PPC DVD verified; Intel DVD downloading. i386 binary required.** |
+| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Kext v1.9 (i386+ppc) confirmed via Intel 10.4.11 combo update. Same PCI class match. i386 binary required.** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -48,7 +48,7 @@ Detailed breakdown of what has been verified per version. All installer-verified
 
 | macOS | Serial Driver | C Library Symbols | Frameworks | Required Tools | APFS/VirtIO | Binary Target |
 |---|---|---|---|---|---|---|
-| 10.4 Tiger | v1.6, PCI 0x0700 | in Essentials.pkg | CF + IOKit | in pkg | — | i386 |
+| 10.4.11 Tiger | v1.9, PCI 0x0700 | in Essentials.pkg | CF + IOKit | in pkg | — | i386 |
 | 10.5 Leopard | v1.9, PCI 0x0700 | in libc.dylib | CF + IOKit | 7/10 | — | i386 |
 | 10.6 Snow Leopard | v3.0, PCI 0x0700 | in libSystem.B | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.7 Lion | v3.0, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
@@ -85,7 +85,7 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 | macOS | Apple16X50Serial.kext | IOSerialFamily.kext | PCI Class Match |
 |---|---|---|---|
-| 10.4 Tiger | v1.6 | v8.0.0d28 | 0x07000000&0xFFFF0000 |
+| 10.4.11 Tiger (combo update) | v1.9 | v8.0.0d28 | 0x07000000&0xFFFF0000 |
 | 10.5.4 Leopard | v1.9 | v9.1 | 0x07000000&0xFFFF0000 |
 | 10.6.3 Snow Leopard | v3.0 | v10.0.3 | 0x07000000&0xFFFF0000 |
 | 10.7.5 Lion | v3.0 | v10.0.5 | 0x07000000&0xFFFF0000 |

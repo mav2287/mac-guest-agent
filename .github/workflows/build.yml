@@ -100,7 +100,7 @@ jobs:
       - name: Run fuzz tests (ASAN, 210k rounds)
         run: make test-fuzz
 
-      - name: Run integration tests (62 tests)
+      - name: Run integration tests (63 tests)
         run: |
           make build
           ./tests/run_tests.sh ./build/mac-guest-agent

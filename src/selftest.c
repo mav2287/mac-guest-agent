@@ -370,6 +370,75 @@ static void output_text(int errs, int warns)
         printf("Status: ALL CHECKS PASSED\n");
 }
 
+static void emit_system_info(void)
+{
+    char esc[512];
+
+    printf("\"system_info\":{");
+
+    /* OS version */
+    const os_version_t *ver = compat_os_version();
+    printf("\"os_version\":\"%d.%d.%d\",", ver->major, ver->minor, ver->patch);
+
+    /* Architecture */
+    struct utsname uts;
+    if (uname(&uts) == 0) {
+        printf("\"arch\":\"%s\",\"kernel\":\"%s\",", uts.machine, uts.release);
+    }
+
+    /* Hardware model */
+    char *model = NULL;
+    if (run_command_capture("sysctl -n hw.model", &model) == 0 && model) {
+        char *nl = strchr(model, '\n');
+        if (nl) *nl = '\0';
+        json_escape(model, esc, sizeof(esc));
+        printf("\"hw_model\":\"%s\",", esc);
+        free(model);
+    }
+
+    /* CPU and memory */
+    char *val = NULL;
+    if (run_command_capture("sysctl -n hw.logicalcpu", &val) == 0 && val) {
+        printf("\"cpu_count\":%d,", atoi(val));
+        free(val); val = NULL;
+    }
+    if (run_command_capture("sysctl -n hw.memsize", &val) == 0 && val) {
+        printf("\"memory_bytes\":%lld,", atoll(val));
+        free(val); val = NULL;
+    }
+
+    /* Serial kext */
+    if (file_exists("/System/Library/Extensions/Apple16X50Serial.kext")) {
+        char *kver = NULL;
+        if (run_command_capture("/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /System/Library/Extensions/Apple16X50Serial.kext/Contents/Info.plist 2>/dev/null", &kver) == 0 && kver) {
+            char *nl = strchr(kver, '\n');
+            if (nl) *nl = '\0';
+            printf("\"serial_kext_version\":\"%s\",", kver);
+            free(kver);
+        }
+    }
+
+    /* APFS/VirtIO capabilities */
+    printf("\"has_apfs\":%s,", compat_has_apfs() ? "true" : "false");
+    printf("\"has_tmutil\":%s,", compat_has_tmutil() ? "true" : "false");
+    printf("\"has_virtio\":%s,", file_exists("/System/Library/Extensions/AppleVirtIO.kext") ? "true" : "false");
+
+    /* Root filesystem type */
+    char *fstype = NULL;
+    if (run_command_capture("mount | head -1 | awk '{print $NF}' | tr -d '()'", &fstype) == 0 && fstype) {
+        char *nl = strchr(fstype, '\n');
+        if (nl) *nl = '\0';
+        json_escape(fstype, esc, sizeof(esc));
+        printf("\"root_fs_type\":\"%s\",", esc);
+        free(fstype);
+    }
+
+    /* Command count */
+    printf("\"command_count\":%d", commands_count());
+
+    printf("},");
+}
+
 static void output_json(int errs, int warns, int passes)
 {
     char esc_name[128], esc_detail[512];
@@ -377,6 +446,9 @@ static void output_json(int errs, int warns, int passes)
     printf("{\"agent_version\":\"%s\",", AGENT_VERSION);
     printf("\"errors\":%d,\"warnings\":%d,\"passes\":%d,", errs, warns, passes);
     printf("\"status\":\"%s\",", errs > 0 ? "fail" : "pass");
+
+    emit_system_info();
+
     printf("\"checks\":[");
 
     for (int i = 0; i < num_results; i++) {
