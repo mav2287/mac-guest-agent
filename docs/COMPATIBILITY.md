@@ -199,6 +199,6 @@ Verification JSON outputs should be stored in `results/` (gitignored) during dev
 | Static analysis (clang --analyze) | 0 bugs across 21 source files |
 | Memory leaks (macOS leaks tool) | 0 leaks, 1143 allocations, 173KB |
 | Fuzz testing (ASAN, 210k rounds) | 0 crashes |
-| Linux qemu-ga command parity | 44/44 registered. 2 Linux-side commands not implemented: guest-get-devices (Windows-only), guest-network-get-route (QEMU 9.1+, Linux/Windows only) |
+| Linux qemu-ga command parity | 45 registered. 1 Linux-side command not implemented: guest-get-devices (Windows-only). guest-network-get-route now implemented. |
 | Code coverage | 55.88% line, 80.95% function (remainder requires root, real hardware, or destructive operations) |
-| Test suite | 48 unit + 31 proactive + 210k fuzz + 62 integration |
+| Test suite | 48 unit + 31 proactive + 210k fuzz + 63 integration |

@@ -1,6 +1,6 @@
 # Command Status
 
-All 44 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
+All 45 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
 
 ## Status Key
 
@@ -56,6 +56,7 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 | `guest-fsfreeze-status` | fs | stable | full | no | Reflects actual freeze state |
 | `guest-fstrim` | fs | no-op | divergent | — | macOS handles TRIM natively via discard=on + ssd=1. See README. |
 | `guest-network-get-interfaces` | network | stable | full | no | Via getifaddrs, AF_LINK for MAC addresses |
+| `guest-network-get-route` | network | stable | full | no | Via netstat -rn, IPv4 + IPv6 routes |
 | `guest-file-open` | file | stable | full | yes | Handle table, max 64 open files |
 | `guest-file-close` | file | stable | full | no | |
 | `guest-file-read` | file | stable | full | no | Max 48KB per read, base64 encoded |
@@ -71,12 +72,12 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 
 ## Summary
 
-- **Stable:** 34 commands
+- **Stable:** 35 commands
 - **Caveated:** 5 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, get-diskstats, set-user-password)
 - **No-op:** 1 command (fstrim)
 - **Error:** 2 commands (set-vcpus, set-memory-blocks)
 - **Alias:** 2 commands (sync-id, get-hostname)
-- **Full Linux parity:** 28 commands
+- **Full Linux parity:** 29 commands
 - **Partial parity:** 12 commands
 - **Divergent:** 4 commands
 

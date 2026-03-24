@@ -131,7 +131,7 @@ verbose = 0
 
 ## Supported Commands
 
-44 registered QGA commands including aliases, macOS-specific approximations, and documented deviations from Linux qemu-ga. See [docs/COMMAND_STATUS.md](docs/COMMAND_STATUS.md) for per-command status, Linux parity level, and privilege requirements.
+45 registered QGA commands including aliases, macOS-specific approximations, and documented deviations from Linux qemu-ga. See [docs/COMMAND_STATUS.md](docs/COMMAND_STATUS.md) for per-command status, Linux parity level, and privilege requirements.
 
 | Category | Commands |
 |---|---|
@@ -140,7 +140,7 @@ verbose = 0
 | **Power** | `guest-shutdown`, `guest-suspend-disk`, `guest-suspend-ram`, `guest-suspend-hybrid` |
 | **CPU & Memory** | `guest-get-vcpus`, `guest-set-vcpus`*, `guest-get-memory-blocks`, `guest-get-memory-block-info`, `guest-set-memory-blocks`*, `guest-get-cpustats` |
 | **Disk & FS** | `guest-get-disks`, `guest-get-fsinfo`, `guest-get-diskstats`, `guest-fsfreeze-status`, `guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`, `guest-fsfreeze-thaw`, `guest-fstrim`** |
-| **Network** | `guest-network-get-interfaces` |
+| **Network** | `guest-network-get-interfaces`, `guest-network-get-route` |
 | **File I/O** | `guest-file-open`, `guest-file-close`, `guest-file-read`, `guest-file-write`, `guest-file-seek`, `guest-file-flush` |
 | **Exec** | `guest-exec`, `guest-exec-status` |
 | **SSH** | `guest-ssh-get-authorized-keys`, `guest-ssh-add-authorized-keys`, `guest-ssh-remove-authorized-keys` |
@@ -149,7 +149,7 @@ verbose = 0
 *\* Returns error (no hardware hotplug on macOS)*
 *\*\* No-op (macOS handles TRIM natively via `discard=on` + `ssd=1`)*
 
-**Summary:** 34 stable, 5 caveated, 1 no-op, 2 error, 2 aliases. 28 commands at full Linux parity, 12 partial, 4 divergent.
+**Summary:** 35 stable, 5 caveated, 1 no-op, 2 error, 2 aliases. 29 commands at full Linux parity, 12 partial, 4 divergent.
 
 ## Compatibility
 

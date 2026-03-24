@@ -400,6 +400,11 @@ test_cmd "guest-network-get-interfaces" \
     "array" \
     "name" "ip-addresses"
 
+test_cmd "guest-network-get-route" \
+    '{"execute":"guest-network-get-route"}' \
+    "array" \
+    "destination" "nexthop" "version"
+
 # Validate at least one interface has an IP
 HAS_IP=$(run_cmd '{"execute":"guest-network-get-interfaces"}' | python3 -c "
 import json, sys

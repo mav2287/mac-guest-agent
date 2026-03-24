@@ -179,7 +179,80 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
     return result;
 }
 
+static cJSON *handle_network_get_route(cJSON *args, const char **err_class, const char **err_desc)
+{
+    (void)args;
+
+    char *out = NULL;
+    if (run_command_capture("netstat -rn", &out) != 0 || !out) {
+        free(out);
+        *err_class = "GenericError";
+        *err_desc = "Failed to get routing table";
+        return NULL;
+    }
+
+    cJSON *result = cJSON_CreateArray();
+    int in_inet4 = 0, in_inet6 = 0;
+
+    char *save_ptr = NULL;
+    char *line = strtok_r(out, "\n", &save_ptr);
+    while (line) {
+        /* Detect section headers */
+        if (strstr(line, "Internet:") && !strstr(line, "Internet6:")) {
+            in_inet4 = 1; in_inet6 = 0;
+            line = strtok_r(NULL, "\n", &save_ptr);
+            continue;
+        }
+        if (strstr(line, "Internet6:")) {
+            in_inet4 = 0; in_inet6 = 1;
+            line = strtok_r(NULL, "\n", &save_ptr);
+            continue;
+        }
+
+        /* Skip headers and empty lines */
+        if (strstr(line, "Destination") || strstr(line, "Routing tables") || line[0] == '\0') {
+            line = strtok_r(NULL, "\n", &save_ptr);
+            continue;
+        }
+
+        if (!in_inet4 && !in_inet6) {
+            line = strtok_r(NULL, "\n", &save_ptr);
+            continue;
+        }
+
+        /* Parse route line: Destination Gateway Flags Netif [Expire] */
+        char dest[128] = "", gateway[128] = "", flags[32] = "", netif[32] = "";
+        if (sscanf(line, "%127s %127s %31s %31s", dest, gateway, flags, netif) >= 3) {
+            cJSON *route = cJSON_CreateObject();
+            cJSON_AddStringToObject(route, "destination", dest);
+            cJSON_AddStringToObject(route, "nexthop", gateway);
+            cJSON_AddStringToObject(route, "source", "");
+            cJSON_AddStringToObject(route, "interface", netif);
+            cJSON_AddNumberToObject(route, "version", in_inet4 ? 4 : 6);
+
+            /* Parse prefix length from CIDR notation if present */
+            char *slash = strchr(dest, '/');
+            if (slash) {
+                cJSON_AddStringToObject(route, "prefix", slash + 1);
+            } else if (strcmp(dest, "default") == 0) {
+                cJSON_AddStringToObject(route, "prefix", "0");
+            } else {
+                cJSON_AddStringToObject(route, "prefix", in_inet4 ? "32" : "128");
+            }
+
+            cJSON_AddItemToArray(result, route);
+        }
+
+        line = strtok_r(NULL, "\n", &save_ptr);
+    }
+
+    free(out);
+    LOG_DEBUG("Retrieved %d routes", cJSON_GetArraySize(result));
+    return result;
+}
+
 void cmd_network_init(void)
 {
     command_register("guest-network-get-interfaces", handle_network_get_interfaces, 1);
+    command_register("guest-network-get-route", handle_network_get_route, 1);
 }
