@@ -49,7 +49,7 @@ jobs:
             src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
             src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
             src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
-            src/util.c src/log.c src/compat.c src/service.c \
+            src/util.c src/log.c src/compat.c src/service.c src/selftest.c \
             src/third_party/cJSON.c \
             -framework CoreFoundation -framework IOKit
           echo "ASAN build complete"
@@ -100,7 +100,7 @@ jobs:
       - name: Run fuzz tests (ASAN, 210k rounds)
         run: make test-fuzz
 
-      - name: Run integration tests (61 tests)
+      - name: Run integration tests (62 tests)
         run: |
           make build
           ./tests/run_tests.sh ./build/mac-guest-agent

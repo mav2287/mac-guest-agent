@@ -160,7 +160,7 @@ test-coverage:
 		src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
 		src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
 		src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
-		src/commands.c src/channel.c src/agent.c src/main.c src/service.c
+		src/commands.c src/channel.c src/agent.c src/main.c src/service.c src/selftest.c
 	@echo ""
 	@echo "Detailed HTML report: make coverage-html"
 
@@ -174,7 +174,7 @@ coverage-html: test-coverage
 		src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c \
 		src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
 		src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
-		src/commands.c src/channel.c src/agent.c src/main.c src/service.c
+		src/commands.c src/channel.c src/agent.c src/main.c src/service.c src/selftest.c
 	@echo "HTML report: $(BUILD_DIR)/coverage/html/index.html"
 
 # Unit tests (individual functions)
