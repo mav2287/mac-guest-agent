@@ -264,6 +264,17 @@ qm guest cmd $VMID fsfreeze-freeze >/dev/null 2>&1 && \
 echo "=== Done ==="
 ```
 
+## Accurate Memory Reporting
+
+Without a guest agent, PVE shows macOS VMs using 100% of allocated RAM because macOS has no balloon driver. With this agent installed, PVE displays actual memory usage from inside the guest.
+
+The agent reports real memory usage via `guest-get-memory-blocks`, using macOS Mach VM statistics (wired + active + compressed pages). PVE reads this data and displays it in the VM summary.
+
+**Before agent:** `mem: 8.00 GiB / maxmem: 8.00 GiB` (always 100%)
+**With agent:** `mem: 4.10 GiB / maxmem: 8.00 GiB` (actual usage)
+
+No balloon driver needed. The agent handles it.
+
 ## PVE Command Limitations
 
 PVE's `qm agent` and `qm guest cmd` only support a hardcoded subset of QGA commands. Newer commands like `guest-network-get-route`, `guest-get-load`, `guest-get-cpustats`, and `guest-get-diskstats` are not in PVE's allowlist yet.
