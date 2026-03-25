@@ -74,8 +74,10 @@ make test              # Run all tests
 
 | Guide | Description |
 |---|---|
-| **[Proxmox VE Guide](docs/PVE.md)** | VM settings, backup config, TRIM, security profiles, troubleshooting |
-| [Other Platforms](docs/PLATFORMS.md) | Plain QEMU, libvirt/virt-manager, UTM setup |
+| **[Proxmox VE](docs/PVE.md)** | VM settings, backup config, TRIM, security profiles, troubleshooting |
+| **[libvirt / virt-manager](docs/LIBVIRT.md)** | Domain XML, virsh commands, quiesced snapshots, troubleshooting |
+| **[UTM](docs/UTM.md)** | Local macOS VM automation, utmctl integration, CI/CD workflows |
+| [All Platforms](docs/PLATFORMS.md) | Plain QEMU setup, transport priority |
 | [Commands](docs/COMMAND_STATUS.md) | All 45 commands with status, Linux parity, privilege requirements |
 | [Compatibility](docs/COMPATIBILITY.md) | Support tiers, kext timeline, verification evidence per version |
 | [Backup & Freeze](docs/BACKUP.md) | Filesystem freeze, APFS snapshots, hook scripts, TRIM |
