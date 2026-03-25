@@ -311,6 +311,59 @@ static void check_environment(void)
         add_result(ST_INFO, "environment", "QEMU environment", "not detected (normal for macOS VMs with custom hardware models)");
 }
 
+static void check_backup_readiness(void)
+{
+    int ready = 1;
+    char detail[256];
+    const char *freeze_method;
+
+    /* Determine freeze method */
+    if (compat_has_apfs() && compat_has_tmutil()) {
+        freeze_method = "APFS snapshot + sync + F_FULLFSYNC (best)";
+    } else if (compat_has_apfs()) {
+        freeze_method = "sync + F_FULLFSYNC (APFS, no tmutil)";
+        ready = 0;
+    } else {
+        freeze_method = "sync + F_FULLFSYNC only (HFS+, no snapshots)";
+    }
+    add_result(ST_INFO, "backup", "freeze method", freeze_method);
+
+    /* Check if running as root (required for freeze) */
+    if (geteuid() != 0) {
+        add_result(ST_WARN, "backup", "freeze capability", "not running as root (freeze requires root)");
+        ready = 0;
+    }
+
+    /* Check hooks */
+    struct stat st;
+    if (stat(HOOK_DIR, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char *output = NULL;
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "ls -1 '%s' 2>/dev/null", HOOK_DIR);
+        if (run_command_capture(cmd, &output) == 0 && output && output[0]) {
+            int count = 0;
+            char *save = NULL;
+            char *line = strtok_r(output, "\n", &save);
+            while (line) { count++; line = strtok_r(NULL, "\n", &save); }
+            snprintf(detail, sizeof(detail), "%d hook(s) installed", count);
+            add_result(ST_PASS, "backup", "freeze hooks", detail);
+            free(output);
+        } else {
+            add_result(ST_INFO, "backup", "freeze hooks", "none (OK if no databases to flush)");
+            free(output);
+        }
+    } else {
+        add_result(ST_INFO, "backup", "freeze hooks", "no hook directory (OK if no databases to flush)");
+    }
+
+    /* Overall verdict */
+    if (ready) {
+        add_result(ST_PASS, "backup", "backup readiness", "ready for PVE backup with freeze");
+    } else {
+        add_result(ST_WARN, "backup", "backup readiness", "freeze available but with limitations (see above)");
+    }
+}
+
 static const char *level_str(st_level_t l)
 {
     switch (l) {
@@ -433,6 +486,14 @@ static void emit_system_info(void)
         free(fstype);
     }
 
+    /* Backup readiness */
+    if (compat_has_apfs() && compat_has_tmutil())
+        printf("\"freeze_method\":\"apfs_snapshot\",");
+    else if (compat_has_apfs())
+        printf("\"freeze_method\":\"sync_fullfsync\",");
+    else
+        printf("\"freeze_method\":\"sync_only\",");
+
     /* Command count */
     printf("\"command_count\":%d", commands_count());
 
@@ -480,6 +541,7 @@ int selftest_run(int json_output)
     check_commands();
     check_tools();
     check_service();
+    check_backup_readiness();
 
     int errs = 0, warns = 0, passes = 0;
     for (int i = 0; i < num_results; i++) {
