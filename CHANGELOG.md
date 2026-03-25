@@ -1,5 +1,54 @@
 # Changelog
 
+## v2.3.0 (2026-03-25)
+
+### New Command
+- **`guest-network-get-route`** — IPv4 and IPv6 routing table via `netstat -rn`. Achieves 100% Linux qemu-ga command parity (45 commands; only `guest-get-devices` unimplemented, which is Windows-only).
+
+### New Features
+- **`--self-test` and `--self-test-json`** — environment diagnostics with backup readiness check. Reports freeze method, kext version, APFS/VirtIO capabilities, hook validation, and overall backup readiness verdict.
+- **Backup readiness section** in self-test: freeze method (APFS snapshot / sync / sync-only), root capability, hook count, overall verdict.
+- **i386 binary** — cross-compiled via MacOSX10.13.sdk for Tiger (10.4) and Leopard (10.5) support.
+- **Baud rate set to 115200** — explicit max baud rate on serial port. QEMU ignores baud rate on virtual serial, but macOS kext may use it for internal pacing.
+
+### Platform Support
+- **UTM** — auto-detects `/dev/cu.virtio` (Apple Virtualization.framework)
+- **libvirt/virt-manager** — domain XML for ISA serial and VirtIO channels, virsh command examples, quiesced snapshots
+- **VirtIO prioritized over ISA serial** on Big Sur+ (native driver preferred when available)
+- Device detection order: VirtIO (QEMU/PVE/libvirt) → UTM → ISA serial (fallback)
+
+### Documentation
+- **Restructured README** — quick-start focused, detailed content moved to docs/
+- **docs/PVE.md** — complete Proxmox VE operational guide with troubleshooting
+- **docs/LIBVIRT.md** — full libvirt/virt-manager deployment guide with domain XML examples
+- **docs/UTM.md** — UTM guide with utmctl comparison, CI/CD workflows, headless automation
+- **docs/BACKUP.md** — freeze mechanics, hook scripts, TRIM guide
+- **docs/CLI.md** — all flags, config file, device auto-detection
+- **docs/PLATFORMS.md** — platform index with transport priority
+- **configs/hooks/** — ready-to-use freeze hooks for MySQL, PostgreSQL, Redis, launchd services
+- **configs/pve/** — anchor VM configurations for Tiger, High Sierra, Big Sur, Sequoia
+
+### Compatibility
+- **18 macOS versions researched** (10.4 Tiger through 26.3 Tahoe)
+- **Apple16X50Serial.kext** verified present on every version with identical PCI class match
+- Kext version timeline: v1.6 (Tiger base) → v1.7 (Tiger Intel 10.4.5) → v1.9 (Tiger 10.4.11 combo / Leopard) → v3.0 (Snow Leopard / Lion) → v3.1 (Mountain Lion) → v3.2 (Mavericks through Tahoe)
+- **Installer-verified:** 10.4 through 11.6 (12 versions, deep verification: kext + symbols + frameworks + PCI class)
+- **Runtime-tested:** 10.11.6 El Capitan (PVE), 26.3 Tahoe (native)
+
+### CI/CD
+- **Multi-version test matrix:** macos-14, macos-15, macos-26
+- **i386 build** via legacy MacOSX10.13.sdk download in CI
+- Self-test validation (text + JSON) in CI pipeline
+- ASAN smoke tests expanded to 15 commands
+- 48 unit + 31 proactive + 210k fuzz + 63 integration tests
+
+### Fixes
+- LaunchDaemon plist: `--daemon` changed to `--daemonize` (primary flag name)
+- Command count corrected to 45 across all docs
+- Test count corrected to 63 across all docs
+- Evidence terminology standardized: runtime-tested, PVE-integrated, installer-verified, best-effort
+- All version claims made consistent (10.4+ not 10.7+)
+
 ## v2.2.0 (2026-03-23)
 
 ### Major Changes

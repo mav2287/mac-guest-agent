@@ -3,7 +3,7 @@
 
 #include "channel.h"
 
-#define AGENT_VERSION "2.2.0"
+#define AGENT_VERSION "2.3.0"
 
 typedef struct agent agent_t;
 
