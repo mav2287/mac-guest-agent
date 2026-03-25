@@ -69,5 +69,5 @@
 - CLI flags compatible with Linux `qemu-ga`
 - Configuration file compatible with `/etc/qemu/qemu-ga.conf`
 - LaunchDaemon service with `--install` / `--uninstall`
-- Binaries: x86_64 (10.6+), arm64 (11.0+), universal
+- Binaries: i386 (10.4+), x86_64 (10.6+), arm64 (11.0+), universal
 - Tested on macOS Tahoe 26.3 and Mac OS X El Capitan 10.11.6

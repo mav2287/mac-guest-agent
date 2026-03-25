@@ -64,9 +64,10 @@ jobs:
 
             | Binary | Arch | Min macOS |
             |---|---|---|
+            | `mac-guest-agent-i386` | i386 | 10.4 Tiger |
             | `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard |
             | `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur |
             | `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 |
 
-            Uses ISA serial — works on every macOS with Apple's built-in serial driver.
+            Uses ISA serial via Apple's built-in Apple16X50Serial.kext (present since 10.4 Tiger).
             No custom kext, no SIP changes, no code signing required.

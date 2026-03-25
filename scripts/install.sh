@@ -1,6 +1,6 @@
 #!/bin/bash
 # macOS Guest Agent - Installation Script
-# Supports macOS (x86_64 10.6+, arm64 11.0+)
+# Supports macOS 10.4+ (i386 10.4+, x86_64 10.6+, arm64 11.0+)
 
 set -e
 

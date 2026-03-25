@@ -4,7 +4,7 @@ A native QEMU Guest Agent for macOS, written in C. Enables hypervisors to manage
 
 **Supported platforms:** Proxmox VE, libvirt/virt-manager, plain QEMU, UTM.
 
-Designed for broad macOS compatibility. **Runtime-tested** on El Capitan 10.11.6 (PVE-integrated) and Tahoe 26.3 (native). **Installer-verified** on 10.7 through 11.6. Build targets: x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for evidence levels per version.
+Designed for broad macOS compatibility. **Runtime-tested** on El Capitan 10.11.6 (PVE-integrated) and Tahoe 26.3 (native). **Installer-verified** on 10.4 Tiger through 11.6 Big Sur. Build targets: i386 10.4+, x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for evidence levels per version.
 
 ## How It Works
 
@@ -48,7 +48,7 @@ Either way, just install the agent binary. PVE creates one device type or the ot
 
 **Plain QEMU:**
 ```bash
-# ISA serial (all macOS versions)
+# ISA serial (macOS 10.4+)
 qemu-system-x86_64 ... -device isa-serial,chardev=agent -chardev socket,id=agent,path=/tmp/qga.sock,server=on,wait=off
 
 # VirtIO serial (Big Sur+ only)
@@ -183,13 +183,14 @@ verbose = 0
 
 ## Compatibility
 
-| Binary | Arch | Build Target | Runtime Tested |
+| Binary | Arch | Min macOS | Runtime Tested |
 |---|---|---|---|
-| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard+ | 10.11.6 El Capitan, 26.3 Tahoe (Rosetta) |
-| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur+ | 26.3 Tahoe |
+| `mac-guest-agent-i386` | i386 | 10.4 Tiger | Untested (installer-verified) |
+| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard | 10.11.6 El Capitan, 26.3 Tahoe |
+| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur | 26.3 Tahoe |
 | `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 | Both above |
 
-The x86_64 binary targets 10.6 as its deployment target. The arm64 binary targets 11.0. Versions between the deployment target and the runtime-tested versions are installer-verified (kext, symbols, frameworks confirmed) but have not been runtime-tested. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-version evidence levels.
+Three binary tiers: i386 for Tiger/Leopard (10.4–10.5), x86_64 for Snow Leopard through current Intel (10.6+), arm64 for Apple Silicon (11.0+). All versions between the deployment target and the runtime-tested versions are installer-verified (kext, symbols, frameworks confirmed). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-version evidence levels.
 
 ## Building from Source
 

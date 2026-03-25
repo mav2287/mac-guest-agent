@@ -33,6 +33,7 @@ Use this template when cutting a new release. Copy the relevant sections into th
 ### Downloads
 | Binary | Arch | Min macOS |
 |---|---|---|
+| `mac-guest-agent-i386` | i386 | 10.4 Tiger |
 | `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard |
 | `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur |
 | `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 |

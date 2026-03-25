@@ -129,7 +129,7 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 
 | macOS | Priority | Why |
 |---|---|---|
-| 10.4 Tiger | High | Oldest supported, kext v1.6, i386 binary, validates floor |
+| 10.4 Tiger | High | Oldest supported, kext v1.9, i386 binary, validates floor |
 | 10.13 High Sierra | High | APFS transition — validates freeze snapshot path via tmutil |
 | 11.0 Big Sur | High | VirtIO + modern stack — validates both transports |
 | 15.x Sequoia | High | Current stable release — validates nothing has regressed |
