@@ -33,6 +33,9 @@ qm agent <vmid> get-osinfo
 sudo mac-guest-agent --self-test
 ```
 
+## Troubleshooting
+If logs show `No virtio device found`, make sure your network device on proxmox is set to virtio. `/etc/pve/qemu-server/XXX.conf` should be set to `net0: virtio=XX:XX:XX:XX:XX:XX`, not `net0: vmxnet3=XX:XX:XX:XX:XX:XX`
+
 ## How It Works
 
 The agent communicates via an **ISA serial port** (16550 UART) using Apple's built-in `Apple16X50Serial.kext` driver, present on every macOS since 10.4. No custom kexts, no SIP changes, no code signing.
