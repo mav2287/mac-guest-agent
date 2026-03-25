@@ -75,6 +75,11 @@ jobs:
           done
           echo "OK: No clock_gettime references"
 
+      - name: Validate docs match binary
+        run: |
+          make build
+          ./scripts/gen-command-table.sh ./build/mac-guest-agent
+
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:

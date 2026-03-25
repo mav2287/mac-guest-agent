@@ -26,6 +26,8 @@ The agent implements real filesystem freeze for consistent PVE backups — not a
 
 macOS has no kernel-level filesystem freeze (FIFREEZE) like Linux. VMware Tools for Mac never supported quiesced snapshots either. Our implementation provides the best consistency guarantee available on macOS.
 
+**Note on `guest-fsfreeze-freeze-list`:** This command accepts a mountpoint list parameter but currently freezes all filesystems regardless — the mountpoint filter is not yet implemented. In practice this rarely matters because macOS VMs typically have a single data volume, so freezing everything is the correct behavior. If you need selective freeze, use hook scripts to manage specific services instead.
+
 Verified on El Capitan 10.11.6 with LVM snapshot + mount test (290/290 stress cycles clean).
 
 ## Hook Scripts
