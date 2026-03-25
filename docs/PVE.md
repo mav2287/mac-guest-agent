@@ -264,6 +264,24 @@ qm guest cmd $VMID fsfreeze-freeze >/dev/null 2>&1 && \
 echo "=== Done ==="
 ```
 
+## PVE Command Limitations
+
+PVE's `qm agent` and `qm guest cmd` only support a hardcoded subset of QGA commands. Newer commands like `guest-network-get-route`, `guest-get-load`, `guest-get-cpustats`, and `guest-get-diskstats` are not in PVE's allowlist yet.
+
+To use these commands, send raw JSON via the QEMU monitor:
+
+```bash
+# Via QEMU monitor
+qm monitor <vmid> <<< 'guest-network-get-route'
+
+# Or test from inside the VM directly
+echo '{"execute":"guest-network-get-route"}' | sudo mac-guest-agent --test
+echo '{"execute":"guest-get-load"}' | sudo mac-guest-agent --test
+echo '{"execute":"guest-get-cpustats"}' | sudo mac-guest-agent --test
+```
+
+All 45 commands work regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction.
+
 ## Troubleshooting
 
 ### Agent not responding to `qm agent ping`
