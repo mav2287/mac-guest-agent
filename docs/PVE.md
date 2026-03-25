@@ -275,6 +275,8 @@ The agent reports real memory usage via `guest-get-memory-blocks`, using macOS M
 
 No balloon driver needed. The agent handles it.
 
+**Note:** A VM reboot is required after installing the agent for PVE to start showing accurate memory numbers. If you still see 100% after install, reboot the VM.
+
 ## PVE Command Limitations
 
 PVE's `qm agent` and `qm guest cmd` only support a hardcoded subset of QGA commands. Newer commands like `guest-network-get-route`, `guest-get-load`, `guest-get-cpustats`, and `guest-get-diskstats` are not in PVE's allowlist yet.
