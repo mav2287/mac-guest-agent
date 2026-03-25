@@ -43,11 +43,12 @@ build: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME) $(SRCS) $(LDFLAGS)
 	@echo "Build complete: $(BUILD_DIR)/$(PROGRAM_NAME)"
 
-# i386 targeting 10.4+ (requires older SDK)
+# i386 targeting 10.4+ (suppress sprintf deprecation in third-party cJSON)
 build-i386: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (i386, 10.4+)..."
 	@mkdir -p $(BUILD_DIR)
-	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) $(CFLAGS) $(INCLUDES) -arch i386 \
+	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" \
+		-Wno-deprecated-declarations $(INCLUDES) -arch i386 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 

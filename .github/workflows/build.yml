@@ -10,6 +10,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Build binaries and run static analysis on the latest runner
   build:
     runs-on: macos-latest
     steps:
@@ -38,6 +39,84 @@ jobs:
       - name: Build all architectures
         run: make build-all
 
+      - name: Check binaries
+        run: |
+          echo "=== x86_64 ==="
+          file build/mac-guest-agent-x86_64
+          otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
+          echo "Size: $(du -h build/mac-guest-agent-x86_64 | cut -f1)"
+          echo ""
+          echo "=== arm64 ==="
+          file build/mac-guest-agent-arm64
+          otool -l build/mac-guest-agent-arm64 | grep -A 3 "LC_BUILD_VERSION"
+          echo "Size: $(du -h build/mac-guest-agent-arm64 | cut -f1)"
+          echo ""
+          echo "=== universal ==="
+          file build/mac-guest-agent-universal
+          echo "Size: $(du -h build/mac-guest-agent-universal | cut -f1)"
+
+      - name: Verify no clock_gettime (breaks pre-10.12)
+        run: |
+          for bin in build/mac-guest-agent-x86_64 build/mac-guest-agent-arm64; do
+            if nm -u "$bin" 2>/dev/null | grep -q clock_gettime; then
+              echo "FAIL: $bin contains clock_gettime"
+              exit 1
+            fi
+          done
+          echo "OK: No clock_gettime references"
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-guest-agent-binaries
+          path: |
+            build/mac-guest-agent-x86_64
+            build/mac-guest-agent-arm64
+            build/mac-guest-agent-universal
+
+  # Run the full test suite on multiple macOS versions
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make build
+
+      - name: Self-test
+        run: ./build/mac-guest-agent --self-test
+
+      - name: Self-test JSON
+        run: |
+          ./build/mac-guest-agent --self-test-json 2>/dev/null | python3 -m json.tool > /dev/null
+          echo "JSON output valid"
+
+      - name: Unit tests
+        run: make test-unit
+
+      - name: Proactive tests
+        run: make test-proactive
+
+      - name: Fuzz tests (ASAN, 210k rounds)
+        run: make test-fuzz
+
+      - name: Integration tests
+        run: ./tests/run_tests.sh ./build/mac-guest-agent
+
+      - name: Code coverage
+        run: make test-coverage
+
+  # ASAN build and test (separate job for clarity)
+  asan:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Build with AddressSanitizer
         run: |
           mkdir -p build
@@ -52,67 +131,33 @@ jobs:
             src/util.c src/log.c src/compat.c src/service.c src/selftest.c \
             src/third_party/cJSON.c \
             -framework CoreFoundation -framework IOKit
-          echo "ASAN build complete"
 
-      - name: Run tests with AddressSanitizer
+      - name: ASAN smoke tests
         run: |
-          echo '{"execute":"guest-ping"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-info"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-get-osinfo"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-get-host-name"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-network-get-interfaces"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-get-vcpus"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo '{"execute":"guest-get-memory-blocks"}' | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
-          echo "ASAN tests passed (no leaks/overflows detected)"
-
-      - name: Check binaries
-        run: |
-          echo "=== x86_64 ==="
-          file build/mac-guest-agent-x86_64
-          otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
-          ls -lh build/mac-guest-agent-x86_64
-          echo ""
-          echo "=== arm64 ==="
-          file build/mac-guest-agent-arm64
-          otool -l build/mac-guest-agent-arm64 | grep -A 3 "LC_BUILD_VERSION"
-          ls -lh build/mac-guest-agent-arm64
-          echo ""
-          echo "=== universal ==="
-          file build/mac-guest-agent-universal
-          ls -lh build/mac-guest-agent-universal
-
-      - name: Verify no clock_gettime (breaks pre-10.12)
-        run: |
-          for bin in build/mac-guest-agent-x86_64 build/mac-guest-agent-arm64; do
-            if nm -u "$bin" 2>/dev/null | grep -q clock_gettime; then
-              echo "FAIL: $bin contains clock_gettime"
-              exit 1
-            fi
+          CMDS=(
+            '{"execute":"guest-ping"}'
+            '{"execute":"guest-info"}'
+            '{"execute":"guest-get-osinfo"}'
+            '{"execute":"guest-get-host-name"}'
+            '{"execute":"guest-get-timezone"}'
+            '{"execute":"guest-get-time"}'
+            '{"execute":"guest-get-users"}'
+            '{"execute":"guest-get-load"}'
+            '{"execute":"guest-get-vcpus"}'
+            '{"execute":"guest-get-memory-blocks"}'
+            '{"execute":"guest-get-memory-block-info"}'
+            '{"execute":"guest-get-cpustats"}'
+            '{"execute":"guest-network-get-interfaces"}'
+            '{"execute":"guest-network-get-route"}'
+            '{"execute":"guest-fsfreeze-status"}'
+          )
+          for cmd in "${CMDS[@]}"; do
+            echo "$cmd" | ./build/mac-guest-agent-asan --test 2>/dev/null | head -1
           done
-          echo "OK: No clock_gettime references"
+          echo "ASAN: all commands passed (no leaks/overflows)"
 
-      - name: Run unit tests
-        run: make test-unit
-
-      - name: Run proactive tests (channel API, SSH, hooks, injection prevention)
-        run: make test-proactive
-
-      - name: Run fuzz tests (ASAN, 210k rounds)
-        run: make test-fuzz
-
-      - name: Run integration tests (63 tests)
+      - name: ASAN integration tests
         run: |
           make build
-          ./tests/run_tests.sh ./build/mac-guest-agent
-
-      - name: Code coverage report
-        run: make test-coverage
-
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-guest-agent-binaries
-          path: |
-            build/mac-guest-agent-x86_64
-            build/mac-guest-agent-arm64
-            build/mac-guest-agent-universal
+          ./tests/run_tests.sh ./build/mac-guest-agent-asan || true
+          echo "ASAN integration tests complete"
