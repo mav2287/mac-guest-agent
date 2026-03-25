@@ -28,7 +28,9 @@ struct channel {
 };
 
 static const char *known_devices[] = {
-    /* VirtIO serial (Big Sur+ with native AppleVirtIO) */
+    /* VirtIO serial — preferred on Big Sur+ (native AppleVirtIO.kext)
+     * Checked first so VirtIO is used when available.
+     * Covers: PVE (default agent type), plain QEMU, libvirt */
     "/dev/cu.org.qemu.guest_agent.0",
     "/dev/tty.org.qemu.guest_agent.0",
     "/dev/cu.virtio-console.0",
@@ -39,9 +41,15 @@ static const char *known_devices[] = {
     "/dev/tty.virtio-port",
     "/dev/cu.qemu-guest-agent",
     "/dev/tty.qemu-guest-agent",
-    /* ISA serial (PVE agent type=isa, works on all macOS via Apple16X50Serial) */
+    /* UTM (Apple Virtualization.framework) */
+    "/dev/cu.virtio",
+    "/dev/tty.virtio",
+    /* ISA serial — fallback, works on ALL macOS 10.4+ via Apple16X50Serial.kext
+     * Covers: PVE (agent type=isa), plain QEMU (-serial isa), any 16550 UART */
     "/dev/cu.serial1",
     "/dev/tty.serial1",
+    "/dev/cu.serial2",
+    "/dev/tty.serial2",
     "/dev/cu.serial",
     "/dev/tty.serial",
     NULL
@@ -52,7 +60,10 @@ static char *detect_device(void)
     struct stat st;
     for (int i = 0; known_devices[i]; i++) {
         if (stat(known_devices[i], &st) == 0 && (st.st_mode & S_IFCHR)) {
-            LOG_INFO("Detected virtio device: %s", known_devices[i]);
+            const char *transport = "serial";
+            if (strstr(known_devices[i], "virtio") || strstr(known_devices[i], "org.qemu"))
+                transport = "virtio";
+            LOG_INFO("Detected %s device: %s", transport, known_devices[i]);
             return strdup(known_devices[i]);
         }
     }

@@ -1,6 +1,8 @@
 # macOS QEMU Guest Agent
 
-A native QEMU Guest Agent for macOS, written in C. Enables hypervisors (Proxmox VE, libvirt, plain QEMU) to manage macOS virtual machines through the standard QGA protocol.
+A native QEMU Guest Agent for macOS, written in C. Enables hypervisors to manage macOS virtual machines through the standard QGA protocol.
+
+**Supported platforms:** Proxmox VE, libvirt/virt-manager, plain QEMU, UTM.
 
 Designed for broad macOS compatibility. **Runtime-tested** on El Capitan 10.11.6 (PVE-integrated) and Tahoe 26.3 (native). **Installer-verified** on 10.7 through 11.6. Build targets: x86_64 10.6+, arm64 11.0+. See the [compatibility matrix](docs/COMPATIBILITY.md) for evidence levels per version.
 
@@ -41,6 +43,34 @@ If your VM runs **macOS 11.0 (Big Sur) or later**, the default `agent: 1` (virti
 | default (type=virtio) | AppleVirtIO (built-in) | Big Sur 11.0+ only |
 
 Either way, just install the agent binary. PVE creates one device type or the other, never both.
+
+### Other Platforms
+
+**Plain QEMU:**
+```bash
+# ISA serial (all macOS versions)
+qemu-system-x86_64 ... -device isa-serial,chardev=agent -chardev socket,id=agent,path=/tmp/qga.sock,server=on,wait=off
+
+# VirtIO serial (Big Sur+ only)
+qemu-system-x86_64 ... -device virtio-serial -device virtserialport,chardev=agent,name=org.qemu.guest_agent.0 -chardev socket,id=agent,path=/tmp/qga.sock,server=on,wait=off
+```
+
+**libvirt/virt-manager:** Add to domain XML:
+```xml
+<channel type='unix'>
+  <source mode='bind' path='/var/lib/libvirt/qemu/guest-agent.sock'/>
+  <target type='virtio' name='org.qemu.guest_agent.0'/>
+</channel>
+```
+For pre-Big Sur, use ISA serial instead:
+```xml
+<serial type='unix'>
+  <source mode='bind' path='/var/lib/libvirt/qemu/guest-agent.sock'/>
+  <target port='0'/>
+</serial>
+```
+
+**UTM:** The agent auto-detects UTM's VirtIO serial device (`/dev/cu.virtio`). Add a serial device in UTM's VM settings and the agent will find it.
 
 ### 2. Install the Agent in the macOS VM
 

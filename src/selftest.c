@@ -92,7 +92,10 @@ static void check_serial_device(void)
         "/dev/cu.serial1", "/dev/cu.serial2", "/dev/cu.serial", NULL
     };
     const char *virtio_devices[] = {
-        "/dev/cu.org.qemu.guest_agent.0", "/dev/tty.org.qemu.guest_agent.0", NULL
+        "/dev/cu.org.qemu.guest_agent.0", "/dev/tty.org.qemu.guest_agent.0",
+        "/dev/cu.virtio-console.0", "/dev/cu.virtio-serial",
+        "/dev/cu.virtio", "/dev/tty.virtio",  /* UTM */
+        NULL
     };
 
     int found_isa = 0, found_virtio = 0;
