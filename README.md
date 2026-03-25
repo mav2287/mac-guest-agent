@@ -1,8 +1,8 @@
 # macOS QEMU Guest Agent
 
-A native QEMU Guest Agent for macOS virtual machines. Enables Proxmox VE, libvirt, plain QEMU, and UTM to manage macOS guests through the standard QGA protocol.
+A native QEMU Guest Agent for macOS and OS X virtual machines. The missing guest agent for Mac — enables Proxmox VE, libvirt, plain QEMU, and UTM to manage macOS guests through the standard QGA protocol.
 
-45 commands, real filesystem freeze, zero dependencies. Supports Mac OS X 10.4 Tiger through macOS Tahoe.
+45 commands, real filesystem freeze, zero dependencies. Supports Mac OS X 10.4 Tiger through macOS 26 Tahoe. Works as both a macOS guest agent and an OS X guest agent for legacy VMs.
 
 ## Quick Start (Proxmox VE)
 
