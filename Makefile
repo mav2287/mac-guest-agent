@@ -43,12 +43,15 @@ build: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME) $(SRCS) $(LDFLAGS)
 	@echo "Build complete: $(BUILD_DIR)/$(PROGRAM_NAME)"
 
-# i386 targeting 10.4+ (suppress sprintf deprecation in third-party cJSON)
+# i386 targeting 10.4+ (requires MacOSX10.13.sdk or earlier for i386 libs)
+# Download SDK: curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz && tar xf /tmp/sdk.tar.xz -C /tmp
+I386_SDK ?= /tmp/MacOSX10.13.sdk
 build-i386: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (i386, 10.4+)..."
+	@if [ ! -d "$(I386_SDK)" ]; then echo "Error: i386 SDK not found at $(I386_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
 	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" \
-		-Wno-deprecated-declarations $(INCLUDES) -arch i386 \
+		-Wno-deprecated-declarations $(INCLUDES) -arch i386 -isysroot $(I386_SDK) \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 

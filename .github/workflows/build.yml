@@ -39,8 +39,18 @@ jobs:
       - name: Build all architectures
         run: make build-all
 
+      - name: Download legacy SDK and build i386
+        run: |
+          curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          tar xf /tmp/sdk.tar.xz -C /tmp
+          make build-i386 I386_SDK=/tmp/MacOSX10.13.sdk
+
       - name: Check binaries
         run: |
+          echo "=== i386 ==="
+          file build/mac-guest-agent-i386
+          echo "Size: $(du -h build/mac-guest-agent-i386 | cut -f1)"
+          echo ""
           echo "=== x86_64 ==="
           file build/mac-guest-agent-x86_64
           otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
@@ -70,6 +80,7 @@ jobs:
         with:
           name: mac-guest-agent-binaries
           path: |
+            build/mac-guest-agent-i386
             build/mac-guest-agent-x86_64
             build/mac-guest-agent-arm64
             build/mac-guest-agent-universal
