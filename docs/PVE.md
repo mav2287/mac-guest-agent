@@ -275,6 +275,8 @@ The agent reports real memory usage via `guest-get-memory-blocks`, using macOS M
 
 No balloon driver needed. The agent handles it.
 
+**Important:** This is accurate *reporting*, not memory reclamation. There is no balloon driver for macOS — the full allocated RAM remains reserved by the VM on the host regardless of what the guest is actually using. PVE now shows you how much the guest is using, but it cannot reclaim unused guest memory for other VMs. If you need to free host RAM, reduce the VM's memory allocation in PVE.
+
 **Note:** A VM reboot is required after installing the agent for PVE to start showing accurate memory numbers. If you still see 100% after install, reboot the VM.
 
 ## PVE Command Limitations
