@@ -132,6 +132,12 @@ int channel_open(channel_t *ch)
             tio.c_cflag = CS8 | CREAD | CLOCAL;   /* 8-bit, rx on, ignore modem */
             tio.c_cc[VMIN] = 1;
             tio.c_cc[VTIME] = 0;
+            /* Set max baud rate. QEMU ignores baud rate on virtual serial ports
+             * (data flows at memory speed), but the macOS Apple16X50Serial.kext
+             * may use it to pace internal buffering. 115200 is the standard
+             * max for 16550 UARTs and is widely supported across all macOS versions. */
+            cfsetispeed(&tio, B115200);
+            cfsetospeed(&tio, B115200);
             tcsetattr(ch->fd, TCSANOW, &tio);
             tcflush(ch->fd, TCIOFLUSH);
             LOG_INFO("Serial port: full raw mode (single fd=%d)", ch->fd);
