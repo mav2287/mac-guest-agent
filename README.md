@@ -6,9 +6,16 @@ A native QEMU Guest Agent for macOS and OS X virtual machines. The missing guest
 
 ## Quick Start (Proxmox VE)
 
-**1. On the PVE host:**
+**1. On the PVE host — enable the guest agent:**
 ```bash
+# Big Sur 11.0+ (VirtIO serial — native driver, recommended)
+qm set <vmid> --agent enabled=1
+
+# Pre-Big Sur, or if the above doesn't work (ISA serial — universal fallback)
 qm set <vmid> --agent enabled=1,type=isa
+```
+Then stop and start the VM (not just reboot — QEMU args change requires a full restart):
+```bash
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
 

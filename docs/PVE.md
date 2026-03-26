@@ -299,6 +299,28 @@ All 45 commands work regardless of PVE's allowlist — PVE just can't invoke the
 
 ## Troubleshooting
 
+### Adding the agent to an existing macOS VM
+
+If you followed a guide like [klabsdev](https://klabsdev.com/definitive-guide-to-running-macos-in-proxmox/) or similar to set up your macOS VM and now want to add the guest agent, you don't need to rebuild anything:
+
+**1. Add the agent to your PVE config:**
+```bash
+# Big Sur 11.0+ (if your VM already uses VirtIO for disk/network)
+qm set <vmid> --agent enabled=1
+
+# Pre-Big Sur, or if VirtIO serial doesn't work
+qm set <vmid> --agent enabled=1,type=isa
+```
+
+**2. Stop and start the VM** (reboot is not enough — QEMU needs to create the serial device):
+```bash
+qm stop <vmid> && sleep 5 && qm start <vmid>
+```
+
+**3. Install the binary inside the VM** (see [Agent Installation](#agent-installation) above).
+
+The network adapter type (vmxnet3, e1000, virtio) does not affect the guest agent — the agent uses a serial channel, which is a separate device from the network adapter.
+
 ### Agent not responding to `qm agent ping`
 
 1. **Check agent is running in the VM:**

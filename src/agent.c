@@ -42,12 +42,14 @@ static void process_message(agent_t *ag, const char *msg)
 {
     cJSON *request = protocol_parse_request(msg);
     if (!request) {
-        /* Silently discard malformed messages — do NOT send error responses.
-         * The sync-delimited protocol handles garbage via the \xff delimiter.
-         * Sending error responses for parse failures adds stale data to the
-         * serial pipe that corrupts future sync attempts. This matches
-         * Linux qemu-ga behavior: discard garbage, don't respond. */
-        LOG_DEBUG("Discarding malformed message: %.40s%s", msg, strlen(msg) > 40 ? "..." : "");
+        /* Per QMP spec: return an error for malformed JSON.
+         * The client handles stale data via guest-sync / 0xFF delimiter. */
+        LOG_DEBUG("Parse error: %.40s%s", msg, strlen(msg) > 40 ? "..." : "");
+        char *resp = protocol_build_error("GenericError", "JSON parse error", NULL);
+        if (resp) {
+            channel_send_response(ag->channel, resp);
+            free(resp);
+        }
         return;
     }
 
@@ -56,7 +58,13 @@ static void process_message(agent_t *ag, const char *msg)
     const cJSON *id = protocol_get_id(request);
 
     if (!cmd_name) {
-        LOG_DEBUG("Discarding message with no execute field");
+        /* Valid JSON but no "execute" field */
+        char *resp = protocol_build_error("GenericError",
+            "Missing 'execute' field", protocol_get_id(request));
+        if (resp) {
+            channel_send_response(ag->channel, resp);
+            free(resp);
+        }
         cJSON_Delete(request);
         return;
     }

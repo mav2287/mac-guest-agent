@@ -39,7 +39,7 @@ These terms are used consistently throughout all project documentation:
 | 12.6 Monterey | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
 | 13.0 Ventura | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
 | 14.0 Sonoma | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
-| 15.7 Sequoia | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
+| **15.7 Sequoia** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **Yes (PVE)** | **ISA serial** | Untested | **External user confirmed on 15.7.5: self-test pass, PVE integration, VirtIO disk + ISA serial (pgcudahy, PR #1)** |
 | **26.3 Tahoe** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **No (test mode only)** | **Kext v3.2** | **Yes (APFS, dry-run)** | **48 unit + 31 proactive + 62 integration tests** |
 
 ## Sub-Evidence Matrix
