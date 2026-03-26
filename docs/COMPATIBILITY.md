@@ -134,6 +134,41 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 | 11.0 Big Sur | High | VirtIO + modern stack — validates both transports |
 | 15.x Sequoia | High | Current stable release — validates nothing has regressed |
 
+## PowerPC and Pre-10.4 Versions (Not Currently Supported)
+
+QEMU can emulate PowerPC Macs via its `mac99` (G4) and `g3beige` (G3) machine types. The following Apple operating systems can boot on QEMU PPC but are **not currently supported** by the guest agent:
+
+| OS | QEMU PPC | Why Not Supported |
+|---|---|---|
+| Mac OS 9.0–9.2 | Boots and runs | Classic Mac OS, no POSIX/Unix layer, completely different OS |
+| Mac OS X 10.0 Cheetah | Boots and runs | No Apple16X50Serial.kext (kext first appears in 10.4) |
+| Mac OS X 10.1 Puma | Boots and runs | No Apple16X50Serial.kext |
+| Mac OS X 10.2 Jaguar | Boots and runs | No Apple16X50Serial.kext |
+| Mac OS X 10.3 Panther | Boots and runs | No Apple16X50Serial.kext (unverified — may exist) |
+| Mac OS X 10.4 Tiger (PPC) | Boots and runs | Kext exists (v1.6) but PPC binary required |
+| Mac OS X 10.5 Leopard (PPC) | Boots and runs | Kext exists (v1.9) but PPC binary required |
+
+### What Would Be Needed for PPC Support
+
+1. **PPC cross-compiler.** Apple removed PPC support from Xcode after version 3.x. Building a PPC Mach-O binary requires either an old Xcode installation or a cross-compilation toolchain like `powerpc-apple-darwin-gcc`.
+
+2. **Serial transport investigation.** QEMU's PPC mac99 machine emulates a Zilog 85C30 ESCC (Enhanced Serial Communications Controller), not the 16550 UART that `Apple16X50Serial.kext` matches. The agent would need to connect via ESCC serial paths (likely `/dev/cu.modem` or `/dev/tty.serial`) or USB serial (`-device usb-serial`). This needs testing on an actual PPC VM.
+
+3. **API compatibility audit.** Mac OS X 10.0–10.3 may be missing POSIX/Mach APIs the agent depends on (`getifaddrs`, `getutxent`, `host_statistics64`, etc.). The 20 critical symbol checks from our installer verification would need to pass.
+
+4. **Testing infrastructure.** PPC VMs for each target version, ability to SCP binaries in and run tests.
+
+### How to Contribute PPC Support
+
+If you are actively running PPC Mac OS X VMs and want to help:
+
+1. Open an issue at [github.com/mav2287/mac-guest-agent/issues](https://github.com/mav2287/mac-guest-agent/issues)
+2. Tell us what OS version, QEMU machine type, and host platform you're using
+3. Check what serial devices exist in your PPC VM (`ls /dev/cu.*  /dev/tty.*`)
+4. Check if Apple16X50Serial.kext is present (`ls /System/Library/Extensions/Apple16X50Serial.kext`)
+
+We're open to PPC support but need contributors with real PPC VM environments to help test.
+
 ## Verification Workflow
 
 Installer verification is the primary path for expanding this matrix. It proves the OS environment has everything the agent needs without requiring a running VM.
