@@ -51,9 +51,14 @@ static int file_writable(const char *path)
 
 static int tool_available(const char *name)
 {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "which %s >/dev/null 2>&1", name);
-    return system(cmd) == 0;
+    /* Check common macOS tool paths directly instead of using system() */
+    const char *dirs[] = {"/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", NULL};
+    char path[256];
+    for (int i = 0; dirs[i]; i++) {
+        snprintf(path, sizeof(path), "%s%s", dirs[i], name);
+        if (access(path, X_OK) == 0) return 1;
+    }
+    return 0;
 }
 
 static void check_version(void)
@@ -381,11 +386,20 @@ static const char *level_str(st_level_t l)
 static void json_escape(const char *s, char *out, size_t out_sz)
 {
     size_t j = 0;
-    for (size_t i = 0; s[i] && j < out_sz - 2; i++) {
+    for (size_t i = 0; s[i] && j < out_sz - 6; i++) {
         if (s[i] == '"' || s[i] == '\\') {
-            out[j++] = '\\';
+            out[j++] = '\\'; out[j++] = s[i];
+        } else if (s[i] == '\n') {
+            out[j++] = '\\'; out[j++] = 'n';
+        } else if (s[i] == '\r') {
+            out[j++] = '\\'; out[j++] = 'r';
+        } else if (s[i] == '\t') {
+            out[j++] = '\\'; out[j++] = 't';
+        } else if ((unsigned char)s[i] < 0x20) {
+            /* Skip other control characters */
+        } else {
+            out[j++] = s[i];
         }
-        out[j++] = s[i];
     }
     out[j] = '\0';
 }

@@ -93,8 +93,8 @@ channel_t *channel_create(const char *device_path)
 channel_t *channel_create_test(void)
 {
     channel_t *ch = calloc(1, sizeof(*ch));
-    if (ch) ch->poll_timeout_ms = POLL_TIMEOUT_MS;
     if (!ch) return NULL;
+    ch->poll_timeout_ms = POLL_TIMEOUT_MS;
     ch->fd = -1;
     ch->is_test = 1;
     return ch;

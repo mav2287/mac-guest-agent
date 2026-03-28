@@ -49,6 +49,10 @@ int run_command_capture(const char *cmd, char **output)
         free(buf);
     }
 
+    /* pclose returns -1 with ECHILD if the child was already reaped.
+     * If we captured output successfully, treat this as success. */
+    if (status == -1 && len > 0)
+        return 0;
     if (WIFEXITED(status))
         return WEXITSTATUS(status);
     return -1;
@@ -149,6 +153,7 @@ static const unsigned char b64_dec_table[256] = {
 
 char *base64_encode(const unsigned char *data, size_t len)
 {
+    if (len > (SIZE_MAX / 4) * 3) return NULL;  /* overflow guard */
     size_t out_len = 4 * ((len + 2) / 3);
     char *out = malloc(out_len + 1);
     if (!out) return NULL;

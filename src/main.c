@@ -56,12 +56,12 @@ typedef struct {
 } config_t;
 
 static agent_t *g_agent = NULL;
+static volatile sig_atomic_t g_stop_requested = 0;
 
 static void signal_handler(int sig)
 {
     (void)sig;
-    if (g_agent)
-        agent_stop(g_agent);
+    g_stop_requested = 1;
 }
 
 static int is_running_in_qemu(void)
@@ -169,7 +169,7 @@ static void print_usage(const char *prog)
     printf("macOS QEMU Guest Agent v%s\n\n", AGENT_VERSION);
     printf("Usage: %s [options]\n\n", prog);
     printf("Options (compatible with Linux qemu-ga):\n");
-    printf("  -d, --daemonize        Run as daemon\n");
+    printf("  -d, --daemonize        Daemonize (log to file; launchd handles backgrounding)\n");
     printf("  -m, --method METHOD    Transport method [default: virtio-serial]\n");
     printf("  -p, --path PATH        Device/socket path [default: auto-detect]\n");
     printf("  -l, --logfile PATH     Log file path [default: stderr]\n");
@@ -329,7 +329,7 @@ int main(int argc, char *argv[])
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
 
-    int rc = agent_run(g_agent);
+    int rc = agent_run(g_agent, &g_stop_requested);
 
     agent_destroy(g_agent);
     g_agent = NULL;

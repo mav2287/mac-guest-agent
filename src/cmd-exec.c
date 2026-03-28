@@ -12,6 +12,7 @@
 #include <time.h>
 
 #define MAX_PROCESSES 64
+#define MAX_CAPTURE_SIZE (16 * 1024 * 1024)  /* 16MB, matches Linux qemu-ga */
 
 typedef struct {
     int     in_use;
@@ -145,13 +146,19 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
             }
         }
 
-        /* Set environment if provided */
+        /* Set environment if provided (use setenv which copies the string) */
         cJSON *env_arr = cJSON_GetObjectItemCaseSensitive(args, "env");
         if (cJSON_IsArray(env_arr)) {
             cJSON *env_item;
             cJSON_ArrayForEach(env_item, env_arr) {
-                if (cJSON_IsString(env_item))
-                    putenv(env_item->valuestring);
+                if (cJSON_IsString(env_item) && env_item->valuestring) {
+                    char *eq = strchr(env_item->valuestring, '=');
+                    if (eq) {
+                        *eq = '\0';
+                        setenv(env_item->valuestring, eq + 1, 1);
+                        *eq = '=';
+                    }
+                }
             }
         }
 
@@ -182,10 +189,12 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
             size_t cap = 4096, len = 0;
             char *buf = malloc(cap);
             ssize_t n;
-            while (buf && (n = read(out_pipe[0], buf + len, cap - len - 1)) > 0) {
+            while (buf && len < MAX_CAPTURE_SIZE &&
+                   (n = read(out_pipe[0], buf + len, cap - len - 1)) > 0) {
                 len += (size_t)n;
-                if (len + 1 >= cap) {
+                if (len + 1 >= cap && cap < MAX_CAPTURE_SIZE) {
                     cap *= 2;
+                    if (cap > MAX_CAPTURE_SIZE) cap = MAX_CAPTURE_SIZE;
                     char *tmp = realloc(buf, cap);
                     if (!tmp) { free(buf); buf = NULL; break; }
                     buf = tmp;
@@ -202,10 +211,12 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
             size_t cap = 4096, len = 0;
             char *buf = malloc(cap);
             ssize_t n;
-            while (buf && (n = read(err_pipe[0], buf + len, cap - len - 1)) > 0) {
+            while (buf && len < MAX_CAPTURE_SIZE &&
+                   (n = read(err_pipe[0], buf + len, cap - len - 1)) > 0) {
                 len += (size_t)n;
-                if (len + 1 >= cap) {
+                if (len + 1 >= cap && cap < MAX_CAPTURE_SIZE) {
                     cap *= 2;
+                    if (cap > MAX_CAPTURE_SIZE) cap = MAX_CAPTURE_SIZE;
                     char *tmp = realloc(buf, cap);
                     if (!tmp) { free(buf); buf = NULL; break; }
                     buf = tmp;

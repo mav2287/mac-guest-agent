@@ -161,13 +161,14 @@ static int run_hooks(const char *action)
         }
 
         free(scripts[i]);
+        scripts[i] = NULL;
         if (failed && strcmp(action, "freeze") == 0)
             break;  /* Abort remaining freeze hooks */
     }
 
     /* Free remaining scripts if we broke early */
     for (int i = 0; i < count; i++) {
-        /* scripts[i] may already be freed above; set to NULL after free */
+        free(scripts[i]);  /* free(NULL) is a no-op for already-freed entries */
     }
 
     return failed ? -1 : 0;
@@ -216,6 +217,8 @@ static int sync_all_volumes(int do_fullfsync)
 
 /* ---- APFS Snapshot ---- */
 
+static void delete_apfs_snapshot(void);
+
 static int create_apfs_snapshot(void)
 {
     if (!compat_has_tmutil()) return 0;
@@ -226,8 +229,11 @@ static int create_apfs_snapshot(void)
         return 1;
     }
 
-    /* Clean up orphaned snapshots from previous failed runs */
-    run_command("tmutil deletelocalsnapshots / 2>/dev/null");
+    /* If there's an orphaned snapshot from a previous failed run, clean it up.
+     * Only delete the specific snapshot we tracked, not all Time Machine snapshots. */
+    if (snapshot_date[0]) {
+        delete_apfs_snapshot();
+    }
 
     char *output = NULL;
     if (run_command_capture("tmutil localsnapshot / 2>&1", &output) != 0) {
@@ -265,9 +271,8 @@ static void delete_apfs_snapshot(void)
         return;
     }
 
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "tmutil deletelocalsnapshots %s 2>/dev/null", snapshot_date);
-    run_command(cmd);
+    char *const argv[] = {"tmutil", "deletelocalsnapshots", snapshot_date, NULL};
+    run_command_v("/usr/bin/tmutil", argv, NULL, NULL);
     LOG_INFO("Deleted APFS snapshot: %s", snapshot_date);
     snapshot_date[0] = '\0';
 }

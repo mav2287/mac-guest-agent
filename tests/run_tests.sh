@@ -355,7 +355,7 @@ test_cmd "guest-get-fsinfo" \
 
 test_cmd "guest-get-diskstats" \
     '{"execute":"guest-get-diskstats"}' \
-    "object"
+    "array"
 
 # =========================================================
 echo ""

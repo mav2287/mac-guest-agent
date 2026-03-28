@@ -122,7 +122,10 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         content_len = strlen(existing);
         if (content_len + 1 >= cap) {
             cap = content_len + 4096;
-            content = realloc(content, cap);
+            char *tmp = realloc(content, cap);
+            if (!tmp) { free(content); free(existing); free(path);
+                *err_class = "GenericError"; *err_desc = "Out of memory"; return NULL; }
+            content = tmp;
         }
         memcpy(content, existing, content_len);
         content[content_len] = '\0';
@@ -140,7 +143,10 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         size_t klen = strlen(key_item->valuestring);
         if (content_len + klen + 2 >= cap) {
             cap = content_len + klen + 4096;
-            content = realloc(content, cap);
+            char *tmp = realloc(content, cap);
+            if (!tmp) { free(content); free(existing); free(path);
+                *err_class = "GenericError"; *err_desc = "Out of memory"; return NULL; }
+            content = tmp;
         }
         if (content_len > 0 && content[content_len - 1] != '\n')
             content[content_len++] = '\n';
@@ -242,7 +248,12 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
 
     struct passwd *pw = getpwnam(user_item->valuestring);
     if (write_file(path, result_buf, result_len, 0600) != 0) {
-        LOG_WARN("Failed to write authorized_keys during remove");
+        LOG_ERROR("Failed to write authorized_keys during remove");
+        free(result_buf);
+        free(path);
+        *err_class = "GenericError";
+        *err_desc = "Failed to write authorized_keys file";
+        return NULL;
     }
     if (pw && chown(path, pw->pw_uid, pw->pw_gid) < 0) {
         LOG_WARN("Failed to chown authorized_keys: %s", strerror(errno));

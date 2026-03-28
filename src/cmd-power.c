@@ -24,7 +24,9 @@ static cJSON *handle_shutdown(cJSON *args, const char **err_class, const char **
     pid_t pid = fork();
     if (pid < 0) {
         LOG_ERROR("fork() failed for shutdown: %s", strerror(errno));
-        /* Still return success — the command was received, execution just failed */
+        *err_class = "GenericError";
+        *err_desc = "Failed to fork for shutdown";
+        return NULL;
     } else if (pid == 0) {
         /* Child: brief delay to let response go out, then execute */
         usleep(200000);
@@ -55,18 +57,39 @@ static cJSON *handle_shutdown(cJSON *args, const char **err_class, const char **
 
 static cJSON *do_suspend(const char *hibernate_mode, const char **err_class, const char **err_desc)
 {
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "pmset -a hibernatemode %s", hibernate_mode);
-    if (run_command(cmd) != 0) {
+    /* Save current hibernatemode so we can restore it after wake */
+    char *saved_mode = NULL;
+    run_command_capture("pmset -g | grep hibernatemode | awk '{print $2}'", &saved_mode);
+    if (saved_mode) {
+        char *nl = strchr(saved_mode, '\n');
+        if (nl) *nl = '\0';
+    }
+
+    char *const set_argv[] = {"pmset", "-a", "hibernatemode", (char *)hibernate_mode, NULL};
+    if (run_command_v("/usr/bin/pmset", set_argv, NULL, NULL) != 0) {
+        free(saved_mode);
         *err_class = "GenericError";
         *err_desc = "Failed to set hibernate mode";
         return NULL;
     }
     if (run_command("pmset sleepnow") != 0) {
+        /* Restore before returning error */
+        if (saved_mode && saved_mode[0]) {
+            char *const restore_argv[] = {"pmset", "-a", "hibernatemode", saved_mode, NULL};
+            run_command_v("/usr/bin/pmset", restore_argv, NULL, NULL);
+        }
+        free(saved_mode);
         *err_class = "GenericError";
         *err_desc = "Failed to initiate sleep";
         return NULL;
     }
+
+    /* Restore original hibernatemode after sleep returns (VM wakes) */
+    if (saved_mode && saved_mode[0]) {
+        char *const restore_argv[] = {"pmset", "-a", "hibernatemode", saved_mode, NULL};
+        run_command_v("/usr/bin/pmset", restore_argv, NULL, NULL);
+    }
+    free(saved_mode);
     return cJSON_CreateObject();
 }
 

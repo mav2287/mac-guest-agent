@@ -193,11 +193,63 @@ static cJSON *handle_get_diskstats(cJSON *args, const char **err_class, const ch
         return NULL;
     }
 
-    cJSON *result = cJSON_CreateObject();
-    cJSON_AddStringToObject(result, "source", "iostat");
-    /* Return raw iostat output as a string for now - proper parsing
-       would require IOKit which is architecture-specific */
-    cJSON_AddStringToObject(result, "raw", out);
+    /* Parse iostat -d output into per-disk stats.
+     * Format: line 1 = disk names, line 2 = headers, line 3 = values.
+     * Values are grouped 3 per disk: KB/t, tps, MB/s. */
+
+    /* Make a copy since we'll parse with strtok */
+    char *copy = safe_strdup(out);
+    if (!copy) { free(out); *err_class = "GenericError"; *err_desc = "Out of memory"; return NULL; }
+
+    /* Extract disk names from line 1 */
+    char disk_names[16][32];
+    int disk_count = 0;
+    char *line_end = strchr(copy, '\n');
+    if (line_end) {
+        *line_end = '\0';
+        char *save2 = NULL;
+        char *tok = strtok_r(copy, " \t", &save2);
+        while (tok && disk_count < 16) {
+            strncpy(disk_names[disk_count], tok, 31);
+            disk_names[disk_count][31] = '\0';
+            disk_count++;
+            tok = strtok_r(NULL, " \t", &save2);
+        }
+    }
+
+    /* Find data line (3rd line in original output) */
+    char *p = out;
+    int newlines = 0;
+    while (*p && newlines < 2) { if (*p == '\n') newlines++; p++; }
+
+    cJSON *result = cJSON_CreateArray();
+    if (*p) {
+        double vals[48];
+        int nvals = 0;
+        char *save2 = NULL;
+        char *data_copy = safe_strdup(p);
+        if (data_copy) {
+            char *nl = strchr(data_copy, '\n');
+            if (nl) *nl = '\0';
+            char *tok = strtok_r(data_copy, " \t", &save2);
+            while (tok && nvals < 48) {
+                vals[nvals++] = strtod(tok, NULL);
+                tok = strtok_r(NULL, " \t", &save2);
+            }
+            free(data_copy);
+
+            for (int i = 0; i < disk_count && i * 3 + 2 < nvals; i++) {
+                cJSON *disk = cJSON_CreateObject();
+                cJSON_AddStringToObject(disk, "name", disk_names[i]);
+                cJSON_AddNumberToObject(disk, "kb-per-transfer", vals[i * 3]);
+                cJSON_AddNumberToObject(disk, "transfers-per-second", vals[i * 3 + 1]);
+                cJSON_AddNumberToObject(disk, "mb-per-second", vals[i * 3 + 2]);
+                cJSON_AddItemToArray(result, disk);
+            }
+        }
+    }
+
+    free(copy);
     free(out);
     return result;
 }

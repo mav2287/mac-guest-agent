@@ -9,6 +9,13 @@
 #include <sys/wait.h>
 #include <errno.h>
 
+/* Secure zero that compiler cannot optimize away */
+static void secure_zero(void *ptr, size_t len)
+{
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len--) *p++ = 0;
+}
+
 /*
  * Set user password securely: pipe the password via stdin to avoid
  * exposing it on the command line (visible in ps aux).
@@ -123,7 +130,7 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
         if (!(*p >= 'a' && *p <= 'z') && !(*p >= 'A' && *p <= 'Z') &&
             !(*p >= '0' && *p <= '9') && *p != '_' && *p != '-' && *p != '.') {
             if (decoded_pass) {
-                memset(decoded_pass, 0, strlen(decoded_pass));
+                secure_zero(decoded_pass, strlen(decoded_pass));
                 free(decoded_pass);
             }
             *err_class = "InvalidParameter";
@@ -134,11 +141,14 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
 
     int rc = set_password_secure(username, password);
 
-    /* Zero out password in memory */
+    /* Zero out password in memory — both decoded and original cJSON string */
     if (decoded_pass) {
-        memset(decoded_pass, 0, strlen(decoded_pass));
+        secure_zero(decoded_pass, strlen(decoded_pass));
         free(decoded_pass);
     }
+    /* Also zero the cJSON-owned password string (covers crypted=true path) */
+    if (pass_item && pass_item->valuestring)
+        secure_zero(pass_item->valuestring, strlen(pass_item->valuestring));
 
     if (rc != 0) {
         *err_class = "GenericError";

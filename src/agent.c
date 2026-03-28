@@ -13,7 +13,7 @@
 
 struct agent {
     channel_t *channel;
-    int        running;
+    volatile int running;
     int        frozen;
     int        test_mode;
 };
@@ -105,7 +105,7 @@ static void process_message(agent_t *ag, const char *msg)
     cJSON_Delete(request);
 }
 
-int agent_run(agent_t *ag)
+int agent_run(agent_t *ag, volatile sig_atomic_t *stop_flag)
 {
     if (!ag) return -1;
 
@@ -117,7 +117,7 @@ int agent_run(agent_t *ag)
     ag->running = 1;
     LOG_INFO("Agent started, listening for commands...");
 
-    while (ag->running) {
+    while (ag->running && !(stop_flag && *stop_flag)) {
         /* During freeze: shorten poll timeout and run continuous sync */
         if (fsfreeze_is_frozen()) {
             channel_set_poll_timeout(ag->channel, FREEZE_POLL_TIMEOUT_MS);
@@ -176,12 +176,6 @@ void agent_destroy(agent_t *ag)
     free(ag);
 }
 
-int agent_is_frozen(agent_t *ag)
-{
-    return ag ? ag->frozen : 0;
-}
-
-void agent_set_frozen(agent_t *ag, int frozen)
-{
-    if (ag) ag->frozen = frozen;
-}
+/* agent_is_frozen / agent_set_frozen removed — freeze state is managed
+ * entirely by cmd-fs.c via static variables. The 'frozen' field in
+ * struct agent is unused. */

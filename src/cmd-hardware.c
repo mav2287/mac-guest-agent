@@ -326,9 +326,9 @@ static cJSON *handle_get_cpustats(cJSON *args, const char **err_class, const cha
 void cmd_hardware_init(void)
 {
     command_register("guest-get-vcpus", handle_get_vcpus, 1);
-    command_register("guest-set-vcpus", handle_set_vcpus, 1);
+    command_register("guest-set-vcpus", handle_set_vcpus, 0);  /* unsupported on macOS */
     command_register("guest-get-memory-blocks", handle_get_memory_blocks, 1);
     command_register("guest-get-memory-block-info", handle_get_memory_block_info, 1);
-    command_register("guest-set-memory-blocks", handle_set_memory_blocks, 1);
+    command_register("guest-set-memory-blocks", handle_set_memory_blocks, 0);  /* unsupported on macOS */
     command_register("guest-get-cpustats", handle_get_cpustats, 1);
 }

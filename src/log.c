@@ -137,7 +137,6 @@ void log_msg(log_level_t level, const char *fmt, ...)
     fprintf(out, "%s [%s] %s\n", time_str, level_names[level], message);
     fflush(out);
 
-    if (level == LOG_FATAL) {
-        exit(1);
-    }
+    /* LOG_FATAL: caller is responsible for cleanup and exit.
+     * Do not call exit() here — it skips cleanup (pidfile, freeze state, etc). */
 }
