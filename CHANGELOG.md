@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.3.1 (2026-03-28)
+
+### Bug Fixes
+- **Fixed:** Malformed JSON input now returns a proper error response per QMP spec instead of being silently discarded. Found by pgcudahy (PR #1).
+- **Fixed:** Device detection error message now says "No serial device found" with setup instructions instead of the misleading "No virtio device found."
+
+### Critical Documentation Fix
+- **`type=isa` is required on ALL macOS versions.** macOS Big Sur+ ships Apple's own built-in VirtIO guest agent (~18 commands) which claims the default VirtIO serial channel. Using `agent: enabled=1` (default) connects to Apple's agent, not ours — losing freeze, memory reporting, and 27 other commands. ISA serial is the only channel Apple's agent doesn't claim.
+- Full comparison of Apple's agent (18 commands) vs ours (45 commands) added to docs/PLATFORMS.md.
+
+### Changes
+- ISA serial now checked first in device detection order (was last)
+- Run_tests.sh: malformed JSON and missing execute tests un-skipped (65 tests, up from 63)
+- PVE.md: "existing VM" troubleshooting for users adding agent to klabsdev-style setups
+- LIBVIRT.md: VirtIO channel examples replaced with ISA serial (required)
+- COMPATIBILITY.md: Sequoia 15.7.5 promoted to Tier 1 (first external user confirmation)
+- COMPATIBILITY.md: PPC status and path to support documented
+
 ## v2.3.0 (2026-03-25)
 
 ### New Command

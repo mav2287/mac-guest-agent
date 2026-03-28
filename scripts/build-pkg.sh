@@ -11,7 +11,7 @@
 
 set -e
 
-VERSION="2.3.0"
+VERSION="2.3.1"
 ARCH="${1:-$(uname -m | sed 's/x86_64/amd64/;s/arm64/arm64/')}"
 PKG_ID="com.github.mac-guest-agent"
 PKG_NAME="mac-guest-agent-${VERSION}-${ARCH}.pkg"
