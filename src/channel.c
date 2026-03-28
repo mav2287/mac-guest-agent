@@ -115,7 +115,7 @@ int channel_open(channel_t *ch)
     if (!ch->device_path) {
         ch->device_path = detect_device();
         if (!ch->device_path) {
-            LOG_ERROR("No virtio device found");
+            LOG_ERROR("No serial device found. Ensure PVE has 'agent: enabled=1,type=isa' and VM was fully stopped and restarted.");
             return -1;
         }
     }
