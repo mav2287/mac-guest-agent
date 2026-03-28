@@ -4,19 +4,33 @@ Complete guide for running macOS VMs with guest agent support on libvirt and vir
 
 ## Domain XML Configuration
 
-### VirtIO Channel (Big Sur 11.0+)
+### ISA Serial (Required for All macOS Versions)
 
-The preferred transport on Big Sur and newer. Uses Apple's native `AppleVirtIO.kext`.
+macOS Big Sur and newer include Apple's own built-in VirtIO guest agent which claims the default VirtIO serial channel. ISA serial is required so our agent gets a dedicated channel.
 
 ```xml
 <devices>
-  <!-- Guest agent channel -->
-  <channel type='unix'>
+  <!-- Guest agent via ISA serial (required — VirtIO channel is claimed by Apple's agent) -->
+  <serial type='unix'>
     <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
-    <target type='virtio' name='org.qemu.guest_agent.0'/>
-  </channel>
+    <target type='isa-serial' port='0'/>
+  </serial>
+</devices>
+```
 
-  <!-- Recommended device settings for Big Sur+ -->
+Inside the VM, the agent finds `/dev/cu.serial1`.
+
+Disk and network devices are separate from the agent transport — use VirtIO for disk/network on Big Sur+, SATA/e1000 on pre-Big Sur. See the examples below.
+
+### Big Sur+ Example (VirtIO disk/network, ISA serial for agent)
+
+```xml
+<devices>
+  <serial type='unix'>
+    <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
+    <target type='isa-serial' port='0'/>
+  </serial>
+
   <disk type='file' device='disk'>
     <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
     <source file='/var/lib/libvirt/images/macos.qcow2'/>
@@ -30,21 +44,15 @@ The preferred transport on Big Sur and newer. Uses Apple's native `AppleVirtIO.k
 </devices>
 ```
 
-Inside the VM, the agent finds `/dev/cu.org.qemu.guest_agent.0`.
-
-### ISA Serial (All macOS 10.4+)
-
-Required for pre-Big Sur. Uses Apple's built-in `Apple16X50Serial.kext`.
+### Pre-Big Sur Example (SATA disk, e1000 network, ISA serial for agent)
 
 ```xml
 <devices>
-  <!-- Guest agent via ISA serial -->
   <serial type='unix'>
     <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
     <target type='isa-serial' port='0'/>
   </serial>
 
-  <!-- SATA disk for pre-Big Sur (no VirtIO block support) -->
   <disk type='file' device='disk'>
     <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
     <source file='/var/lib/libvirt/images/macos.qcow2'/>
@@ -57,17 +65,6 @@ Required for pre-Big Sur. Uses Apple's built-in `Apple16X50Serial.kext`.
   </interface>
 </devices>
 ```
-
-Inside the VM, the agent finds `/dev/cu.serial1`.
-
-### Choosing a Transport
-
-| macOS Version | Transport | XML Element | Device in VM |
-|---|---|---|---|
-| 10.4–10.15 | ISA serial | `<serial type='unix'>` | `/dev/cu.serial1` |
-| 11.0+ | VirtIO channel | `<channel type='virtio'>` | `/dev/cu.org.qemu.guest_agent.0` |
-
-The agent auto-detects the available transport. VirtIO is preferred when both are present.
 
 ## Guest Agent Commands via virsh
 
@@ -219,11 +216,11 @@ A full working domain XML for a macOS Sonoma VM with guest agent:
       <model type='virtio'/>
     </interface>
 
-    <!-- Guest agent channel -->
-    <channel type='unix'>
+    <!-- Guest agent via ISA serial (required — VirtIO claimed by Apple's agent) -->
+    <serial type='unix'>
       <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
-      <target type='virtio' name='org.qemu.guest_agent.0'/>
-    </channel>
+      <target type='isa-serial' port='0'/>
+    </serial>
 
     <!-- Display -->
     <video>
@@ -267,14 +264,9 @@ If using ISA serial and `/dev/cu.serial1` doesn't appear:
 3. Look for `Apple16X50Serial` in `kextstat` output
 4. Restart the VM (not just reboot) after XML changes
 
-### VirtIO channel not found in VM
+### Agent responds with only 18 commands or missing commands
 
-If using VirtIO and `/dev/cu.org.qemu.guest_agent.0` doesn't appear:
-
-1. Verify macOS is 11.0+ (VirtIO requires Big Sur or newer)
-2. Check that `AppleVirtIO.kext` is loaded: `kextstat | grep VirtIO`
-3. Verify the channel name is exactly `org.qemu.guest_agent.0`
-4. Restart the VM after XML changes
+If `guest-info` shows ~18 commands with Apple-proprietary ones like `apple-guest-set-remote-login`, you're talking to Apple's built-in VirtIO agent, not ours. Switch from `<channel type='virtio'>` to `<serial type='isa-serial'>` in your domain XML. See [Why ISA Serial](PLATFORMS.md#why-isa-serial-not-virtio) for details.
 
 ### Quiesced snapshot fails
 

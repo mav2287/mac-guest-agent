@@ -8,16 +8,11 @@ A native QEMU Guest Agent for macOS and OS X virtual machines. The missing guest
 
 **1. On the PVE host — enable the guest agent:**
 ```bash
-# Big Sur 11.0+ (VirtIO serial — native driver, recommended)
-qm set <vmid> --agent enabled=1
-
-# Pre-Big Sur, or if the above doesn't work (ISA serial — universal fallback)
 qm set <vmid> --agent enabled=1,type=isa
-```
-Then stop and start the VM (not just reboot — QEMU args change requires a full restart):
-```bash
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
+
+> **Why `type=isa`?** macOS Big Sur and newer include Apple's own built-in VirtIO guest agent which claims the default VirtIO serial channel. Using `type=isa` ensures our agent gets its own dedicated serial channel via `Apple16X50Serial.kext`. This is required on **all** macOS versions.
 
 **2. In the macOS VM:**
 ```bash
@@ -44,7 +39,7 @@ sudo mac-guest-agent --self-test
 
 The agent communicates via an **ISA serial port** (16550 UART) using Apple's built-in `Apple16X50Serial.kext` driver, present on every macOS since 10.4. No custom kexts, no SIP changes, no code signing.
 
-On Big Sur 11.0+, VirtIO serial also works via Apple's native `AppleVirtIO.kext`. The agent auto-detects the available transport and prefers VirtIO when present.
+> **Note:** macOS Big Sur and newer ship with Apple's own built-in VirtIO guest agent (18 commands, no freeze support). The default VirtIO serial channel is claimed by Apple's agent, which is why `type=isa` is required — it gives our agent a dedicated channel with all 45 commands and full freeze support.
 
 ## Compatibility
 

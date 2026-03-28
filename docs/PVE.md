@@ -11,7 +11,7 @@ Complete guide for running macOS VMs with guest agent support on Proxmox VE.
 | Machine | q35 | Required for OpenCore |
 | BIOS | OVMF (UEFI) | Required for macOS |
 | CPU | host or Nehalem | Nehalem for broadest compatibility |
-| Agent | `enabled=1,type=isa` | ISA serial — works on all macOS versions |
+| Agent | `enabled=1,type=isa` | **Required.** ISA serial — the only channel Apple's built-in VirtIO agent doesn't claim |
 | OS Type | other | Prevents PVE from making Linux assumptions |
 | Balloon | 0 (disabled) | macOS doesn't support memory ballooning |
 
@@ -305,12 +305,10 @@ If you followed a guide like [klabsdev](https://klabsdev.com/definitive-guide-to
 
 **1. Add the agent to your PVE config:**
 ```bash
-# Big Sur 11.0+ (if your VM already uses VirtIO for disk/network)
-qm set <vmid> --agent enabled=1
-
-# Pre-Big Sur, or if VirtIO serial doesn't work
 qm set <vmid> --agent enabled=1,type=isa
 ```
+
+> **Important:** Always use `type=isa`, even on Big Sur+. The default VirtIO serial channel is claimed by Apple's own built-in guest agent (which only supports 18 basic commands). `type=isa` gives our agent a dedicated channel with all 45 commands including freeze.
 
 **2. Stop and start the VM** (reboot is not enough — QEMU needs to create the serial device):
 ```bash
@@ -387,4 +385,4 @@ This PVE UI message appears when the agent hasn't responded to a ping within the
 | 10.7–10.12 | x86_64 | SATA | e1000 | type=isa | sync + F_FULLFSYNC |
 | 10.13–10.14 | x86_64 | SATA | e1000 | type=isa | sync + APFS snapshot |
 | 10.15 | x86_64 | SATA or VirtIO | e1000 or VirtIO | type=isa | sync + APFS snapshot |
-| 11.0+ | x86_64 | VirtIO | VirtIO | type=isa or default | sync + APFS snapshot |
+| 11.0+ | x86_64 | VirtIO | VirtIO | **type=isa** (required) | sync + APFS snapshot |

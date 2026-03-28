@@ -28,9 +28,20 @@ struct channel {
 };
 
 static const char *known_devices[] = {
-    /* VirtIO serial — preferred on Big Sur+ (native AppleVirtIO.kext)
-     * Checked first so VirtIO is used when available.
-     * Covers: PVE (default agent type), plain QEMU, libvirt */
+    /* ISA serial — primary transport. Required on all macOS versions because
+     * Big Sur+ ships Apple's own VirtIO guest agent which claims the default
+     * VirtIO serial channel. ISA serial via Apple16X50Serial.kext is the only
+     * channel Apple's agent doesn't claim.
+     * Covers: PVE (agent type=isa), plain QEMU (-device isa-serial), libvirt */
+    "/dev/cu.serial1",
+    "/dev/tty.serial1",
+    "/dev/cu.serial2",
+    "/dev/tty.serial2",
+    "/dev/cu.serial",
+    "/dev/tty.serial",
+    /* VirtIO serial — only works if Apple's built-in agent is not present
+     * (pre-Big Sur) or if specifically configured to avoid conflict.
+     * Kept for edge cases and UTM compatibility. */
     "/dev/cu.org.qemu.guest_agent.0",
     "/dev/tty.org.qemu.guest_agent.0",
     "/dev/cu.virtio-console.0",
@@ -44,14 +55,6 @@ static const char *known_devices[] = {
     /* UTM (Apple Virtualization.framework) */
     "/dev/cu.virtio",
     "/dev/tty.virtio",
-    /* ISA serial — fallback, works on ALL macOS 10.4+ via Apple16X50Serial.kext
-     * Covers: PVE (agent type=isa), plain QEMU (-serial isa), any 16550 UART */
-    "/dev/cu.serial1",
-    "/dev/tty.serial1",
-    "/dev/cu.serial2",
-    "/dev/tty.serial2",
-    "/dev/cu.serial",
-    "/dev/tty.serial",
     NULL
 };
 
