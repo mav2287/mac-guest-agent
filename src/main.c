@@ -272,10 +272,7 @@ int main(int argc, char *argv[])
 
     if (cfg.dump_conf) { dump_config(&cfg); return 0; }
     if (cfg.do_selftest) return selftest_run(cfg.selftest_json);
-    if (cfg.do_safetest) {
-        commands_init();
-        return safetest_run(cfg.safetest_json);
-    }
+    if (cfg.do_safetest) return safetest_run(cfg.safetest_json);
     if (cfg.update_path) return service_update(cfg.update_path);
     if (cfg.do_install) return service_install();
     if (cfg.do_uninstall) return service_uninstall();

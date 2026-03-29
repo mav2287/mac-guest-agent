@@ -42,6 +42,7 @@ void command_register(const char *name, command_handler_fn handler, int enabled)
 
 void commands_init(void)
 {
+    if (num_commands > 0) return;  /* already initialized */
     cmd_info_init();
     cmd_system_init();
     cmd_power_init();
