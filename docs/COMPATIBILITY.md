@@ -23,7 +23,7 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Kext v1.9 (i386+ppc) confirmed via Intel 10.4.11 combo update. Same PCI class match. i386 binary required.** |
+| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required.** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -85,6 +85,7 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 | macOS | Apple16X50Serial.kext | IOSerialFamily.kext | PCI Class Match |
 |---|---|---|---|
+| 10.4.5 Tiger (Intel DVD) | v1.7 | v9.0.0d30 | 0x07000000&0xFFFF0000 |
 | 10.4.11 Tiger (combo update) | v1.9 | v8.0.0d28 | 0x07000000&0xFFFF0000 |
 | 10.5.4 Leopard | v1.9 | v9.1 | 0x07000000&0xFFFF0000 |
 | 10.6.3 Snow Leopard | v3.0 | v10.0.3 | 0x07000000&0xFFFF0000 |
@@ -100,7 +101,7 @@ Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 | 11.6 Big Sur | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 | 26.3 Tahoe | v3.2 | v11 | 0x07000000&0xFFFF0000 |
 
-The ISA serial driver has been present since Mac OS X 10.4 Tiger (2005). The PCI class match (`0x07000000&0xFFFF0000`) has been identical across every version — the driver recognizes QEMU's ISA serial port the same way on Tiger as it does on Tahoe. The kext version has evolved (v1.6 → v3.2) but the PCI personality is functionally unchanged.
+The ISA serial driver has been present since Mac OS X 10.4 Tiger (2005). The PCI class match (`0x07000000&0xFFFF0000`) has been identical across every version — the driver recognizes QEMU's ISA serial port the same way on Tiger as it does on Tahoe. The kext version has evolved (v1.6 PPC → v1.7 Intel → v1.9 combo update → v3.0 Snow Leopard → v3.2 Mavericks through Tahoe) but the PCI personality is functionally unchanged.
 
 ### Binary Evidence
 
