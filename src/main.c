@@ -44,6 +44,8 @@ typedef struct {
     int         do_uninstall;
     int         do_selftest;
     int         selftest_json;
+    int         do_safetest;
+    int         safetest_json;
     int         dump_conf;
     const char *update_path;
     const char *method;
@@ -188,6 +190,8 @@ static void print_usage(const char *prog)
     printf("      --update PATH      Update binary from local file\n");
     printf("      --self-test        Check environment and report readiness\n");
     printf("      --self-test-json   Same as --self-test but output JSON\n");
+    printf("      --safe-test        Validate read-only commands work correctly\n");
+    printf("      --safe-test-json   Same as --safe-test but output JSON\n");
     printf("\nConfig file format (%s):\n", DEFAULT_CONFIG_PATH);
     printf("  [general]\n");
     printf("  path = /dev/cu.serial1\n");
@@ -214,6 +218,8 @@ static struct option long_options[] = {
     {"update",     required_argument, NULL, 'u'},
     {"self-test",  no_argument,       NULL, 'S'},
     {"self-test-json", no_argument,  NULL, 'J'},
+    {"safe-test",  no_argument,       NULL, 'T'},
+    {"safe-test-json", no_argument,  NULL, 'K'},
     /* Legacy long-form aliases */
     {"daemon",     no_argument,       NULL, 'd'},
     {"device",     required_argument, NULL, 'p'},
@@ -258,12 +264,18 @@ int main(int argc, char *argv[])
         case 'u': cfg.update_path = optarg; break;
         case 'S': cfg.do_selftest = 1; break;
         case 'J': cfg.do_selftest = 1; cfg.selftest_json = 1; break;
+        case 'T': cfg.do_safetest = 1; break;
+        case 'K': cfg.do_safetest = 1; cfg.safetest_json = 1; break;
         default:  print_usage(argv[0]); return 1;
         }
     }
 
     if (cfg.dump_conf) { dump_config(&cfg); return 0; }
     if (cfg.do_selftest) return selftest_run(cfg.selftest_json);
+    if (cfg.do_safetest) {
+        commands_init();
+        return safetest_run(cfg.safetest_json);
+    }
     if (cfg.update_path) return service_update(cfg.update_path);
     if (cfg.do_install) return service_install();
     if (cfg.do_uninstall) return service_uninstall();

@@ -574,3 +574,116 @@ int selftest_run(int json_output)
 
     return errs > 0 ? 1 : 0;
 }
+
+/* ---- Safe Test: validate read-only commands return correct responses ---- */
+
+static int run_safe_cmd(const char *cmd_name, const char *args_json, int expect_array)
+{
+    cJSON *args = args_json ? cJSON_Parse(args_json) : NULL;
+    char *resp = commands_dispatch(cmd_name, args, NULL);
+    if (args) cJSON_Delete(args);
+
+    if (!resp) return 0;  /* no response = fail */
+
+    cJSON *parsed = cJSON_Parse(resp);
+    free(resp);
+    if (!parsed) return 0;
+
+    cJSON *ret = cJSON_GetObjectItem(parsed, "return");
+    int ok = (ret != NULL);
+
+    /* Optionally verify it's an array or object */
+    if (ok && expect_array && !cJSON_IsArray(ret)) ok = 0;
+    if (ok && !expect_array && !cJSON_IsObject(ret) && !cJSON_IsArray(ret)
+        && !cJSON_IsNumber(ret) && !cJSON_IsString(ret)) ok = 0;
+
+    cJSON_Delete(parsed);
+    return ok;
+}
+
+int safetest_run(int json_output)
+{
+    /* Initialize commands if not already done */
+    commands_init();
+
+    struct {
+        const char *name;
+        const char *args;
+        int expect_array;
+        const char *desc;
+    } tests[] = {
+        {"guest-ping",                     NULL, 0, "Protocol ping"},
+        {"guest-sync",                     "{\"id\":99999}", 0, "Protocol sync"},
+        {"guest-info",                     NULL, 0, "Agent info (version + commands)"},
+        {"guest-get-osinfo",               NULL, 0, "OS identification"},
+        {"guest-get-host-name",            NULL, 0, "Hostname"},
+        {"guest-get-timezone",             NULL, 0, "Timezone"},
+        {"guest-get-time",                 NULL, 0, "System time"},
+        {"guest-get-users",                NULL, 1, "Logged-in users"},
+        {"guest-get-load",                 NULL, 0, "System load averages"},
+        {"guest-get-vcpus",                NULL, 1, "vCPU list"},
+        {"guest-get-cpustats",             NULL, 0, "CPU statistics"},
+        {"guest-get-memory-block-info",    NULL, 0, "Memory block size"},
+        {"guest-get-memory-blocks",        NULL, 1, "Memory blocks"},
+        {"guest-get-disks",                NULL, 1, "Disk list"},
+        {"guest-get-fsinfo",               NULL, 1, "Filesystem info"},
+        {"guest-get-diskstats",            NULL, 1, "Disk statistics"},
+        {"guest-fsfreeze-status",          NULL, 0, "Freeze status"},
+        {"guest-network-get-interfaces",   NULL, 1, "Network interfaces"},
+        {"guest-network-get-route",        NULL, 1, "Routing table"},
+        {"guest-fstrim",                   NULL, 0, "TRIM (no-op)"},
+        {NULL, NULL, 0, NULL}
+    };
+
+    int pass = 0, fail = 0;
+
+    if (!json_output) {
+        printf("mac-guest-agent %s safe-test\n", AGENT_VERSION);
+        printf("================================\n");
+        printf("Read-only command validation (no modifications)\n\n");
+    }
+
+    for (int i = 0; tests[i].name; i++) {
+        int ok = run_safe_cmd(tests[i].name, tests[i].args, tests[i].expect_array);
+        if (ok) {
+            pass++;
+            if (!json_output)
+                printf("  PASS  %s\n", tests[i].desc);
+        } else {
+            fail++;
+            if (!json_output)
+                printf("  FAIL  %s (%s)\n", tests[i].desc, tests[i].name);
+        }
+    }
+
+    /* Error handling tests */
+    char *err_resp = commands_dispatch("nonexistent-command", NULL, NULL);
+    if (err_resp) {
+        cJSON *parsed = cJSON_Parse(err_resp);
+        free(err_resp);
+        int ok = parsed && cJSON_GetObjectItem(parsed, "error");
+        if (parsed) cJSON_Delete(parsed);
+        if (ok) {
+            pass++;
+            if (!json_output) printf("  PASS  Unknown command returns error\n");
+        } else {
+            fail++;
+            if (!json_output) printf("  FAIL  Unknown command error handling\n");
+        }
+    } else {
+        fail++;
+        if (!json_output) printf("  FAIL  Unknown command (no response)\n");
+    }
+
+    if (json_output) {
+        printf("{\"test\":\"safe-test\",\"agent_version\":\"%s\",\"passes\":%d,\"failures\":%d,\"status\":\"%s\"}\n",
+               AGENT_VERSION, pass, fail, fail > 0 ? "fail" : "pass");
+    } else {
+        printf("\n================================\n");
+        printf("Results: %d passed, %d failed\n", pass, fail);
+        printf("(Power, exec, file-write, SSH, password\n");
+        printf(" commands intentionally not tested)\n");
+    }
+
+    return fail > 0 ? 1 : 0;
+}
