@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.4.0 (2026-03-28)
+
+### New Features
+- **`--safe-test` / `--safe-test-json`** — built-in read-only command validation. 21 tests, no external script or python needed. Run `sudo mac-guest-agent --safe-test` to verify all read-only commands work correctly.
+- **`scripts/pve-verify.sh`** — host-side verification script. Run from PVE host against a VM ID to check config, ping, OS info, network, command count, memory reporting, and freeze round-trip.
+
+### Security Hardening (25 findings addressed)
+- **Fixed:** Stop deleting ALL Time Machine snapshots on freeze — now only deletes the snapshot we created
+- **Fixed:** Shutdown returns error when fork fails (was silently returning success)
+- **Fixed:** SSH key removal returns error when write fails (was silently returning success)
+- **Fixed:** Save/restore hibernatemode around suspend (was permanently altered)
+- **Fixed:** NULL dereference before null check in channel_create_test
+- **Fixed:** Unchecked realloc in SSH key operations (crash on OOM)
+- **Fixed:** Memory leak in freeze hook cleanup (empty loop body)
+- **Fixed:** Output capture capped at 16MB (matches Linux qemu-ga)
+- **Fixed:** tmutil snapshot deletion uses run_command_v (no shell injection)
+- **Fixed:** selftest tool_available uses access() instead of system()
+- **Fixed:** Signal handler uses volatile sig_atomic_t flag
+- **Fixed:** Password zeroed in all code paths with compiler-safe secure_zero
+- **Fixed:** setenv() instead of putenv() after fork in guest-exec
+- **Fixed:** base64_encode overflow guard for 32-bit
+- **Fixed:** json_escape handles control characters
+- **Fixed:** Unsupported commands (set-vcpus, set-memory-blocks) registered as disabled
+- **Fixed:** LOG_FATAL no longer calls exit() — caller handles cleanup
+- **Fixed:** guest-get-diskstats returns structured per-disk stats (was raw text)
+- **Fixed:** commands_init guard prevents double-registration
+
+### CI/CD
+- Fixed: macos-26 replaced with macos-latest (valid runner)
+- Version now single-sourced from Makefile (agent.h uses -DVERSION)
+
 ## v2.3.1 (2026-03-28)
 
 ### Bug Fixes

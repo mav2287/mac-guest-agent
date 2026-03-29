@@ -106,10 +106,12 @@ fi
 echo ""
 echo "--- Memory ---"
 MEM=$(pvesh get "/nodes/$(hostname)/qemu/$VMID/status/current" 2>/dev/null)
-MAXMEM=$(echo "$MEM" | grep maxmem | grep -o '[0-9]*' | head -1)
-USEDMEM=$(echo "$MEM" | grep "│ mem " | grep -o '[0-9]*\.[0-9]*' | head -1)
-if [ -n "$USEDMEM" ] && [ -n "$MAXMEM" ]; then
-    echo "  PASS  memory reporting: ${USEDMEM}GB / $((MAXMEM / 1073741824))GB"
+MAXMEM_BYTES=$(echo "$MEM" | grep maxmem | grep -oE '[0-9]+' | sort -rn | head -1)
+USEDMEM_BYTES=$(echo "$MEM" | grep "│ mem " | grep -oE '[0-9]+' | sort -rn | head -1)
+if [ -n "$USEDMEM_BYTES" ] && [ -n "$MAXMEM_BYTES" ] && [ "$MAXMEM_BYTES" -gt 0 ] 2>/dev/null; then
+    USED_GB=$(echo "scale=1; $USEDMEM_BYTES / 1073741824" | bc 2>/dev/null || echo "?")
+    MAX_GB=$(echo "scale=1; $MAXMEM_BYTES / 1073741824" | bc 2>/dev/null || echo "?")
+    echo "  PASS  memory reporting: ${USED_GB}GB / ${MAX_GB}GB"
     PASS=$((PASS + 1))
 else
     echo "  INFO  memory reporting: could not read (may need reboot)"
