@@ -130,7 +130,7 @@ char *commands_dispatch(const char *cmd_name, cJSON *args, const cJSON *id)
 
     command_entry_t *cmd = find_command(cmd_name);
     if (!cmd || !cmd->enabled) {
-        LOG_ERROR("Command not found or disabled: %s", cmd_name);
+        LOG_DEBUG("Command not found or disabled: %s", cmd_name);
         char desc[256];
         snprintf(desc, sizeof(desc), "The command %s has not been found", cmd_name);
         return protocol_build_error("CommandNotFound", desc, id);
