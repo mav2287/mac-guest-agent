@@ -10,6 +10,17 @@
 #include <mach/host_info.h>
 #include <mach/mach_host.h>
 
+/* host_statistics64 was introduced in macOS 10.6 (Snow Leopard) and is absent
+   from Tiger's libSystem.B.dylib. Re-declaring with weak_import makes the
+   symbol resolve to NULL at load time on 10.4 instead of aborting the
+   process via dyld lazy-binding failure, so the vm_stat text fallback below
+   can actually run. On 10.6+ the attribute is a no-op. */
+extern kern_return_t host_statistics64(
+    host_t host_priv,
+    host_flavor_t flavor,
+    host_info64_t host_info64_out,
+    mach_msg_type_number_t *host_info64_outCnt) __attribute__((weak_import));
+
 /* ---- helpers ---- */
 
 /* Use the sysctl C API directly instead of shelling out.
@@ -63,6 +74,13 @@ static int get_vm_stat_mach(long long *free_pages, long long *active_pages,
                             long long *compressed_pages, long long *speculative_pages,
                             long long *purgeable_pages, long long *page_size)
 {
+    /* Tiger lacks host_statistics64 entirely. Caller falls back to vm_stat
+       text parsing. The NULL test is only meaningful because the symbol is
+       weak_import'd above. */
+    if (&host_statistics64 == NULL) {
+        return -1;
+    }
+
     vm_size_t ps;
     host_page_size(mach_host_self(), &ps);
     *page_size = (long long)ps;

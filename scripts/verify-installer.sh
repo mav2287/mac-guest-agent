@@ -381,13 +381,19 @@ check_symbols() {
         fi
     fi
 
-    # These are the non-trivial symbols our agent depends on
+    # Required symbols — agent will not function without these.
     # (beyond basic libc like malloc/free/printf which are guaranteed)
     local CRITICAL_SYMBOLS=(
         _getifaddrs _freeifaddrs _getutxent _endutxent _getloadavg
         _getmntinfo _getpwnam _sysctlbyname _gettimeofday _settimeofday
-        _host_statistics _host_statistics64 _poll _strtok_r _fcntl
+        _host_statistics _poll _strtok_r _fcntl
         _sync _tcgetattr _tcsetattr _tcflush _tcdrain
+    )
+
+    # Optional symbols — agent weak-imports these and falls back when absent.
+    # Reported but not counted as failures.
+    local OPTIONAL_SYMBOLS=(
+        _host_statistics64
     )
 
     local missing=0
@@ -408,17 +414,25 @@ check_symbols() {
         if grep -qx "$sym" "$symfile" 2>/dev/null; then
             found=$((found + 1))
         else
-            fail "symbol missing: $sym"
+            fail "required symbol missing: $sym"
             missing=$((missing + 1))
+        fi
+    done
+
+    for sym in "${OPTIONAL_SYMBOLS[@]}"; do
+        if grep -qx "$sym" "$symfile" 2>/dev/null; then
+            pass "optional symbol present: $sym"
+        else
+            warn "optional symbol absent: $sym (agent will use fallback)"
         fi
     done
 
     rm -f "$symfile"
 
     if [ "$missing" -eq 0 ]; then
-        pass "all ${#CRITICAL_SYMBOLS[@]} critical symbols present"
+        pass "all ${#CRITICAL_SYMBOLS[@]} required symbols present"
     else
-        fail "$missing of ${#CRITICAL_SYMBOLS[@]} critical symbols missing"
+        fail "$missing of ${#CRITICAL_SYMBOLS[@]} required symbols missing"
     fi
 }
 

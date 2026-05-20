@@ -23,7 +23,7 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required.** |
+| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — agent weak-imports it and falls back to `vm_stat` text parsing (v2.4.1+).** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -48,7 +48,7 @@ Detailed breakdown of what has been verified per version. All installer-verified
 
 | macOS | Serial Driver | C Library Symbols | Frameworks | Required Tools | APFS/VirtIO | Binary Target |
 |---|---|---|---|---|---|---|
-| 10.4.11 Tiger | v1.9, PCI 0x0700 | in Essentials.pkg | CF + IOKit | in pkg | — | i386 |
+| 10.4.11 Tiger | v1.9, PCI 0x0700 | 19/19 required (no host_statistics64) | CF + IOKit | in pkg | — | i386 |
 | 10.5 Leopard | v1.9, PCI 0x0700 | in libc.dylib | CF + IOKit | 7/10 | — | i386 |
 | 10.6 Snow Leopard | v3.0, PCI 0x0700 | in libSystem.B | CF + IOKit | 7/10 | — | x86_64 10.6 |
 | 10.7 Lion | v3.0, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
@@ -65,6 +65,7 @@ Detailed breakdown of what has been verified per version. All installer-verified
 
 Notes:
 - "in Essentials.pkg": Tiger's DVD base image doesn't include the kext, but the full OS install (Essentials.pkg) does
+- "no host_statistics64": Tiger's libSystem.B.dylib does not export `host_statistics64` (introduced in 10.6). The symbol is weak-imported by the agent and the `vm_stat` text fallback handles memory stats on 10.4.
 - "in libc.dylib" / "in libSystem.B": Pre-10.7 macOS stores symbols in monolithic libraries instead of split sub-libraries
 - "7/10 tools" and "8/10 tools": BaseSystem images don't include osascript, dscl, or tmutil (these are present in the full installed OS)
 - "dyld cache": Big Sur+ moved system libraries into a shared cache; symbols are present but not inspectable via nm
@@ -76,7 +77,8 @@ Notes:
 Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 - **Apple16X50Serial.kext** presence, bundle version, and IOPCIClassMatch (must be `0x07000000&0xFFFF0000` = PCI class 0x0700 Serial Controller, which matches QEMU ISA serial)
-- **20 critical C library symbols** in system sub-libraries: `getifaddrs`, `freeifaddrs`, `getutxent`, `endutxent`, `getloadavg`, `getmntinfo`, `getpwnam`, `sysctlbyname`, `gettimeofday`, `settimeofday`, `host_statistics`, `host_statistics64`, `poll`, `strtok_r`, `fcntl`, `sync`, `tcgetattr`, `tcsetattr`, `tcflush`, `tcdrain`
+- **19 required C library symbols** in system sub-libraries: `getifaddrs`, `freeifaddrs`, `getutxent`, `endutxent`, `getloadavg`, `getmntinfo`, `getpwnam`, `sysctlbyname`, `gettimeofday`, `settimeofday`, `host_statistics`, `poll`, `strtok_r`, `fcntl`, `sync`, `tcgetattr`, `tcsetattr`, `tcflush`, `tcdrain`
+- **1 optional symbol** (weak-imported): `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent falls back to `vm_stat` text parsing when unavailable.
 - **CoreFoundation.framework** and **IOKit.framework** presence
 - Required tools: `sw_vers`, `diskutil`, `sysctl`, `shutdown`, `launchctl`
 - APFS support: `diskutil` APFS references, `tmutil localsnapshot` availability

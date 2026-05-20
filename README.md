@@ -52,6 +52,8 @@ The agent communicates via an **ISA serial port** (16550 UART) using Apple's bui
 
 ISA serial driver (`Apple16X50Serial.kext`) verified present with identical PCI class match on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026). See the [compatibility matrix](docs/COMPATIBILITY.md) for per-version evidence.
 
+> **Tiger / Leopard (10.4 / 10.5):** `/usr/local/bin` is not in the default shell PATH. Invoke the binary by its absolute path (`sudo /usr/local/bin/mac-guest-agent ...`) or add it to PATH for the session: `export PATH=/usr/local/bin:$PATH`. The LaunchDaemon itself uses the absolute path and is unaffected.
+
 ## Service Management
 
 ```bash

@@ -169,12 +169,19 @@ analyze_installer() {
             local sym_missing=0
             for sym in _getifaddrs _freeifaddrs _getutxent _endutxent _getloadavg \
                        _getmntinfo _getpwnam _sysctlbyname _gettimeofday _settimeofday \
-                       _host_statistics _host_statistics64 _poll _strtok_r _fcntl \
+                       _host_statistics _poll _strtok_r _fcntl \
                        _sync _tcgetattr _tcsetattr _tcflush _tcdrain; do
                 if ! grep -qx "$sym" "$symfile" 2>/dev/null; then
                     sym_missing=$((sym_missing + 1))
                 fi
             done
+            # host_statistics64 is weak-imported by the agent (10.6+ only).
+            # Reported separately, does not count as missing.
+            if grep -qx _host_statistics64 "$symfile" 2>/dev/null; then
+                echo "HOST_STATISTICS64=present"
+            else
+                echo "HOST_STATISTICS64=absent_weak_import"
+            fi
             rm -f "$symfile"
             echo "SYMBOLS_MISSING=$sym_missing"
         else

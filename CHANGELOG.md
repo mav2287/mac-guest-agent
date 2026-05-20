@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.4.1 (2026-05-20)
+
+### Bug Fixes
+- **Fixed:** `--safe-test` crash on Mac OS X 10.4 Tiger (dyld lazy-bind failure on `_host_statistics64`). Weak-import the symbol so the existing `vm_stat` text fallback in `get_vm_stat()` actually runs on 10.4 instead of the process aborting before the runtime check fires. Reported by @vit9696 in #2.
+
+### Documentation
+- **Fixed:** `docs/COMPATIBILITY.md` — `host_statistics64` was incorrectly listed as present on Tiger. It was introduced in 10.6 Snow Leopard. Symbol list and Tiger row corrected; Tiger now noted as relying on the `vm_stat` text fallback for memory stats.
+- **Fixed:** `scripts/verify-installer.sh` — `host_statistics64` moved from required to optional in the symbol audit, matching what the binary now actually needs.
+- **Added:** Tiger / Leopard PATH note in README — `/usr/local/bin` is not in the default PATH on 10.4–10.5; users should invoke via absolute path or `export PATH=/usr/local/bin:$PATH`.
+
 ## v2.4.0 (2026-03-28)
 
 ### New Features
