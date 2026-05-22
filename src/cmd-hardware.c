@@ -226,18 +226,25 @@ static cJSON *handle_get_memory_blocks(cJSON *args, const char **err_class, cons
         return NULL;
     }
 
-    /* Get memory usage from vm_stat */
+    /* Memory usage from vm_stat. If it cannot be measured, return an error
+     * rather than fabricating a figure: a guessed "used" value (previously
+     * total/2) is indistinguishable from a real reading to every consumer,
+     * so a measurement failure must surface as a failure. */
     long long free_p, active_p, inactive_p, wired_p, compressed_p, spec_p, purg_p, pgsz;
-    long long used = total / 2; /* fallback */
     if (get_vm_stat(&free_p, &active_p, &inactive_p, &wired_p, &compressed_p,
-                    &spec_p, &purg_p, &pgsz) == 0) {
-        /* Use safe multiplication to avoid overflow on very large systems */
-        long long pages_used = wired_p + active_p + compressed_p;
-        if (pgsz > 0 && pages_used <= (long long)(0x7FFFFFFFFFFFFFFFLL / pgsz))
-            used = pages_used * pgsz;
-        else
-            used = total / 2; /* overflow fallback */
+                    &spec_p, &purg_p, &pgsz) != 0) {
+        *err_class = "GenericError";
+        *err_desc = "Failed to read memory statistics";
+        return NULL;
     }
+    long long pages_used = wired_p + active_p + compressed_p;
+    /* Guard the page-count multiplication against int64 overflow. */
+    if (pgsz <= 0 || pages_used > (long long)(0x7FFFFFFFFFFFFFFFLL / pgsz)) {
+        *err_class = "GenericError";
+        *err_desc = "Memory statistics out of range";
+        return NULL;
+    }
+    long long used = pages_used * pgsz;
 
     /* Calculate block size */
     long long block_size;
