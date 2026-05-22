@@ -181,6 +181,12 @@ fi
 # --- Freeze / thaw ---------------------------------------------------------
 echo ""
 echo "--- Freeze / Thaw ---"
+# macOS has no FIFREEZE ioctl; the agent's freeze is sync + F_FULLFSYNC (HFS+)
+# or a tmutil snapshot (APFS), plus an internal frozen flag. There is no kernel
+# freeze-state to query, so beyond the command path this verifies the frozen
+# STATE behaviourally: while frozen, the agent must REJECT non-freeze commands,
+# and must resume normal operation after thaw. That is observable proof, not
+# the agent's self-reported status string.
 FREEZE=$(qm guest cmd "$VMID" fsfreeze-freeze 2>/dev/null)
 FROZEN_N=$(echo "$FREEZE" | grep -oE '[0-9]+' | head -1)
 if [ -n "$FROZEN_N" ] && [ "$FROZEN_N" -ge 1 ]; then
@@ -188,9 +194,18 @@ if [ -n "$FROZEN_N" ] && [ "$FROZEN_N" -ge 1 ]; then
 
     STATUS=$(qm guest cmd "$VMID" fsfreeze-status 2>/dev/null)
     if echo "$STATUS" | grep -qw "frozen"; then
-        pass "fsfreeze-status — frozen"
+        pass "fsfreeze-status — reports frozen"
     else
         fail "fsfreeze-status — not reported frozen after freeze"
+    fi
+
+    # Behavioural proof of the frozen state: a non-freeze command (get-osinfo)
+    # must be rejected while frozen. If it answers, the agent is not genuinely
+    # frozen — it only set its status flag.
+    if qm agent "$VMID" get-osinfo >/dev/null 2>&1; then
+        fail "frozen state — agent answered get-osinfo while frozen (not genuinely frozen)"
+    else
+        pass "frozen state — non-freeze command rejected while frozen"
     fi
 
     THAW=$(qm guest cmd "$VMID" fsfreeze-thaw 2>/dev/null)
@@ -199,6 +214,13 @@ if [ -n "$FROZEN_N" ] && [ "$FROZEN_N" -ge 1 ]; then
         pass "fsfreeze-thaw — $THAWED_N filesystem(s) thawed"
     else
         fail "fsfreeze-thaw — thaw not confirmed; the VM filesystem may still be frozen"
+    fi
+
+    # Behavioural proof that the agent genuinely left the frozen state.
+    if qm agent "$VMID" get-osinfo >/dev/null 2>&1; then
+        pass "post-thaw — agent answers normally again"
+    else
+        fail "post-thaw — agent not responding after thaw"
     fi
 elif [ -n "$FROZEN_N" ]; then
     fail "fsfreeze-freeze — froze 0 filesystems (freeze had no effect)"
