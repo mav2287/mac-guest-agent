@@ -72,10 +72,15 @@ echo ""
 echo "--- Configuration ---"
 CONF="/etc/pve/qemu-server/$VMID.conf"
 if [ -f "$CONF" ]; then
-    if grep -qE 'agent:.*enabled=1.*type=isa' "$CONF"; then
-        pass "agent: enabled=1,type=isa"
-    elif grep -qE 'agent:.*enabled=1' "$CONF"; then
-        fail "agent enabled but type=isa not set — Apple's VirtIO agent may answer instead"
+    # Match enabled=1 and type=isa independently — Proxmox may write the
+    # agent options in either order ('enabled=1,type=isa' or the reverse).
+    AGENT_LINE=$(grep -E '^agent:' "$CONF")
+    if echo "$AGENT_LINE" | grep -qE '(^|[ ,])enabled=1([ ,]|$)'; then
+        if echo "$AGENT_LINE" | grep -qE '(^|[ ,])type=isa([ ,]|$)'; then
+            pass "agent: enabled=1, type=isa"
+        else
+            fail "agent enabled but type=isa not set — Apple's VirtIO agent may answer instead"
+        fi
     else
         fail "guest agent not enabled in VM config"
     fi
@@ -177,22 +182,26 @@ fi
 echo ""
 echo "--- Freeze / Thaw ---"
 FREEZE=$(qm guest cmd "$VMID" fsfreeze-freeze 2>/dev/null)
-if echo "$FREEZE" | grep -qE '[0-9]'; then
-    pass "fsfreeze-freeze — $(echo "$FREEZE" | grep -oE '[0-9]+' | head -1) filesystem(s) frozen"
+FROZEN_N=$(echo "$FREEZE" | grep -oE '[0-9]+' | head -1)
+if [ -n "$FROZEN_N" ] && [ "$FROZEN_N" -ge 1 ]; then
+    pass "fsfreeze-freeze — $FROZEN_N filesystem(s) frozen"
 
     STATUS=$(qm guest cmd "$VMID" fsfreeze-status 2>/dev/null)
-    if echo "$STATUS" | grep -q "frozen"; then
+    if echo "$STATUS" | grep -qw "frozen"; then
         pass "fsfreeze-status — frozen"
     else
         fail "fsfreeze-status — not reported frozen after freeze"
     fi
 
     THAW=$(qm guest cmd "$VMID" fsfreeze-thaw 2>/dev/null)
-    if echo "$THAW" | grep -qE '[0-9]'; then
-        pass "fsfreeze-thaw — $(echo "$THAW" | grep -oE '[0-9]+' | head -1) filesystem(s) thawed"
+    THAWED_N=$(echo "$THAW" | grep -oE '[0-9]+' | head -1)
+    if [ -n "$THAWED_N" ] && [ "$THAWED_N" -ge 1 ]; then
+        pass "fsfreeze-thaw — $THAWED_N filesystem(s) thawed"
     else
         fail "fsfreeze-thaw — thaw not confirmed; the VM filesystem may still be frozen"
     fi
+elif [ -n "$FROZEN_N" ]; then
+    fail "fsfreeze-freeze — froze 0 filesystems (freeze had no effect)"
 else
     fail "fsfreeze-freeze — no response"
 fi

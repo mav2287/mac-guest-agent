@@ -4,6 +4,7 @@
 
 ### Tooling
 - **Fixed:** `scripts/pve-verify.sh` memory check reported `PASS  memory reporting: 0GB / 0GB`. It read PVE's host-side QMP/balloon counters (blank for macOS guests — macOS ships no virtio-balloon stats driver) by scraping the `pvesh` text table, and printed `PASS` without validating the parsed values. Rewritten: memory now comes from the guest agent itself (`get-memory-block-info` + `get-memory-blocks`), with real used/total derived from its data; agent JSON is parsed with Perl `JSON::PP` instead of `grep`-on-text; the result model is fail-closed, so no check prints `PASS` on data it could not parse; added a `qm`/`perl` preflight and a VM-running check.
+- **Fixed:** `scripts/pve-verify.sh` — the `type=isa` config check required `enabled=1` to appear before `type=isa` on the config line, producing a false `FAIL` when Proxmox wrote the agent options in the other order; the two options are now matched independently. The freeze/thaw checks passed on any digit in the output, including a zero-filesystem freeze; they now require a parsed count of at least 1.
 
 ## v2.4.2 (2026-05-22)
 
