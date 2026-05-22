@@ -1,158 +1,201 @@
 #!/bin/bash
 # PVE Host-Side Verification Script
 #
-# Run from the Proxmox VE host to verify a macOS VM's guest agent.
+# Run from the Proxmox VE host to verify a macOS VM's guest agent:
+#   ./pve-verify.sh <vmid>
 #
-# Usage: ./pve-verify.sh <vmid>
+# Design notes:
+#  - Every check that cannot *prove* success reports FAIL, never PASS. A
+#    check that passes on data it could not parse is worse than no check —
+#    it manufactures false confidence.
+#  - Guest-agent responses are JSON; they are parsed with Perl JSON::PP
+#    (a core module, always present on a Proxmox host), never scraped out
+#    of formatted CLI text.
+#  - All memory figures come from the guest agent itself. PVE's host-side
+#    QMP/balloon memory counters are blank for macOS guests, because macOS
+#    ships no virtio-balloon stats driver — so this script never reads them.
 #
-# Checks: config, ping, OS info, network, freeze round-trip, memory
-
-set -e
+# 'set -e' is intentionally NOT used: a verification script must run every
+# check, not abort on the first failure.
 
 VMID="${1:?Usage: $0 <vmid>}"
+
 PASS=0
 FAIL=0
 
-check() {
-    local name="$1"
-    shift
-    if "$@" >/dev/null 2>&1; then
-        echo "  PASS  $name"
-        PASS=$((PASS + 1))
+pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
+info() { echo "  INFO  $1"; }
+
+summary() {
+    echo ""
+    echo "==================================="
+    echo "Results: $PASS passed, $FAIL failed"
+    if [ "$FAIL" -eq 0 ]; then
+        echo "Status: ALL CHECKS PASSED"
     else
-        echo "  FAIL  $name"
-        FAIL=$((FAIL + 1))
+        echo "Status: ISSUES FOUND"
     fi
 }
+
+# json_query <json-string> <perl-expression>
+#
+# Decodes <json-string> and evaluates <perl-expression> with the decoded
+# data structure in $d, printing the result. Produces no output and exits
+# non-zero if the input is not valid JSON — so a caller can tell an empty
+# or malformed agent response apart from a genuine value.
+json_query() {
+    printf '%s' "$1" | perl -MJSON::PP -e '
+        local $/;
+        my $d = eval { decode_json(scalar <STDIN>) };
+        exit 2 if $@ || !defined $d;
+        my $out = eval $ARGV[0];
+        exit 3 if $@;
+        print $out if defined $out;
+    ' -- "$2"
+}
+
+# --- Preflight -------------------------------------------------------------
+for tool in qm perl; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Error: '$tool' not found — run this script on the Proxmox VE host." >&2
+        exit 2
+    fi
+done
 
 echo "PVE macOS Guest Agent Verification"
 echo "==================================="
 echo "VM ID: $VMID"
 echo ""
 
-# Config checks
+# --- Configuration ---------------------------------------------------------
 echo "--- Configuration ---"
 CONF="/etc/pve/qemu-server/$VMID.conf"
 if [ -f "$CONF" ]; then
-    if grep -q "agent:.*enabled=1.*type=isa" "$CONF"; then
-        echo "  PASS  agent: enabled=1,type=isa"
-        PASS=$((PASS + 1))
-    elif grep -q "agent:.*enabled=1" "$CONF"; then
-        echo "  WARN  agent enabled but type=isa not set (Apple's VirtIO agent may respond instead)"
-        FAIL=$((FAIL + 1))
+    if grep -qE 'agent:.*enabled=1.*type=isa' "$CONF"; then
+        pass "agent: enabled=1,type=isa"
+    elif grep -qE 'agent:.*enabled=1' "$CONF"; then
+        fail "agent enabled but type=isa not set — Apple's VirtIO agent may answer instead"
     else
-        echo "  FAIL  agent not enabled in config"
-        FAIL=$((FAIL + 1))
+        fail "guest agent not enabled in VM config"
     fi
 
-    if grep -q "discard=on" "$CONF"; then
-        echo "  PASS  discard=on (TRIM enabled)"
-        PASS=$((PASS + 1))
+    if grep -qE 'discard=on' "$CONF"; then
+        pass "discard=on (TRIM enabled)"
     else
-        echo "  INFO  discard not enabled (optional for TRIM)"
+        info "discard not enabled (optional — needed for guest-fstrim)"
     fi
 
-    if grep -q "ssd=1" "$CONF"; then
-        echo "  PASS  ssd=1 (SSD emulation)"
-        PASS=$((PASS + 1))
+    if grep -qE 'ssd=1' "$CONF"; then
+        pass "ssd=1 (SSD emulation)"
     else
-        echo "  INFO  ssd=1 not set (optional for TRIM)"
+        info "ssd=1 not set (optional — needed for guest-fstrim)"
     fi
 else
-    echo "  FAIL  config file not found: $CONF"
-    FAIL=$((FAIL + 1))
+    fail "VM config not found: $CONF"
 fi
 
-# Agent communication
+# --- VM state --------------------------------------------------------------
+echo ""
+echo "--- VM State ---"
+VM_STATE=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+if [ "$VM_STATE" = "running" ]; then
+    pass "VM $VMID is running"
+else
+    fail "VM $VMID is not running (state: ${VM_STATE:-unknown}) — cannot verify the guest agent"
+    summary
+    exit 1
+fi
+
+# --- Agent communication ---------------------------------------------------
 echo ""
 echo "--- Agent Communication ---"
-check "ping" qm agent "$VMID" ping
 
-# OS info
+if qm agent "$VMID" ping >/dev/null 2>&1; then
+    pass "ping"
+else
+    fail "ping — agent not responding over the serial channel"
+fi
+
 OSINFO=$(qm agent "$VMID" get-osinfo 2>/dev/null)
-if echo "$OSINFO" | grep -q "macOS\|Mac OS"; then
-    echo "  PASS  get-osinfo ($(echo "$OSINFO" | grep -o '"pretty-name"[^,]*' | cut -d'"' -f4))"
-    PASS=$((PASS + 1))
+PRETTY=$(json_query "$OSINFO" '$d->{"pretty-name"} // $d->{name}')
+if [ -n "$PRETTY" ]; then
+    pass "get-osinfo — $PRETTY"
 else
-    echo "  FAIL  get-osinfo"
-    FAIL=$((FAIL + 1))
+    fail "get-osinfo — no valid response"
 fi
 
-# Network
 NETINFO=$(qm agent "$VMID" network-get-interfaces 2>/dev/null)
-if echo "$NETINFO" | grep -q "ip-address"; then
-    IP=$(echo "$NETINFO" | grep -o '"ip-address" *: *"[^"]*"' | head -1 | cut -d'"' -f4)
-    echo "  PASS  network-get-interfaces (IP: ${IP:-unknown})"
-    PASS=$((PASS + 1))
+IFCOUNT=$(json_query "$NETINFO" 'ref $d eq "ARRAY" ? scalar @$d : ""')
+if [ -n "$IFCOUNT" ] && [ "$IFCOUNT" -gt 0 ] 2>/dev/null; then
+    IP=$(json_query "$NETINFO" \
+        'my $ip; for my $i (@$d) { for my $a (@{$i->{"ip-addresses"} || []}) { $ip ||= $a->{"ip-address"} } } $ip // "no IP"')
+    pass "network-get-interfaces — $IFCOUNT interface(s), IP $IP"
 else
-    echo "  FAIL  network-get-interfaces"
-    FAIL=$((FAIL + 1))
+    fail "network-get-interfaces — no valid response"
 fi
 
-# Command count (via guest-info)
-CMDCOUNT=$(qm agent "$VMID" info 2>/dev/null | grep -c '"name"' || echo "0")
-if [ "$CMDCOUNT" -ge 40 ]; then
-    echo "  PASS  command count: $CMDCOUNT (expected 45)"
-    PASS=$((PASS + 1))
-elif [ "$CMDCOUNT" -gt 0 ]; then
-    echo "  WARN  command count: $CMDCOUNT (expected 45 — may be Apple's built-in agent)"
-    FAIL=$((FAIL + 1))
+AGENTINFO=$(qm agent "$VMID" info 2>/dev/null)
+CMDCOUNT=$(json_query "$AGENTINFO" 'scalar @{$d->{supported_commands} || []}')
+AGENTVER=$(json_query "$AGENTINFO" '$d->{version} // ""')
+if [ -n "$CMDCOUNT" ] && [ "$CMDCOUNT" -ge 40 ] 2>/dev/null; then
+    pass "info — $CMDCOUNT commands registered${AGENTVER:+, agent v$AGENTVER}"
+elif [ -n "$CMDCOUNT" ] && [ "$CMDCOUNT" -gt 0 ] 2>/dev/null; then
+    fail "info — only $CMDCOUNT commands (expected ~45; a different agent may be answering)"
 else
-    echo "  FAIL  could not get command count"
-    FAIL=$((FAIL + 1))
+    fail "info — no valid response from agent"
 fi
 
-# Memory
+# --- Memory (from the guest agent) -----------------------------------------
 echo ""
-echo "--- Memory ---"
-MEM=$(pvesh get "/nodes/$(hostname)/qemu/$VMID/status/current" 2>/dev/null)
-MAXMEM_BYTES=$(echo "$MEM" | grep maxmem | grep -oE '[0-9]+' | sort -rn | head -1)
-USEDMEM_BYTES=$(echo "$MEM" | grep "│ mem " | grep -oE '[0-9]+' | sort -rn | head -1)
-if [ -n "$USEDMEM_BYTES" ] && [ -n "$MAXMEM_BYTES" ] && [ "$MAXMEM_BYTES" -gt 0 ] 2>/dev/null; then
-    USED_GB=$(echo "scale=1; $USEDMEM_BYTES / 1073741824" | bc 2>/dev/null || echo "?")
-    MAX_GB=$(echo "scale=1; $MAXMEM_BYTES / 1073741824" | bc 2>/dev/null || echo "?")
-    echo "  PASS  memory reporting: ${USED_GB}GB / ${MAX_GB}GB"
-    PASS=$((PASS + 1))
+echo "--- Memory (guest agent) ---"
+# The agent encodes macOS memory as QGA memory blocks: total RAM is
+# (block count x block size), used RAM is (online block count x block size).
+# Block-quantised, hence the '~'. This is the agent's own data — PVE's
+# host-side memory counters are blank for macOS guests.
+BLKINFO=$(qm agent "$VMID" get-memory-block-info 2>/dev/null)
+BLKSIZE=$(json_query "$BLKINFO" '$d->{size}')
+BLOCKS=$(qm agent "$VMID" get-memory-blocks 2>/dev/null)
+BLKCOUNTS=$(json_query "$BLOCKS" \
+    'ref $d eq "ARRAY" ? scalar(@$d) . " " . scalar(grep { $_->{online} } @$d) : ""')
+
+if [[ "$BLKSIZE" =~ ^[0-9]+$ ]] && [ "$BLKSIZE" -gt 0 ] && [ -n "$BLKCOUNTS" ]; then
+    TOTAL_BLOCKS=${BLKCOUNTS%% *}
+    ONLINE_BLOCKS=${BLKCOUNTS##* }
+    if [[ "$TOTAL_BLOCKS" =~ ^[0-9]+$ ]] && [ "$TOTAL_BLOCKS" -gt 0 ]; then
+        TOTAL_GB=$(awk "BEGIN { printf \"%.1f\", $TOTAL_BLOCKS * $BLKSIZE / 1073741824 }")
+        USED_GB=$(awk "BEGIN { printf \"%.1f\", $ONLINE_BLOCKS * $BLKSIZE / 1073741824 }")
+        pass "memory — agent reports ~${USED_GB} GB used / ~${TOTAL_GB} GB total ($ONLINE_BLOCKS/$TOTAL_BLOCKS blocks online)"
+    else
+        fail "memory — get-memory-blocks returned an empty block list"
+    fi
 else
-    echo "  INFO  memory reporting: could not read (may need reboot)"
+    fail "memory — agent did not return valid memory data"
 fi
 
-# Freeze round-trip
+# --- Freeze / thaw ---------------------------------------------------------
 echo ""
-echo "--- Freeze/Thaw ---"
+echo "--- Freeze / Thaw ---"
 FREEZE=$(qm guest cmd "$VMID" fsfreeze-freeze 2>/dev/null)
-if echo "$FREEZE" | grep -q "[0-9]"; then
-    echo "  PASS  freeze"
-    PASS=$((PASS + 1))
+if echo "$FREEZE" | grep -qE '[0-9]'; then
+    pass "fsfreeze-freeze — $(echo "$FREEZE" | grep -oE '[0-9]+' | head -1) filesystem(s) frozen"
 
     STATUS=$(qm guest cmd "$VMID" fsfreeze-status 2>/dev/null)
     if echo "$STATUS" | grep -q "frozen"; then
-        echo "  PASS  status: frozen"
-        PASS=$((PASS + 1))
+        pass "fsfreeze-status — frozen"
     else
-        echo "  FAIL  status not frozen after freeze"
-        FAIL=$((FAIL + 1))
+        fail "fsfreeze-status — not reported frozen after freeze"
     fi
 
     THAW=$(qm guest cmd "$VMID" fsfreeze-thaw 2>/dev/null)
-    if echo "$THAW" | grep -q "[0-9]"; then
-        echo "  PASS  thaw"
-        PASS=$((PASS + 1))
+    if echo "$THAW" | grep -qE '[0-9]'; then
+        pass "fsfreeze-thaw — $(echo "$THAW" | grep -oE '[0-9]+' | head -1) filesystem(s) thawed"
     else
-        echo "  FAIL  thaw failed"
-        FAIL=$((FAIL + 1))
+        fail "fsfreeze-thaw — thaw not confirmed; the VM filesystem may still be frozen"
     fi
 else
-    echo "  FAIL  freeze failed"
-    FAIL=$((FAIL + 1))
+    fail "fsfreeze-freeze — no response"
 fi
 
-echo ""
-echo "==================================="
-echo "Results: $PASS passed, $FAIL failed"
-if [ "$FAIL" -eq 0 ]; then
-    echo "Status: ALL CHECKS PASSED"
-else
-    echo "Status: ISSUES FOUND"
-fi
-exit $FAIL
+summary
+[ "$FAIL" -eq 0 ] && exit 0 || exit 1
