@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.4.2 (2026-05-22)
+
+### Bug Fixes
+- **Fixed:** Agent never connected on Mac OS X 10.4 Tiger — the serial transport used `poll()`, which returns `POLLNVAL` (0x20) for the serial device on Tiger. macOS `poll()` is implemented on top of kqueue, and Tiger's serial BSD client does not support the kqueue readiness path, so `poll()` reported a valid, open `/dev/cu.serial1` as invalid. The agent treated that as a fatal device error and reconnect-looped every 5 s without ever reading a command — the host saw `QEMU guest agent is not running`. The serial read and write paths in `channel.c` now use `select()`, which uses the legacy `selrecord` path the driver implements and works on every macOS version. Reported by @vit9696 in #2.
+
+### Testing
+- **Added:** `tests/test_proactive.c` — channel read over a real PTY, covering the `select()`-based read path (framed-message read and idle timeout). The transport read path previously had no behavioral test coverage.
+
 ## v2.4.1 (2026-05-20)
 
 ### Bug Fixes

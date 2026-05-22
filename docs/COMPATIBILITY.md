@@ -23,7 +23,7 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **2** | **i386** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — agent weak-imports it and falls back to `vm_stat` text parsing (v2.4.1+).** |
+| **10.4 Tiger** | **2** | **i386** | **Yes** | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — agent weak-imports it and falls back to `vm_stat` text parsing (v2.4.1+). v2.4.1 `--safe-test` 21/21 PASS on 10.4.11 (issue #2). Serial transport `poll()`→`select()` in v2.4.2 — agent runtime over PVE pending retest.** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |

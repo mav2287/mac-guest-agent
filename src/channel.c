@@ -6,7 +6,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <poll.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -244,38 +245,48 @@ char *channel_read_message(channel_t *ch)
         return strdup(line);
     }
 
-    /* Check if we already have a complete line in the buffer BEFORE polling.
+    /* Check if we already have a complete line in the buffer BEFORE waiting.
      * PVE sends sync-delimited + ping in ONE write. If we read both into
      * our buffer but only extracted the first line, the second line is
-     * already here — no need to wait for poll(). */
+     * already here — no need to wait on select(). */
     if (ch->read_len > 0 && memchr(ch->read_buf, '\n', ch->read_len)) {
         goto extract_line;
     }
 
-    /* Device mode: poll + read */
-    struct pollfd pfd;
-    pfd.fd = ch->fd;
-    pfd.events = POLLIN;
-    pfd.revents = 0;
+    /* Device mode: select + read.
+     *
+     * select(), not poll(): macOS poll() is implemented on top of kqueue,
+     * and the serial BSD client on Mac OS X 10.4 Tiger does not support the
+     * kqueue readiness path — poll() returns POLLNVAL (0x20) for a valid,
+     * open serial fd (confirmed on 10.4.11, issue #2). The agent treated
+     * that as a fatal device error and reconnect-looped forever without
+     * ever reading a byte. select() uses the legacy selrecord path the
+     * driver does implement and works on every macOS version. A single fd
+     * is well within FD_SETSIZE. Device hangup/EOF is detected below by
+     * read() returning 0. */
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(ch->fd, &readfds);
 
-    int ret = poll(&pfd, 1, ch->poll_timeout_ms);
+    struct timeval tv;
+    tv.tv_sec  = ch->poll_timeout_ms / 1000;
+    tv.tv_usec = (ch->poll_timeout_ms % 1000) * 1000;
+
+    int ret = select(ch->fd + 1, &readfds, NULL, NULL, &tv);
     if (ret < 0) {
         if (errno == EINTR) {
             errno = EAGAIN;
             return NULL;
         }
-        LOG_ERROR("poll() error: %s", strerror(errno));
+        /* A genuine select() failure (e.g. EBADF) means the fd is gone —
+         * fail to the reconnect path rather than spinning on a dead fd. */
+        LOG_ERROR("select() error: %s", strerror(errno));
+        errno = EIO;
         return NULL;
     }
     if (ret == 0) {
         /* Timeout - normal, no data */
         errno = EAGAIN;
-        return NULL;
-    }
-
-    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-        LOG_ERROR("Device error/hangup (revents=0x%x)", pfd.revents);
-        errno = EIO;
         return NULL;
     }
 
@@ -368,8 +379,12 @@ static int channel_write_all(channel_t *ch, const void *data, size_t len)
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                poll(&pfd, 1, 5000);
+                /* select(), not poll() — see channel_read_message(). */
+                fd_set writefds;
+                FD_ZERO(&writefds);
+                FD_SET(fd, &writefds);
+                struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+                select(fd + 1, NULL, &writefds, NULL, &tv);
                 continue;
             }
             LOG_ERROR("Serial write failed: %s", strerror(errno));

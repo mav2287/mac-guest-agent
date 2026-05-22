@@ -68,6 +68,59 @@ static void test_channel_api(void)
     channel_destroy(ch);
 }
 
+/* ---- Channel read over a real PTY (exercises the select() path) ---- */
+
+static void test_channel_pty_read(void)
+{
+    printf("\n--- Channel read over PTY (select path) ---\n");
+
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    ASSERT("posix_openpt", master >= 0);
+    if (master < 0) return;
+    if (grantpt(master) != 0 || unlockpt(master) != 0) {
+        ASSERT("grantpt/unlockpt", 0);
+        close(master);
+        return;
+    }
+    const char *slave_name = ptsname(master);
+    ASSERT("ptsname", slave_name != NULL);
+    if (!slave_name) { close(master); return; }
+
+    /* The pts slave is a real tty character device, so channel_open() runs
+     * the termios setup and channel_read_message() runs the select()-based
+     * read path — the same path used for the serial device in production. */
+    channel_t *ch = channel_create(slave_name);
+    ASSERT("create channel on pts", ch != NULL);
+    if (!ch) { close(master); return; }
+    int rc = channel_open(ch);
+    ASSERT("open pts channel", rc == 0 && channel_is_open(ch));
+
+    channel_set_poll_timeout(ch, 200);
+
+    /* Idle: nothing written — select() must time out and report EAGAIN,
+     * not a spurious device error (the Tiger poll() bug surfaced here). */
+    errno = 0;
+    char *msg = channel_read_message(ch);
+    int idle_errno = errno;
+    ASSERT("idle read times out cleanly", msg == NULL && idle_errno == EAGAIN);
+    free(msg);
+
+    /* Data: a full QGA line written to the master must come back intact. */
+    const char *line = "{\"execute\":\"guest-ping\"}\n";
+    ssize_t w = write(master, line, strlen(line));
+    ASSERT("write line to pty master", w == (ssize_t)strlen(line));
+
+    msg = NULL;
+    for (int i = 0; i < 25 && !msg; i++)
+        msg = channel_read_message(ch);
+    ASSERT("select path returns the written line",
+           msg != NULL && strcmp(msg, "{\"execute\":\"guest-ping\"}") == 0);
+    free(msg);
+
+    channel_destroy(ch);
+    close(master);
+}
+
 /* ---- SSH with Temp Files ---- */
 
 static void test_ssh_temp(void)
@@ -203,6 +256,7 @@ int main(void)
     printf("=== Proactive Tests ===\n");
 
     test_channel_api();
+    test_channel_pty_read();
     test_ssh_temp();
     test_freeze_hooks();
     test_password_validation();
