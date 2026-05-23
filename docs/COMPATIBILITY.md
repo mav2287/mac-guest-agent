@@ -23,7 +23,7 @@ These terms are used consistently throughout all project documentation:
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **2** | **i386** | **Yes** | Untested | Untested | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — agent weak-imports it and falls back to `vm_stat` text parsing (v2.4.1+). v2.4.1 `--safe-test` 21/21 PASS on 10.4.11 (issue #2). Serial transport `poll()`→`select()` in v2.4.2 — agent runtime over PVE pending retest.** |
+| **10.4 Tiger** | **1** | **i386** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — weak-imported, `vm_stat` text fallback (v2.4.1+). Serial transport `poll()`→`select()` in v2.4.2 — macOS `poll()` is kqueue-backed and the serial BSD client on 10.4 doesn't support the kqueue readiness path, so `poll()` returned `POLLNVAL` for `/dev/cu.serial1`. v2.4.1 `--safe-test` 21/21 PASS on 10.4.11; v2.4.2 confirmed serving over PVE — ping, get-osinfo, network, memory display, reboot/shutdown — on 10.4.11 by @vit9696 (issue #2). Freeze not yet exercised.** |
 | **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
 | **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
 | **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
@@ -197,38 +197,37 @@ A version is promoted to **Tier 2** when all four core checks pass:
 
 ### Step 2: Runtime Validation (Tier 2 → Tier 1)
 
-Boot a VM from the installer on PVE, then:
+Boot a VM from the installer on PVE, then run two pieces:
+
+**Inside the VM** — install and capture the structured diagnostics:
 
 ```bash
-# 1. Install the agent
 sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 
-# 2. Self-test (text or JSON)
-sudo mac-guest-agent --self-test
 sudo mac-guest-agent --self-test-json > selftest-10.X.json
-
-# 3. Safe test suite (read-only, non-destructive)
-./tests/safe_test.sh /usr/local/bin/mac-guest-agent
-
-# 4. PVE integration (from the host)
-qm agent <vmid> ping
-qm agent <vmid> get-osinfo
-qm agent <vmid> network-get-interfaces
-
-# 5. Freeze test (from the host, during a backup window)
-qm guest cmd <vmid> fsfreeze-freeze
-qm guest cmd <vmid> fsfreeze-status
-# take snapshot
-qm guest cmd <vmid> fsfreeze-thaw
+sudo mac-guest-agent --safe-test-json > safetest-10.X.json
 ```
 
-A version is promoted to **Tier 1** when all of the above pass.
+`--self-test-json` is the environment diagnostic (serial device, kext, service, hooks, tools, backup readiness). `--safe-test-json` is the 21-command read-only sweep against the agent's command handlers.
+
+**From the PVE host** — the bundled one-shot verification script covers config, VM state, ping, `get-osinfo`, `network-get-interfaces`, the full command sweep (`info` returns the 45-command list and version), agent-sourced memory usage, and a freeze/thaw round-trip with behavioural verification (the agent must reject a non-freeze command while frozen and recover after thaw):
+
+```bash
+curl -fsSL -o /tmp/pve-verify.sh \
+  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/pve-verify.sh
+chmod +x /tmp/pve-verify.sh
+/tmp/pve-verify.sh <vmid>
+```
+
+A version is promoted to **Tier 1** when the in-VM diagnostics succeed and `pve-verify.sh` reports `ALL CHECKS PASSED`.
 
 ### Storing Results
 
-Verification JSON outputs should be stored in `results/` (gitignored) during development, and referenced by build number in the Evidence column of the matrix above.
+Internally, JSON outputs are kept under `results/` (gitignored) during development and referenced by build number in the Evidence column of the matrix above.
+
+External contributors: paste the `pve-verify.sh` output and the two JSON files in a GitHub issue comment, or open a small PR adding them under `docs/evidence/<version>/` and updating the corresponding matrix row.
 
 ## Quality Metrics
 

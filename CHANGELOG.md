@@ -10,6 +10,10 @@
 - **Fixed:** `scripts/pve-verify.sh` — the `type=isa` config check required `enabled=1` to appear before `type=isa` on the config line, producing a false `FAIL` when Proxmox wrote the agent options in the other order; the two options are now matched independently. The freeze/thaw checks passed on any digit in the output, including a zero-filesystem freeze; they now require a parsed count of at least 1.
 - **Added:** `scripts/pve-verify.sh` freeze check now verifies the frozen *state* behaviourally — while frozen, the agent must reject a non-freeze command (`get-osinfo`), and must resume normal operation after thaw — rather than trusting `fsfreeze-status`, which only echoes the agent's internal frozen flag. macOS has no `FIFREEZE`, so the rejection behaviour is the observable proof that the freeze took effect.
 
+### Documentation
+- **Updated:** `docs/COMPATIBILITY.md` — promoted **10.4 Tiger** to Tier 1 after @vit9696's v2.4.2 confirmation (issue #2): agent serves PVE end-to-end on 10.4.11 (ping, get-osinfo, network, memory, reboot/shutdown). Matches the convention 15.7 Sequoia already set (Tier 1 with freeze untested).
+- **Updated:** `docs/COMPATIBILITY.md` "Step 2: Runtime Validation" sequence now points at `scripts/pve-verify.sh` (one-shot host-side validation with agent-sourced memory + behavioural freeze check) and the modern `--self-test-json` + `--safe-test-json` in-VM diagnostics, replacing the older `tests/safe_test.sh` reference. Added a note on how external contributors submit results (issue comment or PR under `docs/evidence/<version>/`).
+
 ## v2.4.2 (2026-05-22)
 
 ### Bug Fixes
