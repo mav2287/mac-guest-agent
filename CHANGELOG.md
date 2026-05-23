@@ -15,6 +15,7 @@
 - **Updated:** `docs/COMPATIBILITY.md` "Step 2: Runtime Validation" sequence now points at `scripts/pve-verify.sh` (one-shot host-side validation with agent-sourced memory + behavioural freeze check) and the modern `--self-test-json` + `--safe-test-json` in-VM diagnostics, replacing the older `tests/safe_test.sh` reference. Added a note on how external contributors submit results (issue comment or PR under `docs/evidence/<version>/`).
 - **Fixed:** `docs/CLI.md` Device Auto-Detection section listed the probe order as VirtIO → UTM → ISA. The code in `src/channel.c` has been ISA-first since v2.1.0 — deliberately, because Apple's built-in VirtIO guest agent on Big Sur+ claims the VirtIO channel and ISA is the only one it leaves alone. Reordered the doc to match the code and the v2.1.0 rationale.
 - **Added:** `docs/evidence/` directory with a README defining the per-version layout (`selftest.json`, `safetest.json`, `pve-verify.txt`, optional `NOTES.md`) and the submission flow referenced from the reply to issue #2 — so contributors land on a real path with format guidance instead of an empty directory.
+- **Added:** `docs/PLAN.md` — phased roadmap (research → configuration matrix and intent design → one-shot validator) covering the deeper freeze/gating/foreign-FS gaps surfaced by @vit9696's Tier-2 submission on 10.4.11. Scaffolded `docs/research/UPSTREAM_NOTES.md` to capture Phase 1 evidence (QGA spec, Linux reference impl, PVE wrapper behaviour, etc.) before any code change.
 
 ## v2.4.2 (2026-05-22)
 
