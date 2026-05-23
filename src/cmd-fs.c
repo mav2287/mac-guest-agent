@@ -224,17 +224,27 @@ fs_class_t fs_dispatch_class(const struct statfs *mnt)
         return FS_SKIP_SPECIAL;
     }
 
-    /* Anything not backed by a /dev/... device — be defensive. */
-    if (strncmp(mnt->f_mntfromname, "/dev/", 5) != 0) {
-        return FS_SKIP_SPECIAL;
-    }
-
+    /* Known writable types — type-based, not /dev/-backing-based. ZFS in
+     * particular doesn't use /dev/ in f_mntfromname (it's pool/dataset),
+     * so the /dev/ check below must come AFTER this. */
     if (strcmp(type, "apfs") == 0) return FS_APFS_WRITABLE;
     if (strcmp(type, "zfs") == 0)  return FS_ZFS_WRITABLE;
     if (strcmp(type, "hfs") == 0)  return FS_HFS_WRITABLE;
 
+    /* Unknown writable type — only proceed if /dev/-backed; otherwise
+     * be defensive (FUSE drivers, exotic non-device mounts). */
+    if (strncmp(mnt->f_mntfromname, "/dev/", 5) != 0) {
+        return FS_SKIP_SPECIAL;
+    }
+
     return FS_GENERIC_WRITABLE;
 }
+
+/* Forward declarations — implementations live in the ZFS Snapshot section
+ * after handle_fsfreeze_freeze. Declared here so sync_all_volumes (just
+ * below) can dispatch the FS_ZFS_WRITABLE case. */
+static int  create_zfs_snapshot(const struct statfs *mnt, fs_counts_t *c);
+static void delete_zfs_snapshots(void);
 
 /* Per-mount F_FULLFSYNC with ENOTSUP/EOPNOTSUPP tolerance.
  * Increments the supplied counters. */
@@ -358,9 +368,12 @@ static int sync_all_volumes(int do_fullfsync, fs_counts_t *counts,
             try_fullfsync(&mntbuf[i], counts);
             break;
         case FS_ZFS_WRITABLE:
-            /* Phase 2 item 3 will add `zfs snapshot` integration.
-             * Until then ZFS gets the same treatment as GENERIC_WRITABLE. */
-            try_fullfsync(&mntbuf[i], counts);
+            /* Prefer `zfs snapshot` — the real atomic consistency primitive
+             * for ZFS. Falls through to F_FULLFSYNC as defence in depth
+             * if the `zfs` CLI is absent or the snapshot fails. */
+            if (!create_zfs_snapshot(&mntbuf[i], counts)) {
+                try_fullfsync(&mntbuf[i], counts);
+            }
             break;
         }
     }
@@ -429,6 +442,124 @@ static void delete_apfs_snapshot(void)
     run_command_v("/usr/bin/tmutil", argv, NULL, NULL);
     LOG_INFO("Deleted APFS snapshot: %s", snapshot_date);
     snapshot_date[0] = '\0';
+}
+
+/* ---- ZFS Snapshot (third-party OpenZFS-on-macOS) ----
+ *
+ * ZFS provides a real atomic snapshot primitive (`zfs snapshot`), so for
+ * ZFS-typed mounts we prefer it over F_FULLFSYNC (which isn't documented
+ * to be supported on ZFS and would give a weaker consistency guarantee
+ * anyway). One snapshot per dataset; tracked so the matching thaw can
+ * `zfs destroy` them.
+ *
+ * If the `zfs` CLI is not present on the guest (OpenZFS-on-macOS is a
+ * third-party install), the dispatch falls through to try_fullfsync —
+ * same as any other unknown writable type.
+ */
+
+#define MAX_ZFS_SNAPSHOTS 16
+static char zfs_snapshot_names[MAX_ZFS_SNAPSHOTS][256];
+static int  zfs_snapshot_count = 0;
+
+/* Cached CLI lookup. -1 = not yet checked, 0 = absent, 1 = present. */
+static int  zfs_cli_state = -1;
+static char zfs_cli_path[64] = "";
+
+static const char *find_zfs_cli(void)
+{
+    if (zfs_cli_state == 1) return zfs_cli_path;
+    if (zfs_cli_state == 0) return NULL;
+
+    static const char *candidates[] = {
+        "/usr/local/sbin/zfs",   /* OpenZFS-on-macOS default */
+        "/usr/local/bin/zfs",
+        "/opt/local/bin/zfs",    /* MacPorts */
+        "/opt/homebrew/bin/zfs", /* Apple Silicon Homebrew */
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++) {
+        if (access(candidates[i], X_OK) == 0) {
+            strncpy(zfs_cli_path, candidates[i], sizeof(zfs_cli_path) - 1);
+            zfs_cli_path[sizeof(zfs_cli_path) - 1] = '\0';
+            zfs_cli_state = 1;
+            return zfs_cli_path;
+        }
+    }
+    zfs_cli_state = 0;
+    return NULL;
+}
+
+/* Snapshot a single ZFS dataset. f_mntfromname for a ZFS mount is the
+ * dataset name (e.g. "tank/data"), not a /dev/... path. Returns 1 on
+ * success, 0 on failure or if the CLI isn't available; on failure the
+ * caller falls through to try_fullfsync as defence in depth. */
+static int create_zfs_snapshot(const struct statfs *mnt, fs_counts_t *c)
+{
+    const char *cli = find_zfs_cli();
+    if (!cli) return 0;
+    if (zfs_snapshot_count >= MAX_ZFS_SNAPSHOTS) {
+        LOG_WARN("ZFS snapshot tracking full (%d entries); skipping snapshot for %s",
+                 MAX_ZFS_SNAPSHOTS, mnt->f_mntonname);
+        return 0;
+    }
+
+    char snap[256];
+    snprintf(snap, sizeof(snap), "%s@mac-guest-agent-%lld",
+             mnt->f_mntfromname, (long long)time(NULL));
+
+    if (test_mode) {
+        LOG_DEBUG("Dry-run: would `zfs snapshot %s`", snap);
+        strncpy(zfs_snapshot_names[zfs_snapshot_count], snap,
+                sizeof(zfs_snapshot_names[0]) - 1);
+        zfs_snapshot_names[zfs_snapshot_count][sizeof(zfs_snapshot_names[0]) - 1] = '\0';
+        zfs_snapshot_count++;
+        c->zfs_snapshotted++;
+        return 1;
+    }
+
+    char *const argv[] = { (char *)cli, "snapshot", snap, NULL };
+    if (run_command_v(cli, argv, NULL, NULL) != 0) {
+        LOG_WARN("`zfs snapshot %s` failed; will fall through to F_FULLFSYNC", snap);
+        return 0;
+    }
+
+    LOG_INFO("Created ZFS snapshot: %s", snap);
+    strncpy(zfs_snapshot_names[zfs_snapshot_count], snap,
+            sizeof(zfs_snapshot_names[0]) - 1);
+    zfs_snapshot_names[zfs_snapshot_count][sizeof(zfs_snapshot_names[0]) - 1] = '\0';
+    zfs_snapshot_count++;
+    c->zfs_snapshotted++;
+    return 1;
+}
+
+/* Destroy every tracked ZFS snapshot. Called from do_thaw. Failure on
+ * any one snapshot is logged WARN but doesn't stop the cleanup loop —
+ * we want a best-effort destroy of as many as possible. */
+static void delete_zfs_snapshots(void)
+{
+    if (zfs_snapshot_count == 0) return;
+    const char *cli = find_zfs_cli();
+
+    for (int i = 0; i < zfs_snapshot_count; i++) {
+        if (test_mode) {
+            LOG_DEBUG("Dry-run: would `zfs destroy %s`", zfs_snapshot_names[i]);
+            continue;
+        }
+        if (!cli) {
+            /* Shouldn't happen — we only get here if we successfully created
+             * snapshots, which requires the CLI. Defensive: skip cleanly. */
+            LOG_WARN("ZFS CLI no longer found; leaving snapshot %s orphaned",
+                     zfs_snapshot_names[i]);
+            continue;
+        }
+        char *const argv[] = { (char *)cli, "destroy", zfs_snapshot_names[i], NULL };
+        if (run_command_v(cli, argv, NULL, NULL) != 0) {
+            LOG_WARN("`zfs destroy %s` failed", zfs_snapshot_names[i]);
+        } else {
+            LOG_INFO("Deleted ZFS snapshot: %s", zfs_snapshot_names[i]);
+        }
+    }
+    zfs_snapshot_count = 0;
 }
 
 /* ---- Freeze Command ---- */
@@ -616,6 +747,9 @@ static void do_thaw(void)
 
     /* Clean up APFS snapshot */
     delete_apfs_snapshot();
+
+    /* Clean up any ZFS snapshots taken during this freeze cycle */
+    delete_zfs_snapshots();
 
     /* Run thaw hooks (reverse order, best effort) */
     run_hooks("thaw");

@@ -162,8 +162,15 @@ static void test_fs_dispatch(void)
     ASSERT("apfs writable -> APFS_WRITABLE", fs_dispatch_class(&s) == FS_APFS_WRITABLE);
     make_statfs(&s, "hfs", "/dev/disk0s2", "/", 0);
     ASSERT("hfs writable -> HFS_WRITABLE", fs_dispatch_class(&s) == FS_HFS_WRITABLE);
-    make_statfs(&s, "zfs", "/dev/zd0", "/tank", 0);
-    ASSERT("zfs writable -> ZFS_WRITABLE", fs_dispatch_class(&s) == FS_ZFS_WRITABLE);
+    /* ZFS-on-macOS uses the dataset name as f_mntfromname (no /dev/
+     * backing). The dispatch must match the type BEFORE the /dev/
+     * defensive check, otherwise ZFS gets wrongly skipped. */
+    make_statfs(&s, "zfs", "tank/data", "/Volumes/data", 0);
+    ASSERT("zfs (dataset backing) writable -> ZFS_WRITABLE",
+           fs_dispatch_class(&s) == FS_ZFS_WRITABLE);
+    make_statfs(&s, "zfs", "tank", "/tank", 0);
+    ASSERT("zfs (pool root) writable -> ZFS_WRITABLE",
+           fs_dispatch_class(&s) == FS_ZFS_WRITABLE);
 
     /* Foreign writable types — generic (try F_FULLFSYNC, tolerate ENOTSUP) */
     make_statfs(&s, "msdos", "/dev/disk2s1", "/Volumes/EFI", 0);
