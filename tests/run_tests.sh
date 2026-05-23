@@ -336,8 +336,42 @@ test_cmd "guest-set-memory-blocks (unsupported)" \
 
 test_cmd "guest-get-cpustats" \
     '{"execute":"guest-get-cpustats"}' \
-    "object" \
-    "user" "system" "idle" "nice"
+    "array"
+
+# Spec-shape contract for guest-get-cpustats: per-CPU array of records,
+# each tagged type:"linux" with cpu/user/nice/system/idle fields (matching
+# GuestLinuxCpuStats; "linux" is the only currently-defined discriminator
+# in upstream GuestCpuStatsType — see docs/design/AGENT_BEHAVIOUR_SPEC.md Q4).
+CPUSTATS_SHAPE=$(echo '{"execute":"guest-get-cpustats"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //' | head -1 \
+    | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+arr = d['return']
+if not isinstance(arr, list) or len(arr) == 0:
+    print('FAIL: return is not a non-empty array')
+    sys.exit(1)
+need = {'type','cpu','user','nice','system','idle'}
+for i, e in enumerate(arr):
+    missing = need - set(e.keys())
+    if missing:
+        print(f'FAIL: entry {i} missing fields: {missing}')
+        sys.exit(1)
+    if e['type'] != 'linux':
+        print(f'FAIL: entry {i} type={e[\"type\"]!r}, expected \"linux\"')
+        sys.exit(1)
+    if not isinstance(e['cpu'], int) or e['cpu'] < 0:
+        print(f'FAIL: entry {i} cpu={e[\"cpu\"]!r} (expected non-negative int)')
+        sys.exit(1)
+print(f'OK: {len(arr)} per-CPU entries, all type=linux, all required fields present')
+" 2>&1)
+if echo "$CPUSTATS_SHAPE" | grep -q '^OK:'; then
+    echo "  PASS: cpustats shape (spec-conformant per-CPU array): $CPUSTATS_SHAPE"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: cpustats shape: $CPUSTATS_SHAPE"
+    FAIL=$((FAIL + 1))
+fi
 
 # =========================================================
 echo ""

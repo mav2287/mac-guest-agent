@@ -326,25 +326,65 @@ static cJSON *handle_set_memory_blocks(cJSON *args, const char **err_class, cons
 
 /* ---- guest-get-cpustats ---- */
 
+/* Per-CPU CPU-load tick counters, spec-shaped per QGA's GuestCpuStats
+ * (an array of discriminated-union records).
+ *
+ * Discriminator note: the upstream QGA spec
+ * (qga/qapi-schema.json) gates guest-get-cpustats on CONFIG_LINUX, and
+ * its GuestCpuStatsType enum currently has no "darwin" value. Emitting
+ * type:"darwin" would be rejected by strict QAPI parsers as an unknown
+ * enum value. Omitting `type` is worse — it's part of the union's
+ * required base, so strict parsers would reject "missing required
+ * field". We emit type:"linux": the user/system/idle/nice tick
+ * semantics map cleanly from macOS's PROCESSOR_CPU_LOAD_INFO to
+ * Linux's GuestLinuxCpuStats struct, so the field shape is honest
+ * even when the discriminator names the spec-defined variant.
+ *
+ * Source: docs/design/AGENT_BEHAVIOUR_SPEC.md Q4 (full reasoning,
+ * including why we're not dropping the command and why "darwin"
+ * upstream is deferred). */
 static cJSON *handle_get_cpustats(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
 
-    host_cpu_load_info_data_t cpu_load;
-    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
-    kern_return_t kr = host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
-                                       (host_info_t)&cpu_load, &count);
+    natural_t cpu_count = 0;
+    processor_info_array_t info_array = NULL;
+    mach_msg_type_number_t info_count = 0;
+    kern_return_t kr = host_processor_info(mach_host_self(),
+                                           PROCESSOR_CPU_LOAD_INFO,
+                                           &cpu_count, &info_array, &info_count);
     if (kr != KERN_SUCCESS) {
         *err_class = "GenericError";
-        *err_desc = "Failed to get CPU statistics";
+        *err_desc = "Failed to get per-CPU statistics";
         return NULL;
     }
 
-    cJSON *result = cJSON_CreateObject();
-    cJSON_AddNumberToObject(result, "user", (double)cpu_load.cpu_ticks[CPU_STATE_USER]);
-    cJSON_AddNumberToObject(result, "system", (double)cpu_load.cpu_ticks[CPU_STATE_SYSTEM]);
-    cJSON_AddNumberToObject(result, "idle", (double)cpu_load.cpu_ticks[CPU_STATE_IDLE]);
-    cJSON_AddNumberToObject(result, "nice", (double)cpu_load.cpu_ticks[CPU_STATE_NICE]);
+    processor_cpu_load_info_t cpu_load = (processor_cpu_load_info_t)info_array;
+
+    cJSON *result = cJSON_CreateArray();
+    if (!result) {
+        vm_deallocate(mach_task_self(), (vm_address_t)info_array,
+                      info_count * sizeof(integer_t));
+        *err_class = "GenericError";
+        *err_desc = "Out of memory";
+        return NULL;
+    }
+
+    for (natural_t i = 0; i < cpu_count; i++) {
+        cJSON *entry = cJSON_CreateObject();
+        if (!entry) continue;  /* cJSON failure on this entry; skip, continue */
+        cJSON_AddStringToObject(entry, "type", "linux");
+        cJSON_AddNumberToObject(entry, "cpu",    (double)i);
+        cJSON_AddNumberToObject(entry, "user",   (double)cpu_load[i].cpu_ticks[CPU_STATE_USER]);
+        cJSON_AddNumberToObject(entry, "nice",   (double)cpu_load[i].cpu_ticks[CPU_STATE_NICE]);
+        cJSON_AddNumberToObject(entry, "system", (double)cpu_load[i].cpu_ticks[CPU_STATE_SYSTEM]);
+        cJSON_AddNumberToObject(entry, "idle",   (double)cpu_load[i].cpu_ticks[CPU_STATE_IDLE]);
+        cJSON_AddItemToArray(result, entry);
+    }
+
+    vm_deallocate(mach_task_self(), (vm_address_t)info_array,
+                  info_count * sizeof(integer_t));
+
     return result;
 }
 

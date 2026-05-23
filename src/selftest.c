@@ -622,7 +622,7 @@ int safetest_run(int json_output)
         {"guest-get-users",                NULL, 1, "Logged-in users"},
         {"guest-get-load",                 NULL, 0, "System load averages"},
         {"guest-get-vcpus",                NULL, 1, "vCPU list"},
-        {"guest-get-cpustats",             NULL, 0, "CPU statistics"},
+        {"guest-get-cpustats",             NULL, 1, "CPU statistics"},
         {"guest-get-memory-block-info",    NULL, 0, "Memory block size"},
         {"guest-get-memory-blocks",        NULL, 1, "Memory blocks"},
         {"guest-get-disks",                NULL, 1, "Disk list"},
