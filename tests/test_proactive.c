@@ -208,6 +208,76 @@ static void test_fs_dispatch(void)
     ASSERT("NULL mnt -> SKIP_SPECIAL", fs_dispatch_class(NULL) == FS_SKIP_SPECIAL);
 }
 
+/* ---- fsfreeze_is_allowlisted (Q5: freeze-safe command allowlist) ---- */
+
+static void test_freeze_allowlist(void)
+{
+    printf("\n--- fsfreeze_is_allowlisted (freeze-safe command allowlist) ---\n");
+
+    /* Allowed during freeze (the documented 9): protocol commands, info,
+     * freeze control (status/freeze/freeze-list/thaw with idempotent re-freeze). */
+    const char *allowed[] = {
+        "guest-ping",
+        "guest-sync",
+        "guest-sync-id",
+        "guest-sync-delimited",
+        "guest-info",
+        "guest-fsfreeze-status",
+        "guest-fsfreeze-freeze",
+        "guest-fsfreeze-freeze-list",
+        "guest-fsfreeze-thaw",
+        NULL
+    };
+    for (int i = 0; allowed[i]; i++) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "allowed: %s", allowed[i]);
+        ASSERT(msg, fsfreeze_is_allowlisted(allowed[i]) == 1);
+    }
+
+    /* Blocked during freeze — representative commands from each category
+     * that the principled-restrictive rule excludes. If any of these starts
+     * being allowed accidentally, this test surfaces it before shipping. */
+    const char *blocked[] = {
+        /* Filesystem writes / TRIM */
+        "guest-file-write",
+        "guest-fstrim",
+        /* Time / identity writes */
+        "guest-set-time",
+        "guest-set-user-password",
+        "guest-ssh-add-authorized-keys",
+        "guest-ssh-remove-authorized-keys",
+        /* Process execution */
+        "guest-exec",
+        /* State-changing */
+        "guest-shutdown",
+        "guest-suspend-disk",
+        "guest-suspend-ram",
+        "guest-suspend-hybrid",
+        /* Read-only commands that are NOT on the allowlist (deliberate per
+         * Q5 — restrictive by default, expand only on concrete demand). */
+        "guest-get-osinfo",
+        "guest-get-fsinfo",
+        "guest-get-host-name",
+        "guest-network-get-interfaces",
+        "guest-get-cpustats",
+        "guest-file-read",
+        "guest-exec-status",
+        /* Unknown / malformed input */
+        "not-a-real-command",
+        "",
+        NULL
+    };
+    for (int i = 0; blocked[i]; i++) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "blocked: %s",
+                 blocked[i][0] ? blocked[i] : "(empty)");
+        ASSERT(msg, fsfreeze_is_allowlisted(blocked[i]) == 0);
+    }
+
+    /* NULL guard */
+    ASSERT("NULL cmd_name -> blocked", fsfreeze_is_allowlisted(NULL) == 0);
+}
+
 /* ---- SSH with Temp Files ---- */
 
 static void test_ssh_temp(void)
@@ -345,6 +415,7 @@ int main(void)
     test_channel_api();
     test_channel_pty_read();
     test_fs_dispatch();
+    test_freeze_allowlist();
     test_ssh_temp();
     test_freeze_hooks();
     test_password_validation();

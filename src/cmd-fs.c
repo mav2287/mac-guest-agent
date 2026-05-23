@@ -673,31 +673,57 @@ void fsfreeze_continuous_sync(void)
     sync();
 }
 
-/* ---- Freeze-safe command check ---- */
+/* ---- Freeze-safe command check ----
+ *
+ * Conservative-by-default per the design spec
+ * (docs/design/AGENT_BEHAVIOUR_SPEC.md Q5): a command is allowed during
+ * freeze iff (a) its handler does not write to any file or device,
+ * (b) does not execute external programs, and (c) does not change the
+ * agent's freeze state except by reporting status, by idempotent re-entry
+ * into the current state, or by exiting via thaw.
+ *
+ * Current allowlist = upstream's six (ping/info/sync/sync-delimited/
+ * fsfreeze-status/fsfreeze-thaw) plus our `guest-sync-id` extension and
+ * idempotent re-freeze (`fsfreeze-freeze` / `fsfreeze-freeze-list`). The
+ * idempotent re-freeze is a deliberate divergence from upstream — our
+ * handler returns the current count without double-freeze damage, which
+ * benefits backup tools that retry on timeout. Documented in the spec.
+ *
+ * Read-only inspection commands (guest-get-*, guest-network-get-*, file
+ * read ops, etc.) are intentionally NOT on this list. Although our
+ * pseudo-freeze isn't a true I/O suspension and reads would be
+ * functionally safe, we have no concrete consumer demand to justify
+ * the surface expansion. Expand only when a real use case appears —
+ * see the spec doc for the rule.
+ */
 
-int fsfreeze_command_allowed(const char *cmd_name)
+/* Pure-function variant — checks only the allowlist, ignores freeze_status.
+ * Exposed (non-static) for unit testing in tests/test_proactive.c. */
+int fsfreeze_is_allowlisted(const char *cmd_name)
 {
-    if (!freeze_status) return 1;  /* Not frozen, everything allowed */
-
-    /* Only these commands are allowed during freeze */
+    if (!cmd_name) return 0;
     static const char *allowed[] = {
         "guest-ping",
         "guest-sync",
-        "guest-sync-id",
+        "guest-sync-id",                 /* our extension; harmless during freeze */
         "guest-sync-delimited",
         "guest-info",
         "guest-fsfreeze-status",
-        "guest-fsfreeze-freeze",
-        "guest-fsfreeze-freeze-list",
+        "guest-fsfreeze-freeze",         /* idempotent — divergence from upstream */
+        "guest-fsfreeze-freeze-list",    /* idempotent — divergence from upstream */
         "guest-fsfreeze-thaw",
         NULL
     };
-
     for (int i = 0; allowed[i]; i++) {
-        if (strcmp(cmd_name, allowed[i]) == 0)
-            return 1;
+        if (strcmp(cmd_name, allowed[i]) == 0) return 1;
     }
     return 0;
+}
+
+int fsfreeze_command_allowed(const char *cmd_name)
+{
+    if (!freeze_status) return 1;          /* Not frozen — everything is allowed. */
+    return fsfreeze_is_allowlisted(cmd_name);
 }
 
 /* ---- Init ---- */

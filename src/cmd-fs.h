@@ -11,6 +11,11 @@ void fsfreeze_continuous_sync(void);
 /* Called from agent.c to check if a command is allowed during freeze */
 int fsfreeze_command_allowed(const char *cmd_name);
 
+/* Pure-function variant — checks only the allowlist, ignores freeze_status.
+ * Exposed for unit testing (see tests/test_proactive.c). Returns 1 if the
+ * command is in the freeze-safe allowlist, 0 otherwise. */
+int fsfreeze_is_allowlisted(const char *cmd_name);
+
 /* ---- Per-filesystem-type dispatch (see docs/design/AGENT_BEHAVIOUR_SPEC.md Q1) ---- */
 
 typedef enum {
