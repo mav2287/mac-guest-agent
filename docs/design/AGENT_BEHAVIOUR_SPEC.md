@@ -256,31 +256,48 @@ Our response is a flat aggregate object `{user, system, idle, nice}` for a comma
 
 ### Decision
 
-**Option C — stop registering `guest-get-cpustats` on macOS.**
+**Fix the shape to spec-conformant per-CPU array; use `type: "linux"` as the discriminator.**
 
-Reasoning:
+Reasoning, drawing on Phase 1 Targets 1, 5, 6 and follow-on parser-behaviour analysis:
 
-- The spec gates the command on `CONFIG_LINUX`. Registering it on macOS makes the agent claim to implement a Linux-only command. Honest is "we don't."
-- PVE doesn't consume the command anyway (Phase 1 Target 5 settled this), so unregistering breaks no PVE workflow.
-- The flat aggregate (D) and the fake-linux variant (B) both lie in different ways — to the schema or to the consumer.
-- Extending the union (A) requires either fork-the-spec (upstream cooperation we don't have) or shipping a discriminator value that breaks strict clients. The work is real and the value is marginal — and the consumers who'd actually want per-CPU stats on macOS can run `top`/`vm_stat` via `guest-exec`, or read it from `--self-test-json`'s env block.
-- Removing the registration also simplifies the agent's command surface from 45 → 44 — a small honesty win in `guest-info`'s `supported_commands` list (now matches what we actually deliver in-spec).
+- The current flat aggregate object is structurally invalid against the spec at the array level (spec returns `['GuestCpuStats']` — a list, not an object). Anything we change to is an improvement; the question is which improvement.
+- Looking at parser behaviour for each option:
+  - `type: "linux"` — accepted by strict QAPI parsers (known enum value), accepted by lax parsers, field semantics (`user`/`nice`/`system`/`idle` ticks) translate correctly from macOS's `HOST_PROCESSOR_INFO` to Linux's `GuestLinuxCpuStats`. Zero parser-rejection risk.
+  - `type: "darwin"` — rejected by strict QAPI parsers (unknown enum value of `GuestCpuStatsType`), accepted by lax parsers. Honest about source OS but creates a parser-failure risk for the strict set.
+  - No `type` field — rejected by strict QAPI parsers (the field is part of the union's `base` and is required by schema), accepted by lax parsers. *More* severe spec violation than `type: "darwin"` because it's a missing required field, not an unknown enum value.
+- Cross-platform precedent confirms we're not setting a bad pattern: FreeBSD QGA and Windows QGA both **decline to register** `guest-get-cpustats` (the upstream `'if': 'CONFIG_LINUX'` gate compiles it out on non-Linux builds). There is no precedent anywhere for `type: "darwin"`. If we wanted to be that precedent we'd need upstream collaboration to add the enum value — which is deferred (see PLAN.md note on possible future work).
+- PVE doesn't consume the command (Phase 1 Target 5). Strictly speaking, any of the four options work in PVE's lax-parser world. We pick `type: "linux"` because it's safe for the strict-parser fraction too at zero additional cost.
+
+The honest disclosure of this choice lives in the source-file comment and in the `--self-test-json` env block:
+
+```c
+/* Use type:"linux" rather than "darwin": the QGA spec's GuestCpuStatsType
+ * enum currently has no "darwin" value, and emitting one would be rejected
+ * by strict QAPI parsers. The user/system/idle/nice tick semantics translate
+ * correctly from macOS's HOST_PROCESSOR_INFO to Linux's struct, so the field
+ * shape is honest even if the discriminator names the spec-defined variant.
+ * If upstream QEMU ever adds a "darwin" variant to GuestCpuStatsType
+ * (see PLAN.md "possible future work"), switch to it then. */
+```
 
 ### Implementation implications
 
-- `src/cmd-hardware.c cmd_hardware_init()` — delete the line:
-  ```c
-  command_register("guest-get-cpustats", handle_get_cpustats, 1);
-  ```
-- `handle_get_cpustats()` itself can stay in the file (compile-time dead code is harmless) or be deleted. Delete it — no point keeping dead code with a known spec violation. Same for `host_statistics(HOST_CPU_LOAD_INFO)` if it's unused after.
-- `docs/PVE.md` — note explicitly that CPU stats are out of scope for this agent; PVE's CPU% gauge comes from QEMU vCPU thread time on the host, not from QGA.
-- `docs/COMMAND_STATUS.md` (if it lists 45) — update to 44 commands; note `guest-get-cpustats` is dropped with reasoning.
-- Update the safe-test expectation (`tests/run_tests.sh`, `--safe-test`'s test array in `selftest.c:626-627`) if `guest-get-cpustats` was being exercised. Looking at the saved earlier evidence: `--safe-test` runs `Memory block size` and `Memory blocks`, not cpustats. Likely no test change needed. Verify when implementing.
+- `src/cmd-hardware.c handle_get_cpustats()` — rewrite to:
+  1. Call `host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &cpu_count, &info, &info_count)` to get per-CPU tick arrays (Apple API present since 10.0 — works on every supported version).
+  2. Build a `cJSON_CreateArray()` and append one object per CPU containing `{type: "linux", cpu: N, user: ticks, nice: 0, system: ticks, idle: ticks}`.
+  3. `nice` ticks: macOS's `host_processor_info` doesn't separate nice from user; report `nice: 0` and accept that niced time rolls into `user`. Document in the code comment.
+  4. Free the Mach buffer via `vm_deallocate(mach_task_self(), (vm_address_t)info, info_count * sizeof(integer_t))`.
+- Keep the registration in `cmd_hardware_init()` — same command name, fixed shape.
+- `--self-test-json` env block (`emit_system_info()` in `src/selftest.c`) — add a brief note describing the cpustats shape and the `type:"linux"` discriminator-choice rationale, so anyone tracing where the `"linux"` came from finds the explanation without having to read source.
+- No removal from `docs/COMMAND_STATUS.md`; command count stays 45.
+- No test changes needed — `--safe-test` doesn't currently exercise `guest-get-cpustats` (verified in `src/selftest.c:626-627`: the array has `Memory block size` and `Memory blocks`, no cpustats entry).
 
 ### Failure modes
 
-- A client that explicitly calls `qm agent <vmid> get-cpustats` after this change gets `{error: {class: "GenericError", desc: "command not registered"}}` or similar. This is correct and honest — we don't implement it.
-- An older version of our agent (≤2.4.2) is still installed somewhere: it still returns the old aggregate shape. Operators don't see a behaviour change on upgrade unless they actively use `get-cpustats`. No breakage.
+- `host_processor_info` returns non-zero (Mach API failure) → return the existing error path: `{class: "GenericError", desc: "Failed to get per-CPU statistics"}`. Caller sees a spec-shaped error response.
+- Strict QAPI consumer encounters the response → accepts cleanly because `type: "linux"` is a valid discriminator and the field set matches `GuestLinuxCpuStats`'s required fields.
+- Lax consumer encounters the response → accepts cleanly; field shapes are what every QGA spec consumer already expects from Linux guests.
+- An operator examines a response from a macOS guest and notices `type: "linux"` → the in-source comment and the `--self-test-json` env note both explain the deliberate choice and the upstream path that would make it `"darwin"` honestly.
 
 ---
 
@@ -309,97 +326,55 @@ Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `
 
 ### Decision
 
-**Option C — principled rule, enumerated allowlist.**
+**Keep the current 9-command allowlist. No expansion. Document the principled-restrictive rule and the deliberate divergences from upstream.**
 
-Rule: a command is freeze-safe iff (a) its handler does not write to any file or device, (b) its handler does not execute external programs, and (c) it does not change the agent's freeze state except (i) reporting current state, (ii) idempotent re-entry into the current state, or (iii) exiting the state via `thaw`.
-
-Resulting allowlist (after Q4 removes `guest-get-cpustats`):
+The 9 commands stay as they are:
 
 ```
 Protocol / control:
   guest-ping
   guest-sync
-  guest-sync-id
+  guest-sync-id          (our extension; harmless during freeze)
   guest-sync-delimited
   guest-info
 
-Freeze control (idempotent re-freeze kept; documented divergence from upstream):
+Freeze control:
   guest-fsfreeze-status
-  guest-fsfreeze-freeze
-  guest-fsfreeze-freeze-list
+  guest-fsfreeze-freeze        (idempotent — divergence from upstream)
+  guest-fsfreeze-freeze-list   (idempotent — divergence from upstream)
   guest-fsfreeze-thaw
-
-Read-only inspection (newly added vs current):
-  guest-get-time
-  guest-get-timezone
-  guest-get-host-name
-  guest-get-osinfo
-  guest-get-users
-  guest-get-load
-  guest-get-vcpus
-  guest-get-fsinfo
-  guest-get-disks
-  guest-get-diskstats
-  guest-get-memory-blocks
-  guest-get-memory-block-info
-  guest-network-get-interfaces
-  guest-network-get-route
-  guest-ssh-get-authorized-keys
-  guest-exec-status                 (queries existing exec, doesn't start new ones)
-
-File operations (read-only only):
-  guest-file-open
-  guest-file-read
-  guest-file-seek
-  guest-file-close
-  guest-file-flush                  (flushes our buffers; idempotent; safe)
-
-Total: 28 commands allowed during freeze.
 ```
 
-Blocked during freeze:
+Reasoning, drawing on the Phase 1 Linux/Windows/BSD comparison:
 
-```
-Filesystem write:
-  guest-file-write
-  guest-fstrim                      (issues TRIM, may interact with FS metadata)
+- The upstream freeze allowlist in `qga/main.c` is **6 commands** (`ping`, `info`, `sync`, `sync-delimited`, `fsfreeze-status`, `fsfreeze-thaw`) and is **shared across Linux, Windows, and BSD builds** — same list applies regardless of underlying freeze primitive. Upstream calibrated for the most restrictive case (Linux FIFREEZE, a true I/O suspension) and Windows VSS / BSD UFSSUSPEND inherit the conservatism.
+- Our 9 are a strict superset of upstream's 6: we add `guest-sync-id` (our extension command, harmless) and we allow idempotent re-entry into the frozen state via `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list`. The idempotent re-freeze is a deliberate divergence — our handler at `src/cmd-fs.c:286-288` returns the current `frozen_volume_count` if already frozen without any double-freeze damage, which benefits backup tools that retry on timeout.
+- Earlier we considered expanding to 28 commands (all `guest-get-*`, read-only file ops, `exec-status`, etc.) on the reasoning that our pseudo-freeze isn't a true I/O suspension and reads are functionally safe during it. **Rejected** for three reasons:
+  1. No current consumer demand. PVE only calls `freeze`/`status`/`thaw` during the freeze window. We have zero evidence anyone wants `get-osinfo` or `network-get-interfaces` mid-freeze.
+  2. Per-FS-type allowlists would be even worse: APFS-snapshot freezes (consistency point captured) could in principle allow more than HFS+-flush-only freezes (no consistency point if writes happen), but tracking which kind of freeze we're in and dispatching the allowlist accordingly adds significant state-machine complexity for unclear benefit.
+  3. Conservative default is safe regardless of underlying semantics; permissive default is only safe if we can guarantee the semantics support it. The asymmetry favours conservative.
 
-Time / identity write:
-  guest-set-time
-  guest-set-user-password
-  guest-ssh-add-authorized-keys
-  guest-ssh-remove-authorized-keys
-
-Process execution:
-  guest-exec                        (starts new processes that may write)
-
-State-changing:
-  guest-shutdown
-  guest-suspend-disk
-  guest-suspend-ram
-  guest-suspend-hybrid
-
-Already unsupported (rejected before freeze check anyway):
-  guest-set-vcpus
-  guest-set-memory-blocks
-
-Dropped per Q4:
-  guest-get-cpustats                (unregistered)
-```
-
-Idempotent re-freeze is **kept** with documented divergence from upstream. Reasoning: our handler at `cmd-fs.c:286-288` already returns the current `frozen_volume_count` if already frozen — no double-freeze damage. A backup tool that retries on timeout (e.g. PVE itself, which has a timeout in `guest_fs_freeze`) benefits. The cost of strict alignment is a real regression for retry-on-timeout patterns.
+If a real use case emerges later that needs specific commands added (a backup tool that genuinely benefits from querying `get-fsinfo` mid-freeze, for example), expand at that point with the concrete justification.
 
 ### Implementation implications
 
-- `src/cmd-fs.c fsfreeze_command_allowed()` — replace the 9-entry static array with the 28-entry list above. Update the comment to state the principled rule and reference this spec doc.
-- `src/agent.c:73-82` — no change to the gating mechanism. Same dispatch.
-- Add a unit test in `tests/test_proactive.c` exercising `fsfreeze_command_allowed` against representative commands from each category (read-only allowed, write blocked, exec blocked, freeze-control allowed).
+- **No code change.** `src/cmd-fs.c fsfreeze_command_allowed()` keeps its current 9-entry static array.
+- Update the function's comment to state the principled-restrictive rule and link to this spec doc:
+  ```c
+  /* Commands allowed during freeze. Conservative-by-default per the design
+   * spec (see docs/design/AGENT_BEHAVIOUR_SPEC.md, Question 5): only
+   * protocol-level commands, freeze control (idempotent re-freeze accepted
+   * — deliberate divergence from upstream which blocks re-freeze), and
+   * thaw. Read-only inspection commands are NOT allowed during freeze
+   * unless a concrete use case justifies expansion. */
+  ```
+- One small clarifying assert in unit tests (`tests/test_proactive.c`): exercise `fsfreeze_command_allowed` with representative commands from each category to lock the contract.
 
 ### Failure modes
 
-- A caller that targets upstream's strict 6-command allowlist won't be surprised — everything they'd send works. Our extra-permissive behaviour is a strict superset.
-- A caller that expected upstream's blocked-re-freeze behaviour and sends `freeze` twice gets a successful response both times (idempotent). They might be confused if they expected an error on the second call, but the documented behaviour is clear.
-- A new command added in the future is implicitly blocked during freeze (since the allowlist is enumerated, not derived from a flag). That's the safe default. The PR that adds the command must update the allowlist explicitly.
+- A caller that targets upstream's strict 6-command allowlist works fine — everything they'd send is in our allowed set.
+- A caller that expected upstream's blocked-re-freeze behaviour and sends `freeze` twice gets a successful response both times (the idempotent divergence). Documented in this spec.
+- A new command added in the future is implicitly blocked during freeze (the allowlist is an enumerated array, not derived from a flag). Safe default. Any PR that adds a new command needing freeze-time access must update this allowlist explicitly and justify it.
 
 ---
 
@@ -618,23 +593,25 @@ _(to be filled)_
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | Per-FS freeze strategy | **Hybrid (Option C):** explicit deny-list for skip categories (network / special / autofs / RDONLY / TM-snapshot path); generic try-`F_FULLFSYNC`-with-`ENOTSUP`-tolerance for the rest. APFS gets `tmutil localsnapshot` + `F_FULLFSYNC` (defence in depth). ZFS gets `zfs snapshot` (if `zfs` CLI present), else falls through to `F_FULLFSYNC`. Per-treatment counters: `snapshotted`, `zfs_snapshotted`, `fullfsynced`, `flushed_only`, `skipped_network`, `skipped_special`, `skipped_readonly`. |
+| 1 | Per-FS freeze strategy | **Hybrid:** explicit deny-list for skip categories (network / special / autofs / RDONLY); generic try-`F_FULLFSYNC`-with-`ENOTSUP`-tolerance for the rest. APFS gets `tmutil localsnapshot` + `F_FULLFSYNC` (defence in depth). ZFS gets `zfs snapshot` (if `zfs` CLI present), else falls through to `F_FULLFSYNC`. Per-treatment counters: `snapshotted`, `zfs_snapshotted`, `fullfsynced`, `flushed_only`, `skipped_network`, `skipped_special`, `skipped_readonly`. |
 | 2 | `freeze-list` mountpoints | **Implement subset behaviour.** Distinct handler parses `args.mountpoints`; filters the dispatch loop; same per-FS strategy per Q1; same counters; same wire response. |
 | 3 | Freeze response shape | **Keep `int` wire response (spec-conformant).** Per-treatment breakdown surfaces in (a) the agent log INFO line, (b) `--self-test-json`'s `freeze_dispatch` description, (c) `pve-verify.sh` which fetches the log line via `qm agent exec tail \| grep`. |
-| 4 | `guest-get-cpustats` shape | **Stop registering on macOS.** Spec gates it on `CONFIG_LINUX`; PVE doesn't consume it; faking `linux`-typed responses misrepresents; extending the union requires upstream cooperation we don't have. Delete `handle_get_cpustats` along with the registration. Drops command count 45 → 44. |
-| 5 | Allowlist alignment | **Principled rule, enumerated to 28 commands.** Allow during freeze iff handler is read-only, doesn't execute external programs, and doesn't change agent state except per the freeze-status flag. Idempotent re-freeze kept (documented divergence from upstream's 6). |
-| 6 | Frozen-state persistence | **No change; document divergence.** Our pseudo-freeze isn't a true I/O suspension, so the upstream marker + logging-disable protections aren't needed. Existing APFS snapshot orphan-cleanup already handles the only piece of crash-time state that matters. Documented in `FREEZE_SEMANTICS.md`. |
+| 4 | `guest-get-cpustats` shape | **Fix shape to spec-conformant per-CPU array with `type: "linux"` discriminator.** Use `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` for per-CPU data. `type: "linux"` chosen over `"darwin"` because the upstream `GuestCpuStatsType` enum has no `"darwin"` value (strict parsers would reject it); over omitting `type` because the field is part of the union's required `base` and omitting it is a more severe spec violation. Honest disclosure in code comment + `--self-test-json` env block. |
+| 5 | Allowlist alignment | **Keep current 9-command allowlist.** No expansion. Our 9 = upstream's 6 + `guest-sync-id` (extension) + idempotent `freeze` / `freeze-list` (deliberate divergence). Document the principled-restrictive rule; expand only when a concrete consumer needs a specific command. One allowlist regardless of per-FS dispatch type. |
+| 6 | Frozen-state persistence | **No change; document divergence.** Our pseudo-freeze isn't a true I/O suspension, so the upstream marker + logging-disable protections aren't needed. Existing APFS snapshot orphan-cleanup already handles the only piece of crash-time state that matters. Windows VSS (same semantic class as us) inherits the same upstream protections without needing them either; we're consistent with that pattern. Documented in `FREEZE_SEMANTICS.md`. |
 | 7 | Documentation honesty | **Three revisions:** rewrite `docs/PVE.md` memory-reporting claim; refine `README.md` + `docs/COMPATIBILITY.md` + `src/channel.c` ISA-vs-VirtIO rationale to distinguish VZ from QEMU/OpenCore; create new `docs/design/FREEZE_SEMANTICS.md` with the per-FS dispatch table and divergence notes. |
+
+**Not currently planned (possible future work):** open a qemu-devel discussion proposing a `darwin` variant for `GuestCpuStatsType` and any other macOS-relevant QGA additions. Deferred because (a) FreeBSD and Windows QGAs both *don't register* `guest-get-cpustats` (the spec's `'if': 'CONFIG_LINUX'` gate compiles it out), so there is no upstream precedent for a non-Linux variant; (b) no current consumer needs `type: "darwin"` from us; (c) upstream patch cycles are months. Will surface naturally if the project gets enough attention to justify the effort.
 
 ## Implementation queue
 
-Each item below is intended as a focused commit. Ordering matters: Q1's code change introduces helpers Q2 and Q3 build on; Q5's allowlist change depends on Q4 (deletes `guest-get-cpustats` from registration before the allowlist enumerates it); doc-honesty (Q7) lands last so its tables match shipped behaviour.
+Each item below is intended as a focused commit. Ordering: Q1's code change introduces helpers Q2 builds on; Q4 is independent; Q7 lands last so its tables match shipped behaviour.
 
-1. **Q1 + Q3 (agent log) — per-FS dispatch in `sync_all_volumes`.** New `fs_dispatch_class()` helper, per-treatment counter struct, INFO log line summarising the breakdown. Existing single `int` wire response preserved.
+1. **Q1 + Q3 (agent log) — per-FS dispatch in `sync_all_volumes`.** New `fs_dispatch_class()` helper, per-treatment counter struct, INFO log line summarising the breakdown. Existing single `int` wire response preserved. Unit test in `tests/test_proactive.c` for `fs_dispatch_class` covering each row of the dispatch table.
 2. **Q2 — `freeze-list` subset handler.** Distinct `handle_fsfreeze_freeze_list()`, `sync_all_volumes_filtered()` variant taking a mountpoint allowlist. Unit test in `tests/test_proactive.c`.
 3. **Q1 (ZFS) — `zfs snapshot` support.** ZFS CLI detection at startup; `create_zfs_snapshot()` / `delete_zfs_snapshot()` mirroring the APFS path; thaw cleanup. Wired into the dispatch table.
-4. **Q4 — drop `guest-get-cpustats`.** Remove registration in `cmd_hardware_init`; delete `handle_get_cpustats` and any now-unused helpers. Update command count where mentioned.
-5. **Q5 — allowlist expansion.** Replace 9-entry static array in `fsfreeze_command_allowed()` with the 28-entry list. Unit test in `tests/test_proactive.c` exercising representative commands.
-6. **Q3 (`--self-test-json`) — `freeze_dispatch` block.** Extend `emit_system_info()` to describe the per-FS dispatch policy and the log path.
+4. **Q4 — fix `guest-get-cpustats` shape.** Rewrite `handle_get_cpustats` to return per-CPU array via `host_processor_info(PROCESSOR_CPU_LOAD_INFO)`. Each element: `{type: "linux", cpu: N, user, nice: 0, system, idle}`. Honest in-source comment explaining the `"linux"` choice.
+5. **Q5 — allowlist comment + unit test.** No allowlist change. Update the comment on `fsfreeze_command_allowed()` to state the principled-restrictive rule and reference the spec doc. Add a unit test covering representative commands from each category (locks the contract).
+6. **Q3 (`--self-test-json`) — `freeze_dispatch` block.** Extend `emit_system_info()` to describe the per-FS dispatch policy, the log path, and the cpustats-discriminator-choice note from Q4.
 7. **Q7 — documentation honesty.** All three doc revisions (memory claim, ISA rationale, new `FREEZE_SEMANTICS.md`) in one commit, landing after the code is in.
-8. **Phase 3 entry — `pve-verify.sh` enhancements.** Q3's log-fetch wiring, Q5's behavioural-check rewrite, the one-shot wrap. Tracked in Phase 3 of `PLAN.md`.
+8. **Phase 3 entry — `pve-verify.sh` enhancements.** Q3's log-fetch wiring, the behavioural-check rewrite (content-not-exit-code per Phase 1 Target 4), the one-shot wrap. Tracked in Phase 3 of `PLAN.md`.
