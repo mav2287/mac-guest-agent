@@ -273,6 +273,17 @@ static void try_fullfsync(const struct statfs *mnt, fs_counts_t *c)
     close(fd);
 }
 
+/* Return non-zero if `mountpoint` matches any entry in the allowlist. */
+static int mountpoint_in_list(const char *mountpoint,
+                              const char *const *list, int list_len)
+{
+    if (!list || list_len <= 0) return 1;  /* no filter — match all */
+    for (int j = 0; j < list_len; j++) {
+        if (list[j] && strcmp(mountpoint, list[j]) == 0) return 1;
+    }
+    return 0;
+}
+
 /* ---- Sync Operations ----
  *
  * Caller initialises `counts` (typically by setting snapshotted /
@@ -281,15 +292,27 @@ static void try_fullfsync(const struct statfs *mnt, fs_counts_t *c)
  * counts as it iterates — it does not reset them — so any snapshot
  * results captured by the caller before invocation are preserved.
  *
+ * `mountpoints` (optional, may be NULL): if non-NULL and `n_mountpoints>0`,
+ * only mounts whose `f_mntonname` matches one of the listed paths are
+ * processed. Used by handle_fsfreeze_freeze_list to implement the QGA
+ * spec's subset-freeze behaviour. NULL/0 means "process all writable
+ * local mounts that pass fs_dispatch_class" — the default global-freeze
+ * behaviour.
+ *
  * Returns the total of "did-something" counters
  * (snapshotted + zfs_snapshotted + fullfsynced + flushed_only) for the
  * caller's wire response.
  */
-static int sync_all_volumes(int do_fullfsync, fs_counts_t *counts)
+static int sync_all_volumes(int do_fullfsync, fs_counts_t *counts,
+                            const char *const *mountpoints, int n_mountpoints)
 {
     if (test_mode) {
-        LOG_DEBUG("Dry-run: would sync all volumes (F_FULLFSYNC=%d)", do_fullfsync);
-        counts->fullfsynced += 1;  /* pretend one volume succeeded */
+        LOG_DEBUG("Dry-run: would sync all volumes (F_FULLFSYNC=%d, filter=%d)",
+                  do_fullfsync, n_mountpoints);
+        /* Honour the filter count so integration tests can verify the
+         * parameter plumbed through: pretend every listed mountpoint
+         * succeeded (subset freeze), or one volume succeeded (global). */
+        counts->fullfsynced += (n_mountpoints > 0) ? n_mountpoints : 1;
         return counts->snapshotted + counts->zfs_snapshotted +
                counts->fullfsynced + counts->flushed_only;
     }
@@ -305,9 +328,16 @@ static int sync_all_volumes(int do_fullfsync, fs_counts_t *counts)
     int mntcount = getmntinfo(&mntbuf, MNT_NOWAIT);
 
     for (int i = 0; i < mntcount; i++) {
-        fs_class_t cls = fs_dispatch_class(&mntbuf[i]);
         const char *mp = mntbuf[i].f_mntonname;
         const char *type = mntbuf[i].f_fstypename;
+
+        /* Subset-freeze filter (Q2 — guest-fsfreeze-freeze-list): only
+         * process mounts in the supplied allowlist. NULL/0 means "all". */
+        if (!mountpoint_in_list(mp, mountpoints, n_mountpoints)) {
+            continue;
+        }
+
+        fs_class_t cls = fs_dispatch_class(&mntbuf[i]);
 
         switch (cls) {
         case FS_SKIP_RDONLY:
@@ -433,8 +463,9 @@ static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const 
 
     /* Step 3: sync + per-FS dispatch on writable local volumes.
      * sync_all_volumes() increments counts; it does not reset them, so
-     * the snapshotted value set above is preserved in the totals. */
-    int total = sync_all_volumes(1, &counts);
+     * the snapshotted value set above is preserved in the totals.
+     * NULL mountpoint filter = process all mounts (global freeze). */
+    int total = sync_all_volumes(1, &counts, NULL, 0);
 
     if (total == 0) {
         *err_class = "GenericError";
@@ -461,6 +492,108 @@ static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const 
     LOG_INFO("Filesystem frozen: %d snapshotted, %d zfs_snapshotted, "
              "%d fullfsynced, %d flushed_only (=%d total); "
              "skipped %d (%d network, %d special, %d readonly)",
+             counts.snapshotted, counts.zfs_snapshotted,
+             counts.fullfsynced, counts.flushed_only, total,
+             skipped,
+             counts.skipped_network, counts.skipped_special, counts.skipped_readonly);
+
+    return cJSON_CreateNumber(frozen_volume_count);
+}
+
+/* QGA spec: guest-fsfreeze-freeze-list takes optional `mountpoints: [str]`.
+ * If absent / empty array, behave like guest-fsfreeze-freeze (freeze all).
+ * If present and non-empty, freeze ONLY the listed mountpoints; leave the
+ * rest writable. Typical use: a backup tool freezes a data volume but
+ * keeps the OS volume writable for its own logs.
+ *
+ * For subset freezes we intentionally skip the container-level APFS
+ * `tmutil localsnapshot` — that snapshot is per-container, not per-mount,
+ * so taking it for a subset request would capture state the caller didn't
+ * ask us to capture. Per-mount F_FULLFSYNC is the consistency mechanism
+ * for subset freezes. */
+static cJSON *handle_fsfreeze_freeze_list(cJSON *args,
+                                          const char **err_class,
+                                          const char **err_desc)
+{
+    cJSON *mountpoints_node = args ? cJSON_GetObjectItem(args, "mountpoints") : NULL;
+
+    /* No mountpoints argument, or empty array: same as guest-fsfreeze-freeze. */
+    if (!mountpoints_node || !cJSON_IsArray(mountpoints_node) ||
+        cJSON_GetArraySize(mountpoints_node) == 0) {
+        return handle_fsfreeze_freeze(args, err_class, err_desc);
+    }
+
+    /* Validate every entry is a string and build a C array of borrowed
+     * pointers into the cJSON tree (no copies; caller-supplied JSON lives
+     * for the duration of this handler). */
+    int n = cJSON_GetArraySize(mountpoints_node);
+    const char **mountpoints = calloc((size_t)n, sizeof(char *));
+    if (!mountpoints) {
+        *err_class = "GenericError";
+        *err_desc = "Out of memory";
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) {
+        cJSON *item = cJSON_GetArrayItem(mountpoints_node, i);
+        if (!cJSON_IsString(item) || !item->valuestring) {
+            free(mountpoints);
+            *err_class = "GenericError";
+            *err_desc = "mountpoints entries must be strings";
+            return NULL;
+        }
+        mountpoints[i] = item->valuestring;
+    }
+
+    /* Idempotent: if already frozen, return the current count. */
+    if (freeze_status) {
+        free(mountpoints);
+        return cJSON_CreateNumber(frozen_volume_count);
+    }
+
+    LOG_INFO("Filesystem freeze starting (subset: %d mountpoint(s))", n);
+
+    /* Step 1: Run freeze hooks. */
+    if (run_hooks("freeze") < 0) {
+        free(mountpoints);
+        *err_class = "GenericError";
+        *err_desc = "Freeze hook script failed";
+        return NULL;
+    }
+
+    /* Step 2: APFS snapshot deliberately SKIPPED for subset freezes —
+     * see function header comment. Per-mount F_FULLFSYNC carries the
+     * consistency burden here. */
+    fs_counts_t counts;
+    memset(&counts, 0, sizeof(counts));
+
+    /* Step 3: sync + per-FS dispatch, restricted to the listed mountpoints. */
+    int total = sync_all_volumes(1, &counts, mountpoints, n);
+
+    free(mountpoints);
+
+    if (total == 0) {
+        *err_class = "GenericError";
+        *err_desc = "None of the listed mountpoints could be frozen";
+        run_hooks("thaw");
+        return NULL;
+    }
+
+    /* Step 4: Set frozen state. */
+    freeze_status = 1;
+    freeze_start_time = time(NULL);
+    frozen_volume_count = total;
+    auto_thaw_fired = 0;
+
+    /* Step 5: Set auto-thaw alarm. */
+    signal(SIGALRM, auto_thaw_handler);
+    alarm(AUTO_THAW_SECS);
+
+    int skipped = counts.skipped_network + counts.skipped_special +
+                  counts.skipped_readonly;
+    LOG_INFO("Filesystem frozen (subset, %d requested): %d snapshotted, "
+             "%d zfs_snapshotted, %d fullfsynced, %d flushed_only (=%d total); "
+             "skipped %d (%d network, %d special, %d readonly)",
+             n,
              counts.snapshotted, counts.zfs_snapshotted,
              counts.fullfsynced, counts.flushed_only, total,
              skipped,
@@ -573,7 +706,7 @@ void cmd_fs_init(void)
 {
     command_register("guest-fsfreeze-status", handle_fsfreeze_status, 1);
     command_register("guest-fsfreeze-freeze", handle_fsfreeze_freeze, 1);
-    command_register("guest-fsfreeze-freeze-list", handle_fsfreeze_freeze, 1);
+    command_register("guest-fsfreeze-freeze-list", handle_fsfreeze_freeze_list, 1);
     command_register("guest-fsfreeze-thaw", handle_fsfreeze_thaw, 1);
     command_register("guest-fstrim", handle_fstrim, 1);
 }

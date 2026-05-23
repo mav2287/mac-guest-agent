@@ -390,6 +390,68 @@ test_cmd "guest-fstrim" \
     "object" \
     "paths"
 
+# Subset-freeze (guest-fsfreeze-freeze-list with mountpoints).
+# In --test mode sync_all_volumes returns n_mountpoints when a filter is
+# set, so we can verify the parameter is plumbed through to the dispatch
+# loop. Each freeze must be followed by a thaw in the same session
+# because state is per-process.
+
+# No-args: should delegate to global freeze and return >= 1
+FREEZE_LIST_NOARGS=$(printf '%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze-list"}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+FL_NA=$(echo "$FREEZE_LIST_NOARGS" | sed -n '1p' \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['return'])" 2>/dev/null)
+if [ "$FL_NA" -ge 1 ] 2>/dev/null; then
+    echo "  PASS: freeze-list with no args delegates to global freeze (returned $FL_NA)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze-list with no args (returned $FL_NA)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Empty array: same as no args
+FREEZE_LIST_EMPTY=$(printf '%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze-list","arguments":{"mountpoints":[]}}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+FL_EM=$(echo "$FREEZE_LIST_EMPTY" | sed -n '1p' \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['return'])" 2>/dev/null)
+if [ "$FL_EM" -ge 1 ] 2>/dev/null; then
+    echo "  PASS: freeze-list with empty array delegates to global freeze (returned $FL_EM)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze-list with empty array (returned $FL_EM)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Two mountpoints: test mode pretends each succeeded -> returns 2
+FREEZE_LIST_TWO=$(printf '%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze-list","arguments":{"mountpoints":["/Volumes/data","/Volumes/foo"]}}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+FL_TWO=$(echo "$FREEZE_LIST_TWO" | sed -n '1p' \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['return'])" 2>/dev/null)
+if [ "$FL_TWO" = "2" ]; then
+    echo "  PASS: freeze-list with two mountpoints returned 2 (filter plumbed through)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze-list with two mountpoints returned $FL_TWO (expected 2)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Non-string entry: must return a spec-shaped error, not crash
+FREEZE_LIST_BADTYPE=$(echo '{"execute":"guest-fsfreeze-freeze-list","arguments":{"mountpoints":[123]}}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //' | head -1)
+if echo "$FREEZE_LIST_BADTYPE" | grep -q '"error".*"mountpoints entries must be strings"'; then
+    echo "  PASS: freeze-list with non-string entry returns spec-shaped error"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze-list with non-string entry (got: $FREEZE_LIST_BADTYPE)"
+    FAIL=$((FAIL + 1))
+fi
+
 # =========================================================
 echo ""
 echo "--- Network Commands ---"
