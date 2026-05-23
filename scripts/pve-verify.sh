@@ -17,6 +17,15 @@
 #
 # 'set -e' is intentionally NOT used: a verification script must run every
 # check, not abort on the first failure.
+#
+# TODO (planned enhancement): collapse the Tier 2 → Tier 1 contributor flow
+# to a single host-side command by invoking the in-VM diagnostics from here:
+#   1. qm agent <vmid> exec --path /usr/local/bin/mac-guest-agent --arg --self-test-json
+#   2. poll qm agent <vmid> exec-status <pid> until finished
+#   3. base64-decode the out-data and embed it in this script's output
+#   4. same for --safe-test-json
+# Right now contributors run two commands in the VM plus this one on the
+# host; the enhancement would make it just this one.
 
 VMID="${1:?Usage: $0 <vmid>}"
 
