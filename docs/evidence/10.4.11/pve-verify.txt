@@ -1,0 +1,31 @@
+PVE macOS Guest Agent Verification
+===================================
+VM ID: 101
+
+--- Configuration ---
+  PASS  agent: enabled=1, type=isa
+  INFO  discard not enabled (optional — needed for guest-fstrim)
+  INFO  ssd=1 not set (optional — needed for guest-fstrim)
+
+--- VM State ---
+  PASS  VM 101 is running
+
+--- Agent Communication ---
+  PASS  ping
+  PASS  get-osinfo — Mac OS X 10.4.11
+  PASS  network-get-interfaces — 1 interface(s), IP <redacted>
+  PASS  info — 45 commands registered, agent v2.4.2
+
+--- Memory (guest agent) ---
+  PASS  memory — agent reports ~1.0 GB used / ~8.0 GB total (2/16 blocks online)
+
+--- Freeze / Thaw ---
+  PASS  fsfreeze-freeze — 1 filesystem(s) frozen
+  PASS  fsfreeze-status — reports frozen
+  FAIL  frozen state — agent answered get-osinfo while frozen (not genuinely frozen)
+  PASS  fsfreeze-thaw — 1 filesystem(s) thawed
+  PASS  post-thaw — agent answers normally again
+
+===================================
+Results: 11 passed, 1 failed
+Status: ISSUES FOUND
