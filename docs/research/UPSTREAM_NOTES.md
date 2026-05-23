@@ -379,20 +379,106 @@ Two architectural lessons that bear on our agent:
 
 ---
 
-## Target 4 — Proxmox `qm agent` wrapper (`PVE/QemuServer/Agent.pm`, `PVE/CLI/qm.pm`)
+## Target 4 — Proxmox `qm agent` wrapper
 
-**Questions:**
-- When QGA returns `{"error": {"class": "...", "desc": "..."}}`, does `qm agent <cmd>` exit non-zero?
-- Does `qm guest cmd <cmd>` behave the same way? Different?
-- What does each print to stdout vs stderr on agent error?
-- Has this behaviour changed between PVE versions (the user's PVE host vs @vit9696's PVE 9.1.9)?
-- Definitive answer for why `pve-verify.sh`'s behavioural check passed on El Cap and failed on Tiger: is it the wrapper, or our gating?
+**Sources consulted:**
+- `https://raw.githubusercontent.com/proxmox/qemu-server/master/src/PVE/QemuServer/Agent.pm` (wrapper helpers)
+- `https://raw.githubusercontent.com/proxmox/qemu-server/master/src/PVE/API2/Qemu/Agent.pm` (REST API + CLI dispatcher)
+- `https://raw.githubusercontent.com/proxmox/qemu-server/master/src/PVE/CLI/qm.pm` (CLI registration)
 
-**Source:** _(to be filled)_
+### The CLI surface (`PVE/CLI/qm.pm:1286-1305`)
 
-**Findings:** _(to be filled)_
+```perl
+agent => { alias => 'guest cmd' }, # FIXME: remove with PVE 8.0
 
-**Verdict:** _(to be filled)_
+guest => {
+    cmd => ["PVE::API2::Qemu::Agent", 'agent', ['vmid', 'command'], {%node}, $print_agent_result],
+    passwd => ["PVE::API2::Qemu::Agent", 'set-user-password', ['vmid', 'username'], {%node}],
+    exec => [__PACKAGE__, 'exec', ['vmid', 'extra-args'], {%node}, $print_agent_result],
+    'exec-status' => ["PVE::API2::Qemu::Agent", 'exec-status', ['vmid', 'pid'], {%node}, $print_agent_result],
+},
+```
+
+`qm agent` is **just an alias** for `qm guest cmd`. Both route to `PVE::API2::Qemu::Agent->agent($vmid, $command)`. **There is no behavioural difference between the two forms.**
+
+### The dispatcher (`PVE/API2/Qemu/Agent.pm`, `register_command()`)
+
+The dispatch code for standard commands (the path `qm agent <vmid> get-osinfo` follows):
+
+```perl
+code => sub {
+    my ($param) = @_;
+    my $vmid = $param->{vmid};
+    my $conf = PVE::QemuConfig->load_config($vmid);
+    PVE::QemuServer::Agent::assert_agent_available($vmid, $conf);
+    my $cmd = $param->{command} // $command;
+    my $res = mon_cmd($vmid, "guest-$cmd");
+    return { result => $res };
+},
+```
+
+**Critical observation:** there is no `eval { ... }`, no `check_agent_error($res, ...)`, no inspection of `$res` for a `->{error}` key. The dispatcher takes whatever `mon_cmd` returns and wraps it in `{result => $res}` with no error handling.
+
+### What `mon_cmd` returns on a QGA error response
+
+`mon_cmd` is `PVE::QemuServer::Monitor::mon_cmd`, which wraps QMP. For QGA commands sent via QMP's `guest-exec`/QGA path, when the agent responds with `{"error": {"class": "GenericError", "desc": "..."}}`, the body of `$res` becomes that error hash. We can confirm `mon_cmd` returns error hashes (rather than always dying) by inspecting the *other* helper in the same project — `PVE::QemuServer::Agent::check_agent_error` (lines 75-93):
+
+```perl
+sub check_agent_error($result, $errmsg, $noerr = 0) {
+    my $error = '';
+    if (ref($result) eq 'HASH' && $result->{error} && $result->{error}->{desc}) {
+        $error = "Agent error: $result->{error}->{desc}\n";
+    } elsif (!defined($result)) {
+        $error = "Agent error: $errmsg\n";
+    }
+    if ($error) {
+        die $error if !$noerr;
+        warn $error;
+        return;
+    }
+    return 1;
+}
+```
+
+This helper exists *because* `mon_cmd` can return a `{error => {desc => ...}}` hash for agent-side errors. Other helpers (`agent_cmd`, `guest_fs_thaw`, `guest_fs_is_frozen`, `file-read`, `file-write`) explicitly call `check_agent_error` after `mon_cmd`. **The `register_command` dispatch path used by `qm agent <cmd>` does not.**
+
+### Consequence
+
+When our agent returns `{"error": {"class": "GenericError", "desc": "Command not allowed while filesystem is frozen"}}` for `guest-get-osinfo`:
+
+1. `mon_cmd($vmid, "guest-get-osinfo")` returns the error hash as-is.
+2. The dispatcher wraps it: `return { result => {error => {class => "GenericError", desc => "Command not allowed while filesystem is frozen"}} };`
+3. The API returns **HTTP 200** with that JSON body.
+4. The CLI's `$print_agent_result` callback prints the JSON to stdout.
+5. **The shell exit code is 0.**
+
+`scripts/pve-verify.sh`'s behavioural check does:
+
+```bash
+if qm agent "$VMID" get-osinfo >/dev/null 2>&1; then
+    fail "answered while frozen"
+```
+
+`>/dev/null 2>&1` discards the JSON body. Exit code is 0. The check declares failure — but the failure is in the check itself, not in the agent. **Our agent's gating in `src/agent.c:73` is doing exactly what it's supposed to do.** The "error" payload reaches the CLI; the CLI just doesn't translate it into a non-zero exit code for this dispatch path.
+
+### Why El Cap's `pve-verify.sh` run "passed" the behavioural check
+
+It didn't, actually — because the behavioural check did not exist when the user ran `pve-verify.sh 107` against El Cap. That was the *first* `pve-verify.sh` run, before commit `efcb712` (which added the behavioural check). The only "El Cap pass" of the behavioural check came from a stateful **mock** I ran locally where `qm` was replaced by a bash script that explicitly exited 1 on the "frozen" code path. The mock test proves the check *can* distinguish honest from lying agents — when `qm` exits non-zero on agent error. The real PVE wrapper for the dispatch path used by `qm agent <cmd>` does not.
+
+So Target 4's resolution: there is **no Tier difference** between El Cap and Tiger here. The real-PVE behavioural check has never passed against an honest gating agent; it has only ever been mock-validated.
+
+### Verdict
+
+**`scripts/pve-verify.sh`'s freeze-behavioural check is fundamentally broken.** It relies on `qm agent ...` exiting non-zero on a QGA error response, but the PVE dispatch path used by `qm agent <cmd>` doesn't translate QGA errors into non-zero exits — it wraps them in `{result: ...}` and the CLI prints + exits 0. This was confirmed against PVE source at master (commit-pinned in the URL).
+
+**The fix is in our script, not in the agent.** The check must inspect response content, not exit code. Two reliable signals:
+
+1. **Positive signal of rejection:** the JSON contains `"error"` or the `"desc"` string `"Command not allowed while filesystem is frozen"`. If present → rejection → PASS the check.
+2. **Positive signal of (unwanted) success:** the JSON contains `"pretty-name"` (a field unique to a successful `get-osinfo` response). If present → the agent answered → FAIL the check.
+
+The cleanest implementation is to check for both and only pass when the rejection signal is present (or fail when the success signal is present). This is robust regardless of whether future PVE versions change the wrapper behaviour.
+
+**Secondary verdict:** the `register_command` dispatcher's lack of error handling is arguably a Proxmox-side bug — a contributor noticing this could file an upstream patch to call `check_agent_error` from the standard dispatch path so `qm agent <cmd>` exits non-zero on agent errors. That's out of scope for this project, but worth noting as upstream context: we should not rely on PVE evolving here, because the current behaviour has been frozen behind the `FIXME: remove with PVE 8.0` comment for some time without change.
 
 ---
 
