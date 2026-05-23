@@ -27,3 +27,6 @@ mac-guest-agent-*
 *.tmp
 *.bak
 *.orig
+
+# graphify local analysis output
+graphify-out/
