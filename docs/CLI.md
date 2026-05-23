@@ -44,13 +44,14 @@ CLI flags override config file values.
 
 The agent searches for serial devices in this order (first match wins):
 
-1. **VirtIO serial** (Big Sur+ with native AppleVirtIO.kext)
-   - `/dev/cu.org.qemu.guest_agent.0` — PVE default, plain QEMU, libvirt
+1. **ISA serial** — primary transport on all macOS 10.4+ via `Apple16X50Serial.kext`
+   - `/dev/cu.serial1`, `/dev/cu.serial2`, `/dev/cu.serial` (and their `tty.*` equivalents)
+   - Preferred on Big Sur and later because Apple's built-in VirtIO guest agent claims the VirtIO channel — ISA is the only channel it does not take.
+2. **VirtIO serial** — used on pre-Big Sur or when specifically configured to avoid conflict
+   - `/dev/cu.org.qemu.guest_agent.0` — plain QEMU, libvirt
    - `/dev/cu.virtio-console.0`, `/dev/cu.virtio-serial`, etc.
-2. **UTM** (Apple Virtualization.framework)
+3. **UTM** (Apple Virtualization.framework)
    - `/dev/cu.virtio`, `/dev/tty.virtio`
-3. **ISA serial** (all macOS 10.4+ via Apple16X50Serial.kext)
-   - `/dev/cu.serial1`, `/dev/cu.serial2`, `/dev/cu.serial`
 
 Override with `-p /dev/cu.serial1` to force a specific device.
 

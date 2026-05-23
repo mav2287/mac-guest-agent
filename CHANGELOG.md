@@ -13,6 +13,7 @@
 ### Documentation
 - **Updated:** `docs/COMPATIBILITY.md` — promoted **10.4 Tiger** to Tier 1 after @vit9696's v2.4.2 confirmation (issue #2): agent serves PVE end-to-end on 10.4.11 (ping, get-osinfo, network, memory, reboot/shutdown). Matches the convention 15.7 Sequoia already set (Tier 1 with freeze untested).
 - **Updated:** `docs/COMPATIBILITY.md` "Step 2: Runtime Validation" sequence now points at `scripts/pve-verify.sh` (one-shot host-side validation with agent-sourced memory + behavioural freeze check) and the modern `--self-test-json` + `--safe-test-json` in-VM diagnostics, replacing the older `tests/safe_test.sh` reference. Added a note on how external contributors submit results (issue comment or PR under `docs/evidence/<version>/`).
+- **Fixed:** `docs/CLI.md` Device Auto-Detection section listed the probe order as VirtIO → UTM → ISA. The code in `src/channel.c` has been ISA-first since v2.1.0 — deliberately, because Apple's built-in VirtIO guest agent on Big Sur+ claims the VirtIO channel and ISA is the only one it leaves alone. Reordered the doc to match the code and the v2.1.0 rationale.
 
 ## v2.4.2 (2026-05-22)
 
