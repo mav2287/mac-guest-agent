@@ -135,19 +135,388 @@ Tests:
 
 ## Question 2 — `guest-fsfreeze-freeze-list` mountpoints argument
 
-**Status:** to be designed.
-
 ### The question
 
-QGA spec defines `guest-fsfreeze-freeze-list` with an optional `mountpoints: [str]` argument — freeze *only* the listed mountpoints, leave the rest writable. We currently ignore the argument because we register both `freeze` and `freeze-list` against the same `(void)args` handler. A caller passing `mountpoints` gets a global freeze instead of a subset freeze.
+QGA spec defines `guest-fsfreeze-freeze-list` with an optional `mountpoints: [str]` argument — freeze *only* the listed mountpoints, leave the rest writable. Typical use: a backup tool wants to freeze a data volume but keep the OS volume writable so the backup tool's own logs can land somewhere. We currently ignore the argument because we register both `freeze` and `freeze-list` against the same `(void)args` handler in `src/cmd-fs.c:436`. A caller passing `mountpoints` gets a global freeze instead of the requested subset.
 
-Options:
-- Implement subset behaviour (parse `args.mountpoints`, only operate on listed mounts).
-- Unregister `guest-fsfreeze-freeze-list` (don't claim to support what we don't).
+### Evidence
+
+- Phase 1 Target 1: spec is `{ '*mountpoints': ['str'] }` — optional array.
+- Phase 1 Target 2: the Linux reference (`commands-linux.c:qmp_guest_fsfreeze_do_freeze_list`) implements it as `if (has_mountpoints) { ... skip if not in list ... }` — straightforward filter in the iteration loop.
+- PVE's `guest_fs_freeze` helper calls `guest-fsfreeze-freeze` (not `freeze-list`). The PVE backup path doesn't exercise this command.
+- No evidence anyone currently calls `freeze-list` with mountpoints against our agent.
+
+### Options considered
+
+- **Implement subset behaviour.** Parse `args.mountpoints` (a JSON string array), pass to the dispatch loop, only operate on mounts whose path matches one of the listed entries. Aligns with spec; future-callers Just Work.
+- **Unregister.** Remove from `command_register`. Callers get "command not supported," fall back to `freeze` or fail explicitly.
 
 ### Decision
 
-_(to be filled)_
+**Implement subset behaviour.**
+
+Cost is bounded — perhaps 30–50 lines: parse the string array from `cJSON`, pass a pointer-to-list into the new `sync_all_volumes_filtered()` helper Q1 will introduce, skip any mount whose `f_mntonname` isn't in the list. The dispatch table from Q1 still applies per mount, the per-treatment counters still work, the response is still the int count of "did-something" volumes.
+
+The value is twofold: (a) spec conformance — we stop silently doing the wrong thing on a command we advertise; (b) future-proof — if any backup tooling that targets the QGA spec ever runs against our agent, partial freeze works correctly. The cost is small enough that "unregister" feels like sweeping a real gap under the rug.
+
+### Implementation implications
+
+- `src/cmd-fs.c` — replace the shared registration:
+  ```c
+  command_register("guest-fsfreeze-freeze-list", handle_fsfreeze_freeze_list, 1);
+  ```
+  with a distinct handler `handle_fsfreeze_freeze_list` that:
+  1. Parses `args.mountpoints` as a `cJSON` string array.
+  2. If absent or empty array → delegate to `handle_fsfreeze_freeze` (global freeze).
+  3. If present and non-empty → build a `const char *const *` whitelist and call `sync_all_volumes_filtered(do_fullfsync=1, mountpoints=whitelist)`.
+- `src/cmd-fs.c sync_all_volumes()` (renamed/wrapped) — add an optional `mountpoints` filter parameter. If non-NULL, skip any mount whose `f_mntonname` isn't in the list. The per-FS dispatch (Q1) still runs for the volumes that pass the filter.
+- The "set frozen state before the loop, unset if zero touched" sequencing from upstream (Phase 1 Target 2) applies here too.
+- Add a unit test in `tests/test_proactive.c`: dry-run freeze-list with `["/Volumes/data"]` → only the data mount is "touched" (in dry-run we just verify the dispatch decision); freeze-list with `[]` → all mounts touched (delegates to plain freeze).
+
+### Failure modes
+
+- Caller passes a path that isn't mounted on the guest → the path is silently absent from the iteration; the response int is the number of *listed* mounts that actually got operated on. If zero matched, response is `0` (caller can detect: "I asked for 2 mounts, got 0 frozen"). Same as upstream's behaviour.
+- `args.mountpoints` is the wrong type (e.g. string instead of array) → return spec-shaped error `{class: "GenericError", desc: "mountpoints must be an array of strings"}`.
+
+---
+
+## Question 3 — Honest per-volume reporting in the freeze response
+
+### The question
+
+Today the freeze response is a single integer `frozen_volume_count`. With Q1's per-FS dispatch, that integer is structurally misleading — 1 APFS snapshot + 1 HFS+ F_FULLFSYNC + 1 FAT32 sync-only-via-ENOTSUP-fallback are three different operations with three different guarantees, all summed into "3."
+
+### Evidence
+
+- Phase 1 Target 1: spec for `guest-fsfreeze-freeze` and `-freeze-list` is `'returns': 'int'`. Strict. Anything other than an int violates spec.
+- Phase 1 Target 2: Linux reference returns "count of FIFREEZE calls that succeeded" — already an apples-to-apples sum (since FIFREEZE is uniform across Linux FS types). Their int is meaningful; ours becomes less so under per-FS dispatch.
+- Phase 1 Target 4: PVE's `guest_fs_freeze` does `mon_cmd($vmid, 'guest-fsfreeze-freeze', timeout => $timeout)` and checks for an error response or numeric return — it doesn't inspect any extension fields. PVE's tolerance for extra response fields is the standard QMP "ignore unknown keys" pattern (likely tolerant, but not contractually so).
+
+### Options considered
+
+- **A. Keep int wire response; log breakdown only.** Spec-conformant. The structured detail lives only in `/var/log/mac-guest-agent.log`, which isn't reachable from the host without an out-of-band fetch.
+- **B. Extend wire response with a structured breakdown** (e.g. `{"return": {"count": 3, "by_treatment": {...}}}`). Breaks spec — the contract says `int`, we'd be returning an object. Most clients ignore unknown fields but strict ones may reject.
+- **C. Keep int wire response; emit a structured INFO log line; surface breakdown via `--safe-test-json` / `--self-test-json` / `pve-verify.sh` log fetch.**
+
+### Decision
+
+**Option C.**
+
+Wire response stays `int` — the sum of "did-something" counters (`snapshotted + zfs_snapshotted + fullfsynced + flushed_only`). Spec-conformant. PVE's `qm guest cmd fsfreeze-freeze` continues to see the integer it expects.
+
+Per-treatment detail surfaces in three places:
+
+1. **Agent log, INFO level, single line per freeze event:**
+   ```
+   Freeze complete: 1 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 1 flushed_only, 4 skipped (2 network, 1 special, 1 readonly)
+   ```
+2. **`--self-test-json` env diagnostic** — extend the `freeze` section to expose: (a) the dispatch table this build implements, (b) the log file path so external tooling knows where to fetch the per-event line. Doesn't actually run a freeze — just states what would happen.
+3. **`pve-verify.sh`** — after the freeze round-trip, use `qm agent <vmid> exec` to `tail -n 50 <log_path> | grep "Freeze complete"` and embed the line in the host-side report. This is the path Phase 3 will wire up.
+
+This keeps the spec contract clean (PVE and any other QGA consumer gets the int they expect) while giving contributors and operators full visibility into what actually happened. The `--self-test-json` static description means anyone can see the dispatch policy even without running a freeze.
+
+### Implementation implications
+
+- `src/cmd-fs.c handle_fsfreeze_freeze()` / `handle_fsfreeze_freeze_list()` — keep returning `cJSON_CreateNumber(frozen_volume_count)`. No wire-shape change.
+- `src/cmd-fs.c sync_all_volumes()` — populate a stack-allocated struct of counters; log a single INFO line with the full breakdown at the end of the freeze loop.
+- `src/selftest.c emit_system_info()` — add a `freeze_dispatch` object summarising the per-FS treatment table and the log file path. Static description, no real freeze run.
+- `scripts/pve-verify.sh` (Phase 3 task) — after `qm guest cmd <vmid> fsfreeze-freeze`, run `qm agent <vmid> exec --path tail --arg -n50 --arg /var/log/mac-guest-agent.log`, poll exec-status, base64-decode, grep for the `Freeze complete` line, embed in report.
+
+### Failure modes
+
+- Log file unreadable / missing → `pve-verify.sh` reports "freeze breakdown unavailable (log path: ...)" and continues; the int response still tells the operator the rollup count.
+- Log file rotated mid-test → the breakdown line may not appear in the most recent N lines; fall back to "breakdown unavailable, last known: <previous run>." Not a freeze failure, just a reporting gap.
+
+---
+
+## Question 4 — `guest-get-cpustats` shape
+
+### The question
+
+Our response is a flat aggregate object `{user, system, idle, nice}` for a command the QGA spec defines as `['GuestCpuStats']` — a list of discriminated-union per-CPU structs with a `type` discriminator (enum `GuestCpuStatsType`, currently only `linux`), gated on `CONFIG_LINUX`. Three paths:
+
+- Extend the discriminated union with a `darwin` variant.
+- Stop registering `guest-get-cpustats` on macOS.
+- Keep current shape, document as a deliberate macOS extension.
+
+### Evidence
+
+- Phase 1 Target 1: spec is `CONFIG_LINUX`-only with the `GuestLinuxCpuStats` variant. There is no `darwin` enum value in the upstream `GuestCpuStatsType`.
+- Phase 1 Target 5: PVE's `vmstatus()` reads CPU% from `/proc/<qemu-pid>/stat`. It does NOT call `guest-get-cpustats`. Our shape doesn't affect any PVE UI.
+- Phase 1 Target 6: Apple's built-in QGA does not implement `guest-get-cpustats` at all.
+- Faking `type: "linux"` from a non-Linux guest would slip past spec parsers but lie about the source OS — a misrepresentation that a strict consumer could detect (e.g. by cross-referencing with `get-osinfo`).
+- Adding `type: "darwin"` to the union requires upstream cooperation that doesn't exist; a strict consumer would reject unknown discriminator values.
+
+### Options considered
+
+- **A. Extend union with `darwin` variant + produce per-CPU rows.** Requires using `host_processor_info(PROCESSOR_CPU_LOAD_INFO, ...)` instead of the aggregate `host_statistics(HOST_CPU_LOAD_INFO)`. Returns the spec's expected list shape; honest about being from a Darwin host; cannot be parsed by a Linux-only client that ignores unknown discriminator values. Out-of-spec in the sense that the upstream enum doesn't list `darwin`.
+- **B. Fake `type: "linux"`.** Spec-parseable; lies about the source OS. Easy to detect via cross-referencing.
+- **C. Stop registering on macOS.** Honest; clients that try `get-cpustats` get "command not supported"; they fall back to whatever (likely QMP host-side, the same path PVE already uses).
+- **D. Keep current flat aggregate; document as a deliberate extension.** Comfortable but spec-violating in a way that silently breaks any client that follows the spec strictly.
+
+### Decision
+
+**Option C — stop registering `guest-get-cpustats` on macOS.**
+
+Reasoning:
+
+- The spec gates the command on `CONFIG_LINUX`. Registering it on macOS makes the agent claim to implement a Linux-only command. Honest is "we don't."
+- PVE doesn't consume the command anyway (Phase 1 Target 5 settled this), so unregistering breaks no PVE workflow.
+- The flat aggregate (D) and the fake-linux variant (B) both lie in different ways — to the schema or to the consumer.
+- Extending the union (A) requires either fork-the-spec (upstream cooperation we don't have) or shipping a discriminator value that breaks strict clients. The work is real and the value is marginal — and the consumers who'd actually want per-CPU stats on macOS can run `top`/`vm_stat` via `guest-exec`, or read it from `--self-test-json`'s env block.
+- Removing the registration also simplifies the agent's command surface from 45 → 44 — a small honesty win in `guest-info`'s `supported_commands` list (now matches what we actually deliver in-spec).
+
+### Implementation implications
+
+- `src/cmd-hardware.c cmd_hardware_init()` — delete the line:
+  ```c
+  command_register("guest-get-cpustats", handle_get_cpustats, 1);
+  ```
+- `handle_get_cpustats()` itself can stay in the file (compile-time dead code is harmless) or be deleted. Delete it — no point keeping dead code with a known spec violation. Same for `host_statistics(HOST_CPU_LOAD_INFO)` if it's unused after.
+- `docs/PVE.md` — note explicitly that CPU stats are out of scope for this agent; PVE's CPU% gauge comes from QEMU vCPU thread time on the host, not from QGA.
+- `docs/COMMAND_STATUS.md` (if it lists 45) — update to 44 commands; note `guest-get-cpustats` is dropped with reasoning.
+- Update the safe-test expectation (`tests/run_tests.sh`, `--safe-test`'s test array in `selftest.c:626-627`) if `guest-get-cpustats` was being exercised. Looking at the saved earlier evidence: `--safe-test` runs `Memory block size` and `Memory blocks`, not cpustats. Likely no test change needed. Verify when implementing.
+
+### Failure modes
+
+- A client that explicitly calls `qm agent <vmid> get-cpustats` after this change gets `{error: {class: "GenericError", desc: "command not registered"}}` or similar. This is correct and honest — we don't implement it.
+- An older version of our agent (≤2.4.2) is still installed somewhere: it still returns the old aggregate shape. Operators don't see a behaviour change on upgrade unless they actively use `get-cpustats`. No breakage.
+
+---
+
+## Question 5 — Command-gating allowlist alignment with upstream
+
+### The question
+
+Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` once frozen — only `thaw` exits the state. Ours (9) allows idempotent re-freeze. The deeper question: which of our 45 commands (44 after Q4) should be allowed during freeze? Current 9 was set heuristically.
+
+### Evidence
+
+- Phase 1 Target 3: upstream's allowlist:
+  ```
+  guest-ping, guest-info, guest-sync, guest-sync-delimited,
+  guest-fsfreeze-status, guest-fsfreeze-thaw
+  ```
+  Upstream's rationale (implied by the strict posture): on a real Linux freeze, FS reads can block if the FS implementation doesn't service them during the freeze window. Conservative posture protects the freeze contract.
+- Our pseudo-freeze (sync + F_FULLFSYNC + optional APFS/ZFS snapshot) does **not** suspend I/O. Reads-during-freeze are functionally unaffected.
+- Upstream blocks re-freeze; we accept it idempotently. The benefit of idempotence: a backup tool that retries on timeout doesn't have to thaw-then-refreeze. The cost of upstream's strictness: callers must implement explicit thaw before retry.
+
+### Options considered
+
+- **A. Align with upstream's 6.** Maximum conformance; loses idempotent re-freeze (regression for any caller that depended on it — likely none, but possible) and blocks read-only inspection during freeze (annoying for backup tools that want to query state).
+- **B. Keep current 9.** Status quo. The read-only "get" commands remain blocked, including useful ones like `guest-get-fsinfo`, `guest-get-osinfo`, `guest-network-get-interfaces`.
+- **C. Adopt a principled rule: allow during freeze iff handler is read-only, doesn't execute external programs, doesn't change agent state except via the freeze-status flag.** Enumerate the resulting allowlist (~27 commands). Larger than upstream's 6, smaller than the full 44. Documented divergence.
+
+### Decision
+
+**Option C — principled rule, enumerated allowlist.**
+
+Rule: a command is freeze-safe iff (a) its handler does not write to any file or device, (b) its handler does not execute external programs, and (c) it does not change the agent's freeze state except (i) reporting current state, (ii) idempotent re-entry into the current state, or (iii) exiting the state via `thaw`.
+
+Resulting allowlist (after Q4 removes `guest-get-cpustats`):
+
+```
+Protocol / control:
+  guest-ping
+  guest-sync
+  guest-sync-id
+  guest-sync-delimited
+  guest-info
+
+Freeze control (idempotent re-freeze kept; documented divergence from upstream):
+  guest-fsfreeze-status
+  guest-fsfreeze-freeze
+  guest-fsfreeze-freeze-list
+  guest-fsfreeze-thaw
+
+Read-only inspection (newly added vs current):
+  guest-get-time
+  guest-get-timezone
+  guest-get-host-name
+  guest-get-osinfo
+  guest-get-users
+  guest-get-load
+  guest-get-vcpus
+  guest-get-fsinfo
+  guest-get-disks
+  guest-get-diskstats
+  guest-get-memory-blocks
+  guest-get-memory-block-info
+  guest-network-get-interfaces
+  guest-network-get-route
+  guest-ssh-get-authorized-keys
+  guest-exec-status                 (queries existing exec, doesn't start new ones)
+
+File operations (read-only only):
+  guest-file-open
+  guest-file-read
+  guest-file-seek
+  guest-file-close
+  guest-file-flush                  (flushes our buffers; idempotent; safe)
+
+Total: 28 commands allowed during freeze.
+```
+
+Blocked during freeze:
+
+```
+Filesystem write:
+  guest-file-write
+  guest-fstrim                      (issues TRIM, may interact with FS metadata)
+
+Time / identity write:
+  guest-set-time
+  guest-set-user-password
+  guest-ssh-add-authorized-keys
+  guest-ssh-remove-authorized-keys
+
+Process execution:
+  guest-exec                        (starts new processes that may write)
+
+State-changing:
+  guest-shutdown
+  guest-suspend-disk
+  guest-suspend-ram
+  guest-suspend-hybrid
+
+Already unsupported (rejected before freeze check anyway):
+  guest-set-vcpus
+  guest-set-memory-blocks
+
+Dropped per Q4:
+  guest-get-cpustats                (unregistered)
+```
+
+Idempotent re-freeze is **kept** with documented divergence from upstream. Reasoning: our handler at `cmd-fs.c:286-288` already returns the current `frozen_volume_count` if already frozen — no double-freeze damage. A backup tool that retries on timeout (e.g. PVE itself, which has a timeout in `guest_fs_freeze`) benefits. The cost of strict alignment is a real regression for retry-on-timeout patterns.
+
+### Implementation implications
+
+- `src/cmd-fs.c fsfreeze_command_allowed()` — replace the 9-entry static array with the 28-entry list above. Update the comment to state the principled rule and reference this spec doc.
+- `src/agent.c:73-82` — no change to the gating mechanism. Same dispatch.
+- Add a unit test in `tests/test_proactive.c` exercising `fsfreeze_command_allowed` against representative commands from each category (read-only allowed, write blocked, exec blocked, freeze-control allowed).
+
+### Failure modes
+
+- A caller that targets upstream's strict 6-command allowlist won't be surprised — everything they'd send works. Our extra-permissive behaviour is a strict superset.
+- A caller that expected upstream's blocked-re-freeze behaviour and sends `freeze` twice gets a successful response both times (idempotent). They might be confused if they expected an error on the second call, but the documented behaviour is clear.
+- A new command added in the future is implicitly blocked during freeze (since the allowlist is enumerated, not derived from a flag). That's the safe default. The PR that adds the command must update the allowlist explicitly.
+
+---
+
+## Question 6 — Frozen-state persistence and logging during freeze
+
+### The question
+
+Upstream writes a persistent on-disk marker (`s->state_filepath_isfrozen`) so a crashed agent detects prior-frozen state on restart, and disables logging to avoid writing to a frozen volume. We do neither.
+
+### Evidence
+
+- Phase 1 Target 3: upstream's `ga_set_frozen` does `ga_create_file(s->state_filepath_isfrozen)`, `ga_disable_logging(s)`, plus the freeze-state flag.
+- Upstream's logging-disable rationale: writing to `/var/log/...` during a real freeze deadlocks if the log volume is the frozen volume. Their freeze is a true I/O suspension.
+- Our pseudo-freeze does **not** suspend I/O. Log writes during freeze proceed normally. No deadlock.
+- Our `create_apfs_snapshot()` already handles orphan cleanup (`cmd-fs.c:232-235`): on a fresh freeze, if `snapshot_date[0]` is non-empty (a leftover from a previous run), it calls `delete_apfs_snapshot()` before creating a new one. So the only piece of "state lost on crash" — an orphaned snapshot — is already cleaned up on the next freeze.
+
+### Options considered
+
+- **A. Adopt both** (write marker, disable logging while frozen).
+- **B. Adopt marker only.**
+- **C. Document divergence; don't change behaviour.**
+
+### Decision
+
+**Option C — document divergence, don't change behaviour.**
+
+Reasoning:
+
+- **Marker:** the only piece of crash-time state that matters for us is the orphaned APFS snapshot. Our existing `create_apfs_snapshot()` already cleans up the orphan on the next freeze. Adding a separate persistent marker adds another piece of state to manage (write, read, delete on thaw, handle if disk full, etc.) without solving a problem we have.
+- **Logging disable:** our pseudo-freeze doesn't deadlock on logging. The upstream protection is for a problem we don't have.
+- **Cost of adoption:** real (new code paths, new failure modes — what if marker can't be written? what if log is reopened mid-freeze?). Benefit: marginal.
+
+Document the divergence in `docs/design/FREEZE_SEMANTICS.md` (created as part of Q7) with the reasoning: "our freeze is not a true I/O suspension, so the upstream protections aren't needed."
+
+### Implementation implications
+
+- No code change. This is the only Phase 2 question whose decision is "do nothing."
+- `docs/design/FREEZE_SEMANTICS.md` (created by Q7) gets a "Divergences from QEMU's reference QGA" section noting (a) idempotent re-freeze (Q5) and (b) no persistent frozen-state marker / no logging-disable-during-freeze (this question), with the rationale.
+
+### Failure modes
+
+- Agent crashes mid-freeze on APFS → restarts with `freeze_status=0`. The orphaned APFS snapshot remains until the next freeze, which cleans it up. The intervening time it costs disk space proportional to the writes that happened between the snapshot and the crash. Acceptable.
+- Agent crashes mid-freeze on HFS+ / FAT / etc. → restarts with `freeze_status=0`. No state to clean up; F_FULLFSYNC has no persistent side effect. Clean.
+- Agent crashes mid-freeze on ZFS (if we added it per Q1) → orphaned `zfs snapshot` remains until next freeze; same handling as APFS. We should mirror APFS's cleanup pattern: on `create_zfs_snapshot()`, if a previous snapshot name is tracked, `zfs destroy` it before creating the new one.
+
+---
+
+## Question 7 — Documentation honesty
+
+### The question
+
+Phase 1 surfaced three misleading or oversimplified claims in our docs:
+
+1. `docs/PVE.md` "Accurate Memory Reporting Without Balloon Driver" implies our agent improves PVE's UI memory gauge. It doesn't — PVE reads cgroup RSS for macOS guests regardless of our agent (Phase 1 Targets 5 and 7).
+2. `README.md` and `docs/COMPATIBILITY.md` "ISA because Apple claims VirtIO" is right for Apple Virtualization.framework hosts but oversimplified for QEMU/OpenCore, where Apple's QGA never launches (Phase 1 Target 6).
+3. The user-facing meaning of "freeze" on macOS — needs an explicit per-`f_fstypename` table once Q1's dispatch is implemented.
+
+### Decision
+
+**All three revisions. Specifically:**
+
+#### 7a — Rewrite the memory-reporting claim
+
+Target: the "Accurate Memory Reporting Without Balloon Driver" section in `docs/PVE.md` (and any analogous claim in `README.md`).
+
+Replace with text along these lines:
+
+> **Memory reporting on macOS guests**
+>
+> Proxmox's per-VM memory gauge for macOS guests reflects the QEMU process's host-side memory footprint (cgroup RSS), not the guest's view of its own RAM usage. This is a structural limitation: the gauge sources memory stats from the virtio-balloon device, which requires a guest-side driver that ships with most Linux distributions but does not exist on macOS. Apple has never shipped a virtio-balloon driver, and the protocol has no host-pull alternative.
+>
+> Our agent provides the *guest's* actual memory view via `guest-get-memory-blocks` and `guest-get-memory-block-info`. PVE's web UI doesn't consume these (it doesn't query the guest agent for memory), but you can read them directly:
+>
+> ```bash
+> qm agent <vmid> get-memory-block-info   # block size
+> qm agent <vmid> get-memory-blocks        # block list (used = online * size)
+> ```
+>
+> `scripts/pve-verify.sh` translates these into a human-readable "~X GB used / ~Y GB total" report.
+
+Avoids the word "accurate" entirely — replaces it with a description of what we actually provide and the path to consume it.
+
+#### 7b — Refine the ISA rationale
+
+Target: the "ISA Serial Transport" sections in `README.md`, `docs/COMPATIBILITY.md`, and the comment in `src/channel.c:31-42`.
+
+Replace the current "ISA because Apple claims VirtIO" framing with:
+
+> **Why ISA serial**
+>
+> macOS can run as a guest in two distinct ways: under **Apple's Virtualization.framework** (UTM, `vz_run`, anything backed by `VZVirtualMachine`), and under **plain QEMU/KVM** (Proxmox, libvirt, raw QEMU, often with OpenCore as the bootloader).
+>
+> On Virtualization.framework hosts, macOS detects the VZ environment via the `AppleVirtIOAgentDevice` IOKit property and Apple's built-in `AppleQEMUGuestAgent` launches on the VirtIO console channel. Our agent on the VirtIO channel would conflict with Apple's.
+>
+> On Proxmox/QEMU/OpenCore hosts, the `AppleVirtIOAgentDevice` property is not set and Apple's agent never launches — technically we could use the VirtIO channel there. We use ISA serial universally for consistency: one transport across both host types, no host-detection logic, no per-environment conditional registration. The trade-off is documented at the cost of a slightly older transport that all macOS versions from 10.4 onwards support natively via `Apple16X50Serial.kext`.
+
+#### 7c — Per-FS freeze semantics doc
+
+Create `docs/design/FREEZE_SEMANTICS.md` (linked from `docs/BACKUP.md` and the `README.md` features list). Contents:
+
+- "macOS has no FIFREEZE" — short intro explaining the absence of a kernel-level filesystem-freeze primitive on macOS, contrasted with Linux's FIFREEZE and FreeBSD's UFSSUSPEND.
+- "What 'freeze' means here" — a sentence per filesystem class summarising the dispatch table from Q1.
+- The Q1 dispatch table itself (verbatim).
+- "What 'frozen' status guarantees" — the agent reports `frozen` when at least one volume was successfully snapshotted or F_FULLFSYNC'd. The freeze is best-effort flush, not I/O suspension; reads continue, writes that happened before freeze are guaranteed on physical media (for filesystems that support F_FULLFSYNC), writes that happen after freeze are NOT prevented.
+- "Divergences from QEMU's reference QGA" — the Q5 and Q6 divergences with reasoning.
+- "Failure modes" — must-surface vs by-design, from Q1.
+
+### Implementation implications
+
+- Three doc files updated (`docs/PVE.md`, `README.md`, `docs/COMPATIBILITY.md`), one source file comment updated (`src/channel.c`), one new doc created (`docs/design/FREEZE_SEMANTICS.md`).
+- All doc changes can land in one commit at the end of Phase 2's implementation queue, *after* Q1's code changes land — because the per-FS table in `FREEZE_SEMANTICS.md` should match what's in the code, not what's aspirational.
+
+### Failure modes
+
+- N/A — documentation changes don't have runtime failure modes. The risk is the doc going stale relative to code; addressed by keeping the per-FS table in `FREEZE_SEMANTICS.md` aligned with the dispatch helper `fs_dispatch_class()` (one source of truth: the code; the doc cites it).
+
+---
 
 ---
 
@@ -247,18 +616,25 @@ _(to be filled)_
 
 ## Decisions summary
 
-_(populated as questions are answered)_
-
 | # | Question | Decision |
 |---|---|---|
-| 1 | Per-FS freeze strategy | **Option C** (deny-list for skip; generic try-with-tolerate for the rest; ZFS via `zfs snapshot` if CLI present; APFS via `tmutil` + `F_FULLFSYNC` defence in depth). Full dispatch table in Q1. |
-| 2 | freeze-list mountpoints | _(pending)_ |
-| 3 | Freeze response shape | _(pending)_ |
-| 4 | cpustats shape | _(pending)_ |
-| 5 | Allowlist alignment | _(pending)_ |
-| 6 | Frozen-state persistence | _(pending)_ |
-| 7 | Documentation honesty | _(pending)_ |
+| 1 | Per-FS freeze strategy | **Hybrid (Option C):** explicit deny-list for skip categories (network / special / autofs / RDONLY / TM-snapshot path); generic try-`F_FULLFSYNC`-with-`ENOTSUP`-tolerance for the rest. APFS gets `tmutil localsnapshot` + `F_FULLFSYNC` (defence in depth). ZFS gets `zfs snapshot` (if `zfs` CLI present), else falls through to `F_FULLFSYNC`. Per-treatment counters: `snapshotted`, `zfs_snapshotted`, `fullfsynced`, `flushed_only`, `skipped_network`, `skipped_special`, `skipped_readonly`. |
+| 2 | `freeze-list` mountpoints | **Implement subset behaviour.** Distinct handler parses `args.mountpoints`; filters the dispatch loop; same per-FS strategy per Q1; same counters; same wire response. |
+| 3 | Freeze response shape | **Keep `int` wire response (spec-conformant).** Per-treatment breakdown surfaces in (a) the agent log INFO line, (b) `--self-test-json`'s `freeze_dispatch` description, (c) `pve-verify.sh` which fetches the log line via `qm agent exec tail \| grep`. |
+| 4 | `guest-get-cpustats` shape | **Stop registering on macOS.** Spec gates it on `CONFIG_LINUX`; PVE doesn't consume it; faking `linux`-typed responses misrepresents; extending the union requires upstream cooperation we don't have. Delete `handle_get_cpustats` along with the registration. Drops command count 45 → 44. |
+| 5 | Allowlist alignment | **Principled rule, enumerated to 28 commands.** Allow during freeze iff handler is read-only, doesn't execute external programs, and doesn't change agent state except per the freeze-status flag. Idempotent re-freeze kept (documented divergence from upstream's 6). |
+| 6 | Frozen-state persistence | **No change; document divergence.** Our pseudo-freeze isn't a true I/O suspension, so the upstream marker + logging-disable protections aren't needed. Existing APFS snapshot orphan-cleanup already handles the only piece of crash-time state that matters. Documented in `FREEZE_SEMANTICS.md`. |
+| 7 | Documentation honesty | **Three revisions:** rewrite `docs/PVE.md` memory-reporting claim; refine `README.md` + `docs/COMPATIBILITY.md` + `src/channel.c` ISA-vs-VirtIO rationale to distinguish VZ from QEMU/OpenCore; create new `docs/design/FREEZE_SEMANTICS.md` with the per-FS dispatch table and divergence notes. |
 
 ## Implementation queue
 
-_(populated as decisions land — each becomes one or more commits)_
+Each item below is intended as a focused commit. Ordering matters: Q1's code change introduces helpers Q2 and Q3 build on; Q5's allowlist change depends on Q4 (deletes `guest-get-cpustats` from registration before the allowlist enumerates it); doc-honesty (Q7) lands last so its tables match shipped behaviour.
+
+1. **Q1 + Q3 (agent log) — per-FS dispatch in `sync_all_volumes`.** New `fs_dispatch_class()` helper, per-treatment counter struct, INFO log line summarising the breakdown. Existing single `int` wire response preserved.
+2. **Q2 — `freeze-list` subset handler.** Distinct `handle_fsfreeze_freeze_list()`, `sync_all_volumes_filtered()` variant taking a mountpoint allowlist. Unit test in `tests/test_proactive.c`.
+3. **Q1 (ZFS) — `zfs snapshot` support.** ZFS CLI detection at startup; `create_zfs_snapshot()` / `delete_zfs_snapshot()` mirroring the APFS path; thaw cleanup. Wired into the dispatch table.
+4. **Q4 — drop `guest-get-cpustats`.** Remove registration in `cmd_hardware_init`; delete `handle_get_cpustats` and any now-unused helpers. Update command count where mentioned.
+5. **Q5 — allowlist expansion.** Replace 9-entry static array in `fsfreeze_command_allowed()` with the 28-entry list. Unit test in `tests/test_proactive.c` exercising representative commands.
+6. **Q3 (`--self-test-json`) — `freeze_dispatch` block.** Extend `emit_system_info()` to describe the per-FS dispatch policy and the log path.
+7. **Q7 — documentation honesty.** All three doc revisions (memory claim, ISA rationale, new `FREEZE_SEMANTICS.md`) in one commit, landing after the code is in.
+8. **Phase 3 entry — `pve-verify.sh` enhancements.** Q3's log-fetch wiring, Q5's behavioural-check rewrite, the one-shot wrap. Tracked in Phase 3 of `PLAN.md`.

@@ -140,7 +140,7 @@ Implementation work flows from the spec and is tracked as separate commits: `src
 | Phase | Status | Deliverable | Started | Completed |
 |---|---|---|---|---|
 | 1 | **done** | `docs/research/UPSTREAM_NOTES.md` | 2026-05-23 | 2026-05-23 |
-| 2 | ready to start | `docs/design/FREEZE_AND_GATING.md` | — | — |
-| 3 | blocked on Phase 2 | `scripts/pve-verify.sh` updates | — | — |
+| 2 | **design done; implementation queue ready** | `docs/design/AGENT_BEHAVIOUR_SPEC.md` | 2026-05-23 | 2026-05-23 (design); implementation in progress |
+| 3 | blocked on Phase 2 implementation | `scripts/pve-verify.sh` updates | — | — |
 
 Update this table as phases progress.
