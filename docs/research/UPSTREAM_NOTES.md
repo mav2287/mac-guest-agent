@@ -484,34 +484,332 @@ The cleanest implementation is to check for both and only pass when the rejectio
 
 ## Target 5 — Proxmox UI / RRD CPU+memory gauges
 
-**Questions:**
-- Does the PVE web UI's per-VM CPU% gauge call `guest-get-cpustats`?
-- Does the memory gauge call `guest-get-memory-blocks` or use balloon stats?
-- Does it use QMP host-side (`query-cpus-fast`, `query-balloon`) regardless of guest agent?
-- Implication: does our `get-cpustats` shape matter for the UI, or is the UI fed from a different path?
+**Sources consulted:**
+- `https://raw.githubusercontent.com/proxmox/pve-manager/master/PVE/Service/pvestatd.pm` (the collector daemon — confirmed to be a thin relay)
+- `https://raw.githubusercontent.com/proxmox/qemu-server/master/src/PVE/QemuServer.pm` `sub vmstatus` (the actual data-collection function)
 
-**Source:** _(to be filled)_
+### `pvestatd` is a relay
 
-**Findings:** _(to be filled)_
+`pvestatd`'s `update_qemu_status` calls `PVE::QemuServer::vmstatus(undef, 1)` and broadcasts the result. No QGA calls in the daemon.
 
-**Verdict:** _(to be filled)_
+### `vmstatus` (PVE::QemuServer.pm, ~line 4600) — the canonical data sources
+
+```perl
+# Per-VM CPU%
+my $pstat = PVE::ProcFSTools::read_proc_pid_stat($pid);
+my $used = $pstat->{utime} + $pstat->{stime};
+# ... two samples, delta over time ...
+$d->{cpu} = (($dutime / $dtime) * $cpucount) / $d->{cpus};
+```
+
+```perl
+# Per-VM memory (default)
+my $cgroup_mem = eval { $cgroup->get_memory_stat() } // {};
+$d->{memhost} = $cgroup_mem->{mem} // 0;
+$d->{mem} = $d->{memhost};
+```
+
+```perl
+# Per-VM memory (full mode, overlaid with QMP query-balloon when stats are present)
+my $ballooncb = sub {
+    my ($vmid, $resp) = @_;
+    my $info = $resp->{'return'};
+    return if !$info->{max_mem};
+    $d->{maxmem} = $info->{max_mem};
+    $d->{balloon} = $info->{actual};
+    if (defined($info->{total_mem}) && defined($info->{free_mem})) {
+        $d->{mem}     = $info->{total_mem} - $info->{free_mem};
+        $d->{freemem} = $info->{free_mem};
+    }
+    $d->{ballooninfo} = $info;
+};
+```
+
+```perl
+# Network bytes
+my $netdev = PVE::ProcFSTools::read_proc_net_dev();
+# sums tap<vmid>i* interfaces
+```
+
+```perl
+# Disk I/O — only in full mode
+$qmpclient->queue_cmd($qmp_peer, $blockstatscb, 'query-blockstats');
+```
+
+### The data-source matrix for the PVE UI's per-VM gauges
+
+| Gauge | Canonical source |
+|---|---|
+| **CPU%** | `/proc/<qemu-pid>/stat` — QEMU process `utime + stime`, delta over time, normalised to vCPU count. **Host-side**, never QGA. |
+| **Memory (default)** | Linux cgroup memory stat for the VM's scope — QEMU process RSS on the host. |
+| **Memory (full mode + balloon stats present)** | QMP `query-balloon`: `total_mem - free_mem`. These fields are only populated when the guest has a virtio-balloon driver that has negotiated `VIRTIO_BALLOON_F_STATS_VQ` (see Target 7). For a macOS guest: absent. |
+| **Memory (full mode + no balloon stats)** | Falls back to the cgroup RSS path. |
+| **Network bytes** | `/proc/net/dev`, summing per-VM tap interfaces. Host-side. |
+| **Disk I/O bytes** | QMP `query-blockstats`. Host-side (QEMU's view). |
+
+### Verdict
+
+**Conclusively: the PVE web UI does not call our QGA commands for any of its data gauges.** No `guest-get-cpustats`, no `guest-get-memory-blocks`, no `guest-get-memory-block-info` is ever invoked by `vmstatus`. Three consequences:
+
+1. **Our `guest-get-cpustats` shape mismatch (Target 1) does not affect the PVE UI.** The UI's CPU% is QEMU process CPU time on the host. That's why @vit9696 sees one core at 100% on his Tiger VM — the QEMU vCPU thread is genuinely consuming a host core (old-macOS-on-QEMU idle quirk), and PVE is faithfully reporting it. Our agent's CPU response shape is irrelevant to this gauge.
+
+2. **Our `guest-get-memory-blocks` (and its derived "accurate memory reporting") does not feed the PVE UI either.** The memory gauge is cgroup RSS of QEMU (host RAM footprint) when no balloon stats are present. For a macOS guest, that's what shows up — not our agent's data. The reason @vit9696's gauge "looks correct" is that QEMU's RSS on the host happens to correlate roughly with guest memory pressure, not because PVE reads our agent.
+
+3. **The "Accurate Memory Reporting Without Balloon Driver" rationale (`docs/PVE.md`) is misleading as written.** It implies PVE's memory gauge benefits from our agent. It doesn't. What we provide is *direct* memory reporting via `qm agent <vmid> get-memory-blocks` or our own `pve-verify.sh` — a separate path from the gauge. Phase 2 should re-word this so contributors aren't misled into thinking the UI gets prettier when our agent is installed.
+
+So the answer to the original @vit9696 CPU question is now fully evidenced and closed: **the 100%-of-one-core figure is QEMU's host-side measurement of an idle-but-not-HLT'ing Tiger guest.** Stopping the agent will not change it. Our `get-cpustats` shape will not change it. Only the guest kernel's idle behaviour under KVM can change it.
 
 ---
 
-## Target 6 — Apple's built-in QGA (Big Sur+, 18 commands)
+## Synthesis
 
-**Questions:**
-- What commands does Apple's agent implement?
-- What response shapes does it produce — especially for any commands we both implement?
-- Where does it live on disk? Is it a binary we can `nm` / `otool -L` / extract strings from?
-- What does it do for `guest-fsfreeze-freeze` on a Big Sur+ APFS guest (if anything)?
-- Is there a relationship between Apple's agent claiming the VirtIO channel and any cross-version freeze behaviour we should know about?
+Phase 1 complete. Across seven targets, the consolidated picture:
 
-**Source:** _(to be filled)_
+### What the spec says we should look like
 
-**Findings:** _(to be filled)_
+- `guest-get-cpustats` is `CONFIG_LINUX`-only in upstream and returns `[GuestCpuStats]` — a per-CPU array of discriminated-union structs with a `type` field and a `cpu` index. **Our aggregate-object shape is not spec-conformant.** Phase 2 must decide: extend the union with a `darwin` variant and produce per-CPU rows, or stop registering the command on macOS.
+- `guest-fsfreeze-freeze-list` accepts an optional `mountpoints` argument we silently ignore (we route both `freeze` and `freeze-list` to the same `(void)args` handler). Phase 2 must decide: implement the subset behaviour or drop `freeze-list` from our registration.
+- Memory block schemas (`get-memory-blocks`, `get-memory-block-info`) are correct. No action.
+- Freeze/thaw/status enum shapes are correct.
 
-**Verdict:** _(to be filled)_
+### How the reference implementation handles what bit us
+
+- **Foreign-FS sync failure** is treated as "skip silently, don't count, continue" by Linux QGA when `EOPNOTSUPP`/`EBUSY` come back from `FIFREEZE`. Adopt the same pattern for `F_FULLFSYNC` `ENOTSUP`/`EOPNOTSUPP` on macOS. Move from WARN to INFO/DEBUG; consider the volume "best-effort flushed" (the global `sync()` already covered it).
+- **Pre-filter mounts** before the operation: skip network mounts (`smbfs`, `cifs`/`afpfs`/`nfs`), skip non-device-backed mounts. Linux QGA does this; we should add an analogous filter (statfs `f_fstypename` based).
+- **Set the frozen flag before the ioctl loop, unset if zero succeeded.** A minor sequencing change vs. our current "set after success."
+- **Allowlist divergence** with upstream: ours is 9, theirs is 6. We allow re-freeze (idempotent); they block it. Phase 2 should decide whether to align or document the divergence. The other extra entries (`guest-sync-id`) are fine.
+- **Persistent frozen-state marker on disk + logging disabled while frozen** — upstream does both for crash-safety and to avoid writing to a frozen volume. We do neither. Mostly harmless given our freeze isn't a true I/O suspension, but Phase 2 should at least decide explicitly.
+
+### Why `pve-verify.sh`'s behavioural check failed for @vit9696
+
+`qm agent <vmid> <cmd>` is an alias for `qm guest cmd <vmid> <cmd>`. Both route through `PVE::API2::Qemu::Agent`'s `register_command` dispatcher, which wraps the QGA response as `{result: $res}` with **no error handling**. When our agent returns `{"error":{"class":"GenericError","desc":"Command not allowed while filesystem is frozen"}}`, PVE wraps that as `{result:{error:{desc:"..."}}}`, returns HTTP 200, and the CLI exits 0. Our `pve-verify.sh` check that reads exit code therefore declares failure even when the agent is doing the right thing.
+
+**Our agent's freeze gating in `src/agent.c:73` is correct.** The fix is in our script: inspect response content for `"error"` / `"pretty-name"` instead of exit code.
+
+### Why @vit9696's PVE CPU% gauge shows 100%
+
+PVE's per-VM CPU gauge comes from `/proc/<qemu-pid>/stat` (`utime + stime`), not from our agent. Tiger's idle loop doesn't trap to KVM in a way that lets it park the vCPU thread, so the QEMU process keeps that thread spinning on the host. By El Cap that had been fixed. Our agent is not the source. Stopping the agent will not change the gauge.
+
+Same path for memory: cgroup RSS, optionally overlaid by `query-balloon` if the guest has a balloon-stats driver — which macOS does not, and structurally never will without a kext that doesn't exist (Target 7).
+
+### What this means for our project's positioning vs Apple's QGA
+
+Apple's `AppleQEMUGuestAgent` (16 commands) is a minimal QGA — exec, file I/O, sync, ping, time, network-get-interfaces, shutdown. **No freeze, no observability, no OS-info, no SSH, no memory, no CPU stats.** Our 45-command surface is genuine extension, not duplication. PVE backup consistency on a macOS guest is impossible without our agent (or one like it).
+
+Apple's QGA is also only launched when an `AppleVirtIOAgentDevice` IOKit property is matched, which is set by Apple's `applevirtio.console` driver loaded on Virtualization.framework hosts. On Proxmox/QEMU/OpenCore guests, that property is not set and Apple's QGA never runs. The "ISA-because-Apple-claims-VirtIO" rationale in our README is right for VZ environments but oversimplified for QEMU.
+
+### What Phase 2 needs to decide
+
+Translating the above into the design questions Phase 2's matrix has to answer:
+
+1. **`F_FULLFSYNC` failure handling on foreign FS** — adopt the Linux pattern (skip-not-count, INFO log). Settle: at what statfs `f_fstypename` values do we pre-skip vs let `F_FULLFSYNC` decide? List per FS type.
+2. **`guest-get-cpustats` shape** — extend with a `darwin` variant and produce per-CPU rows, or drop the command? If extend, settle the union discriminator naming and field set (probably matching `GuestLinuxCpuStats`'s shape minus Linux-only fields).
+3. **`guest-fsfreeze-freeze-list` mountpoints arg** — implement subset freeze or unregister the command?
+4. **Allowlist** — keep idempotent re-freeze or align with upstream (block re-freeze)? Add `get-fsinfo` (read-only) to allowed?
+5. **Persistent frozen-state marker** — write one (for crash recovery) or document the divergence?
+6. **Documentation honesty** — update the "Accurate Memory Reporting" claim, refine the "ISA-because-Apple" rationale to distinguish VZ from QEMU.
+
+### What Phase 3 needs to wrap
+
+- The corrected `pve-verify.sh` behavioural check (content inspection, not exit code).
+- The `qm agent exec` one-shot embedding of `--self-test-json` + `--safe-test-json`.
+- Whatever shape changes come out of Phase 2 (especially for `cpustats`).
+
+### What was *not* answered and may need re-research in Phase 2
+
+- Whether PVE has any per-command behaviour difference between `qm agent` and `qm guest cmd` beyond the alias relationship. (Unlikely based on the code, but only verified at the dispatch level — the surrounding CLI framework's exit-code logic was not read.)
+- Whether any other QGA consumer in the PVE ecosystem (pve-backup, pve-firewall, pve-cluster) calls our commands with shape expectations that differ from the spec. Likely no, but not exhaustively verified.
+- The `PVE::QMPClient::mon_cmd` implementation's exact behaviour for QGA error responses (whether it dies in some configurations and returns in others). The empirical evidence (other helpers' explicit `check_agent_error` calls) implies it returns the error hash, but the implementation itself was not read.
+
+These can be filled in Phase 2 if a design decision specifically depends on them.
+
+---
+
+## Target 6 — Apple's built-in QGA
+
+**Source consulted:** local inspection on macOS 26.5 host (`/usr/libexec/AppleQEMUGuestAgent`). Universal Mach-O (x86_64 + arm64e), 254 KB, code-signed `com.apple.AppleQEMUGuestAgent`, built April 17 2026.
+
+### Linked frameworks
+
+```
+SystemAdministration.framework (weak)
+SecurityFoundation.framework
+RemoteServiceDiscovery.framework
+IOKit.framework
+Foundation.framework
+CoreFoundation.framework
+libobjc, libc++, libSystem
+```
+
+Notably: `RemoteServiceDiscovery` (Apple's RPC layer), `SystemAdministration` (privileged operations), `SecurityFoundation` (auth). The agent runs as a privileged service for VZ-host → guest communication.
+
+### Commands implemented
+
+Extracted via `strings | grep -E '^guest-[a-z-]+$'`:
+
+```
+guest-exec
+guest-exec-status
+guest-file-close
+guest-file-flush
+guest-file-open
+guest-file-read
+guest-file-seek
+guest-file-write
+guest-get-time
+guest-info
+guest-network-get-interfaces
+guest-ping
+guest-set-time
+guest-shutdown
+guest-sync
+guest-sync-delimited
+```
+
+**Sixteen commands.** A minimal QGA implementation covering: identify the guest, exec commands and read their output, transfer files, basic networking lookup, time get/set, and graceful shutdown.
+
+### Commands NOT implemented by Apple's agent
+
+Comparing against the QGA spec and our 45-command surface, Apple's QGA explicitly does NOT implement:
+
+- **No freeze/thaw** — `guest-fsfreeze-freeze`, `-freeze-list`, `-thaw`, `-status` all absent. PVE-style backup consistency on a macOS guest with **only Apple's agent gets no quiesce.**
+- **No `guest-get-osinfo`** — they have `guest-info` (the version handshake) but not the OS-identification command.
+- **No observability:** `guest-get-host-name`, `guest-get-users`, `guest-get-load`, `guest-get-vcpus`, `guest-get-cpustats`, `guest-get-memory-blocks`, `guest-get-memory-block-info`, `guest-get-fsinfo`, `guest-get-disks`, `guest-get-diskstats` — all absent.
+- **No fstrim, no network-get-route.**
+- **No SSH key management:** `guest-ssh-*` commands absent.
+- **No `set-user-password`.**
+
+Strings search for freeze-related identifiers (`freeze`, `thaw`, `FIFREEZE`, `F_FULLFSYNC`) returns nothing — confirming the absence is structural, not just an unregistered command name.
+
+### Launch mechanism (`/System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist`)
+
+```
+"Label" => "com.apple.AppleQEMUGuestAgent"
+"ProgramArguments" => [ 0 => "/usr/libexec/AppleQEMUGuestAgent" ]
+"ProcessType" => "Interactive"
+"KeepAlive" => { "Crashed" => true }
+"LaunchEvents" => {
+    "com.apple.iokit.matching" => {
+        "com.apple.driver.applevirtio.console.match" => {
+            "IOMatchAll" => true
+            "IOMatchLaunchStream" => true
+            "IOPropertyMatch" => { "AppleVirtIOAgentDevice" => true }
+        }
+    }
+}
+"RemoteServices" => {
+    "com.apple.AppleQEMUGuestAgent" => {
+        "ExposedToUntrustedDevices" => true
+        "LimitExposedToDeviceType" => "virtualmachine-host"
+        "RequireEntitlement" => "com.apple.private.AppleQEMUGuestAgent"
+    }
+}
+```
+
+Two critical properties:
+
+1. **The daemon is IOKit-launched on-demand.** It only starts when a device with `AppleVirtIOAgentDevice = 1` is matched by IOKit. This property is set by Apple's `applevirtio.console` driver, which only loads on guests running under Apple's Virtualization.framework. **On QEMU/OpenCore guests (vit9696's and the user's setups), this property is not present and Apple's agent never launches.**
+2. **The transport is Apple's `RemoteServices`** (not raw serial). The agent listens on a `virtualmachine-host`-only Mach service, gated by the entitlement `com.apple.private.AppleQEMUGuestAgent`. This is the VZ host ↔ guest agent channel; it has nothing to do with QGA's traditional serial channel.
+
+### Verdict
+
+Three concrete implications:
+
+1. **The "ISA-because-Apple-claims-VirtIO" rationale is more nuanced than we've been documenting.** Apple's QGA only launches on VZ hosts (UTM, Apple's own `vz_run`, etc.) where `AppleVirtIOAgentDevice` is matched. On a Proxmox/QEMU/OpenCore guest, Apple's QGA never runs — there's no `AppleVirtIOAgentDevice` IOKit property. So on QEMU we could technically use VirtIO too. We deliberately don't, because on Apple VZ hosts our agent and Apple's would conflict. The honest documentation: "ISA, because some macOS guests run under Apple's Virtualization.framework and we don't want to conflict with Apple's agent there." Phase 2 should refine the README on this point.
+
+2. **Apple's QGA does not implement filesystem freeze, on any version.** PVE backup consistency for a macOS guest is impossible with Apple's agent alone. Anyone who wants quiesce-during-backup on a macOS VM must run our agent (or accept crash-consistent backups). This is a feature gap we fill, not a duplication.
+
+3. **No QGA command we implement clashes in shape with Apple's**, because we don't overlap on `guest-get-cpustats`, `guest-get-memory-blocks`, `guest-fsfreeze-*`, `get-osinfo`, etc. — Apple doesn't have them. On the 7 commands we both implement (`ping`, `sync`, `sync-delimited`, `info`, `get-time`, `set-time`, `shutdown`, `network-get-interfaces`, `exec*`, `file-*`), there's no PVE consumer that would notice our shape vs theirs. Spec-conformance for our extension commands (cpustats, memory blocks, freeze) is purely about being a good QGA citizen, not about competing with Apple.
+
+---
+
+## Target 7 — virtio-balloon stats protocol
+
+**Source consulted:** `https://raw.githubusercontent.com/qemu/qemu/master/hw/virtio/virtio-balloon.c` (QEMU `master`, fetched 2026-05-23).
+
+### The stat field set (lines 194-209)
+
+```c
+static const char *balloon_stat_names[] = {
+   [VIRTIO_BALLOON_S_SWAP_IN]         = "stat-swap-in",
+   [VIRTIO_BALLOON_S_SWAP_OUT]        = "stat-swap-out",
+   [VIRTIO_BALLOON_S_MAJFLT]          = "stat-major-faults",
+   [VIRTIO_BALLOON_S_MINFLT]          = "stat-minor-faults",
+   [VIRTIO_BALLOON_S_MEMFREE]         = "stat-free-memory",
+   [VIRTIO_BALLOON_S_MEMTOT]          = "stat-total-memory",
+   [VIRTIO_BALLOON_S_AVAIL]           = "stat-available-memory",
+   [VIRTIO_BALLOON_S_CACHES]          = "stat-disk-caches",
+   [VIRTIO_BALLOON_S_HTLB_PGALLOC]    = "stat-htlb-pgalloc",
+   [VIRTIO_BALLOON_S_HTLB_PGFAIL]     = "stat-htlb-pgfail",
+   [VIRTIO_BALLOON_S_OOM_KILL]        = "stat-oom-kills",
+   [VIRTIO_BALLOON_S_ALLOC_STALL]     = "stat-alloc-stalls",
+   [VIRTIO_BALLOON_S_ASYNC_SCAN]      = "stat-async-scans",
+   [VIRTIO_BALLOON_S_DIRECT_SCAN]     = "stat-direct-scans",
+   [VIRTIO_BALLOON_S_ASYNC_RECLAIM]   = "stat-async-reclaims",
+   [VIRTIO_BALLOON_S_DIRECT_RECLAIM]  = "stat-direct-reclaims",
+};
+```
+
+### Feature negotiation (lines 1076-1080)
+
+```c
+static uint64_t virtio_balloon_get_features(VirtIODevice *vdev,
+                                            uint64_t f, Error **errp)
+{
+    VirtIOBalloon *dev = VIRTIO_BALLOON(vdev);
+    f |= dev->host_features;
+    virtio_add_feature(&f, VIRTIO_BALLOON_F_STATS_VQ);
+    return f;
+}
+```
+
+The host advertises `VIRTIO_BALLOON_F_STATS_VQ`. **The guest driver must accept this feature flag to enable stats reporting.**
+
+### Stats reception (lines 583-610) — **guest-push only**
+
+```c
+static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
+{
+    ...
+    elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+    ...
+    while (iov_to_buf(elem->out_sg, elem->out_num, offset, &stat, sizeof(stat)) == sizeof(stat)) {
+        uint16_t tag = virtio_tswap16(vdev, stat.tag);
+        uint64_t val = virtio_tswap64(vdev, stat.val);
+        offset += sizeof(stat);
+        if (tag < VIRTIO_BALLOON_S_NR)
+            s->stats[tag] = val;
+    }
+    ...
+}
+```
+
+The guest pushes stats into the stats virtqueue at the host's request, but there is no mechanism for the host to obtain stats without a cooperating guest driver. If no driver, the stats slots are initialised to `-1` (line 217: `dev->stats[i++] = -1`).
+
+### What `query-balloon` returns without a driver (line 1070-1074)
+
+```c
+static void virtio_balloon_stat(void *opaque, BalloonInfo *info)
+{
+    VirtIOBalloon *dev = opaque;
+    info->actual = get_current_ram_size() - ((uint64_t) dev->actual <<
+                                             VIRTIO_BALLOON_PFN_SHIFT);
+}
+```
+
+Only `actual` (the ballooned-away amount, defaulting to total RAM when no balloon is active). No `stats` array.
+
+### Verdict
+
+Three concrete answers:
+
+1. **Without a guest-side virtio-balloon driver, the host gets no per-process memory telemetry.** Period. macOS has no virtio-balloon driver — never has, and Apple has no incentive to ship one. `query-balloon` returns the assigned-RAM number and an empty/-1 stats array for a macOS guest.
+
+2. **There is no host-pull alternative.** The protocol is entirely guest-push via the stats virtqueue. No QMP command exists that asks the guest for stats outside the negotiated virtqueue path.
+
+3. **Our `guest-get-memory-blocks` is the only path to *any* memory observability from a macOS guest, given the virtio-balloon dead end.** That validates keeping the command, but it also means we should be honest in documentation: this is a structural macOS-on-QEMU limitation, not a project-specific gap. PVE's "memory: 0 GB / 0 GB" gauge for a macOS guest *cannot* be made accurate via stats-from-balloon — it would require a balloon-stats kext, which doesn't exist and would be a multi-year project.
+
+   The proper future direction (if anyone cared enough) is **either** write a macOS virtio-balloon-stats kext (huge effort, kext deprecation makes it questionable), **or** convince PVE upstream to surface a "use guest agent for memory" path that reads our `guest-get-memory-blocks` for the gauge. The latter is a Proxmox feature request, not our code.
 
 ---
 

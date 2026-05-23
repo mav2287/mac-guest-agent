@@ -76,8 +76,8 @@ For each cell: (a) the agent's intent for the relevant commands, (b) the desired
 
 | Phase | Status | Deliverable | Started | Completed |
 |---|---|---|---|---|
-| 1 | in progress | `docs/research/UPSTREAM_NOTES.md` | 2026-05-23 | — |
-| 2 | blocked | `docs/design/FREEZE_AND_GATING.md` | — | — |
-| 3 | blocked | `scripts/pve-verify.sh` updates | — | — |
+| 1 | **done** | `docs/research/UPSTREAM_NOTES.md` | 2026-05-23 | 2026-05-23 |
+| 2 | ready to start | `docs/design/FREEZE_AND_GATING.md` | — | — |
+| 3 | blocked on Phase 2 | `scripts/pve-verify.sh` updates | — | — |
 
 Update this table as phases progress.
