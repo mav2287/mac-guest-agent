@@ -190,11 +190,16 @@ test-unit:
 	@echo "Running unit tests..."
 	@$(BUILD_DIR)/test_unit
 
-# Proactive tests (PTY channel, SSH temp files, hook validation)
+# Proactive tests (PTY channel, SSH temp files, hook validation, fs dispatch).
+# Links src/cmd-fs.c so tests can exercise fs_dispatch_class. The test file
+# stubs command_register (the only commands.c symbol cmd-fs.c references at
+# link time) so we don't have to drag in all cmd-*.c files for tests that
+# never call cmd_fs_init.
 test-proactive:
 	@echo "Building proactive tests..."
 	@$(CC) -Isrc -Isrc/third_party -o $(BUILD_DIR)/test_proactive tests/test_proactive.c \
 		src/channel.c src/util.c src/protocol.c src/compat.c src/log.c \
+		src/cmd-fs.c \
 		src/third_party/cJSON.c -framework CoreFoundation -framework IOKit
 	@echo "Running proactive tests..."
 	@$(BUILD_DIR)/test_proactive

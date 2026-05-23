@@ -13,13 +13,26 @@
 #include "util.h"
 #include "protocol.h"
 #include "compat.h"
+#include "cmd-fs.h"
+#include "commands.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <errno.h>
+
+/* Stub: cmd-fs.c references command_register at link time (via cmd_fs_init).
+ * The tests in this file never call cmd_fs_init, so the registrations never
+ * fire at runtime. This stub satisfies the linker without dragging in
+ * commands.c (which would in turn pull in every cmd-*.c file). */
+void command_register(const char *name, command_handler_fn handler, int enabled)
+{
+    (void)name; (void)handler; (void)enabled;
+}
 
 static int pass = 0, fail = 0;
 
@@ -119,6 +132,80 @@ static void test_channel_pty_read(void)
 
     channel_destroy(ch);
     close(master);
+}
+
+/* ---- fs_dispatch_class (per-FS freeze dispatch matrix from AGENT_BEHAVIOUR_SPEC.md Q1) ---- */
+
+static void make_statfs(struct statfs *s, const char *type,
+                        const char *mntfrom, const char *mnton, uint32_t flags)
+{
+    memset(s, 0, sizeof(*s));
+    strncpy(s->f_fstypename, type, sizeof(s->f_fstypename) - 1);
+    strncpy(s->f_mntfromname, mntfrom, sizeof(s->f_mntfromname) - 1);
+    strncpy(s->f_mntonname, mnton, sizeof(s->f_mntonname) - 1);
+    s->f_flags = flags;
+}
+
+static void test_fs_dispatch(void)
+{
+    printf("\n--- fs_dispatch_class (per-FS freeze dispatch) ---\n");
+    struct statfs s;
+
+    /* Read-only check wins over filesystem-type classification */
+    make_statfs(&s, "apfs", "/dev/disk1s1", "/", MNT_RDONLY);
+    ASSERT("apfs RDONLY -> SKIP_RDONLY", fs_dispatch_class(&s) == FS_SKIP_RDONLY);
+    make_statfs(&s, "hfs", "/dev/disk0s2", "/Volumes/Recovery", MNT_RDONLY);
+    ASSERT("hfs RDONLY -> SKIP_RDONLY", fs_dispatch_class(&s) == FS_SKIP_RDONLY);
+
+    /* Writable known types */
+    make_statfs(&s, "apfs", "/dev/disk1s1", "/", 0);
+    ASSERT("apfs writable -> APFS_WRITABLE", fs_dispatch_class(&s) == FS_APFS_WRITABLE);
+    make_statfs(&s, "hfs", "/dev/disk0s2", "/", 0);
+    ASSERT("hfs writable -> HFS_WRITABLE", fs_dispatch_class(&s) == FS_HFS_WRITABLE);
+    make_statfs(&s, "zfs", "/dev/zd0", "/tank", 0);
+    ASSERT("zfs writable -> ZFS_WRITABLE", fs_dispatch_class(&s) == FS_ZFS_WRITABLE);
+
+    /* Foreign writable types — generic (try F_FULLFSYNC, tolerate ENOTSUP) */
+    make_statfs(&s, "msdos", "/dev/disk2s1", "/Volumes/EFI", 0);
+    ASSERT("msdos writable -> GENERIC_WRITABLE", fs_dispatch_class(&s) == FS_GENERIC_WRITABLE);
+    make_statfs(&s, "exfat", "/dev/disk3s1", "/Volumes/USB", 0);
+    ASSERT("exfat writable -> GENERIC_WRITABLE", fs_dispatch_class(&s) == FS_GENERIC_WRITABLE);
+    make_statfs(&s, "udf", "/dev/disk4s1", "/Volumes/DVD", 0);
+    ASSERT("udf writable -> GENERIC_WRITABLE", fs_dispatch_class(&s) == FS_GENERIC_WRITABLE);
+    make_statfs(&s, "ntfs", "/dev/disk5s1", "/Volumes/Win", 0);
+    ASSERT("ntfs writable -> GENERIC_WRITABLE", fs_dispatch_class(&s) == FS_GENERIC_WRITABLE);
+
+    /* Network mounts — explicit type match wins regardless of mntfromname */
+    make_statfs(&s, "smbfs", "//host/share", "/Volumes/Share", 0);
+    ASSERT("smbfs -> SKIP_NETWORK", fs_dispatch_class(&s) == FS_SKIP_NETWORK);
+    make_statfs(&s, "afpfs", "afp://host/vol", "/Volumes/AFP", 0);
+    ASSERT("afpfs -> SKIP_NETWORK", fs_dispatch_class(&s) == FS_SKIP_NETWORK);
+    make_statfs(&s, "nfs", "host:/path", "/Volumes/NFS", 0);
+    ASSERT("nfs -> SKIP_NETWORK", fs_dispatch_class(&s) == FS_SKIP_NETWORK);
+    make_statfs(&s, "webdav", "http://host/path", "/Volumes/WD", 0);
+    ASSERT("webdav -> SKIP_NETWORK", fs_dispatch_class(&s) == FS_SKIP_NETWORK);
+
+    /* Special kernel filesystems */
+    make_statfs(&s, "devfs", "devfs", "/dev", 0);
+    ASSERT("devfs -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+    make_statfs(&s, "autofs", "map auto_home", "/System/Volumes/Data/home", 0);
+    ASSERT("autofs -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+    make_statfs(&s, "fdesc", "fdesc", "/dev/fd", 0);
+    ASSERT("fdesc -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+    make_statfs(&s, "synthfs", "synthfs", "/", 0);
+    ASSERT("synthfs -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+    make_statfs(&s, "volfs", "volfs", "/.vol", 0);
+    ASSERT("volfs -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+    make_statfs(&s, "lifs", "lifs", "/private/var/db/timed", 0);
+    ASSERT("lifs -> SKIP_SPECIAL", fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+
+    /* Unknown type backed by non-/dev — defensive skip (e.g. FUSE drivers) */
+    make_statfs(&s, "macfuse", "fuse@server", "/Volumes/Mounted", 0);
+    ASSERT("unknown FUSE non-/dev backing -> SKIP_SPECIAL",
+           fs_dispatch_class(&s) == FS_SKIP_SPECIAL);
+
+    /* NULL pointer guard */
+    ASSERT("NULL mnt -> SKIP_SPECIAL", fs_dispatch_class(NULL) == FS_SKIP_SPECIAL);
 }
 
 /* ---- SSH with Temp Files ---- */
@@ -257,6 +344,7 @@ int main(void)
 
     test_channel_api();
     test_channel_pty_read();
+    test_fs_dispatch();
     test_ssh_temp();
     test_freeze_hooks();
     test_password_validation();

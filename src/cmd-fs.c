@@ -1,3 +1,4 @@
+#include "cmd-fs.h"
 #include "commands.h"
 #include "compat.h"
 #include "util.h"
@@ -174,45 +175,168 @@ static int run_hooks(const char *action)
     return failed ? -1 : 0;
 }
 
-/* ---- Sync Operations ---- */
+/* ---- Per-filesystem-type dispatch ----
+ *
+ * Replaces the previous uniform "F_FULLFSYNC on every writable /dev-backed
+ * mount" loop with a per-FS-type strategy. macOS has no FIFREEZE, so we get
+ * exactly what the platform provides per filesystem:
+ *
+ *   APFS  - tmutil localsnapshot (real atomic consistency point) at the
+ *           container level, plus F_FULLFSYNC per mount as defence in depth.
+ *           The snapshot is taken by handle_fsfreeze_freeze before this
+ *           loop runs; we only do the per-mount F_FULLFSYNC here.
+ *   HFS+  - F_FULLFSYNC (best-effort flush to media).
+ *   FAT / exFAT / UDF / NTFS R/W / unknown - try F_FULLFSYNC, tolerate
+ *           ENOTSUP (older drivers don't implement it; the global sync()
+ *           at the top already flushed dirty buffers).
+ *   ZFS   - Phase 2 item 3 will add `zfs snapshot`; for this commit treat
+ *           ZFS the same as GENERIC_WRITABLE.
+ *   Network (smbfs/afpfs/nfs/webdav/ftp) - skip; not the guest's concern.
+ *   Special (devfs/fdesc/volfs/synthfs/lifs/autofs) or non-/dev-backed -
+ *           skip; no meaningful flush semantics.
+ *   Read-only - skip; nothing to flush.
+ *
+ * See docs/design/AGENT_BEHAVIOUR_SPEC.md Q1 for the full design.
+ */
 
-static int sync_all_volumes(int do_fullfsync)
+fs_class_t fs_dispatch_class(const struct statfs *mnt)
+{
+    if (!mnt) return FS_SKIP_SPECIAL;
+
+    if (mnt->f_flags & MNT_RDONLY) return FS_SKIP_RDONLY;
+
+    const char *type = mnt->f_fstypename;
+
+    if (strcmp(type, "smbfs") == 0 ||
+        strcmp(type, "afpfs") == 0 ||
+        strcmp(type, "nfs") == 0 ||
+        strcmp(type, "webdav") == 0 ||
+        strcmp(type, "ftp") == 0) {
+        return FS_SKIP_NETWORK;
+    }
+
+    if (strcmp(type, "devfs") == 0 ||
+        strcmp(type, "fdesc") == 0 ||
+        strcmp(type, "volfs") == 0 ||
+        strcmp(type, "synthfs") == 0 ||
+        strcmp(type, "lifs") == 0 ||
+        strcmp(type, "autofs") == 0) {
+        return FS_SKIP_SPECIAL;
+    }
+
+    /* Anything not backed by a /dev/... device — be defensive. */
+    if (strncmp(mnt->f_mntfromname, "/dev/", 5) != 0) {
+        return FS_SKIP_SPECIAL;
+    }
+
+    if (strcmp(type, "apfs") == 0) return FS_APFS_WRITABLE;
+    if (strcmp(type, "zfs") == 0)  return FS_ZFS_WRITABLE;
+    if (strcmp(type, "hfs") == 0)  return FS_HFS_WRITABLE;
+
+    return FS_GENERIC_WRITABLE;
+}
+
+/* Per-mount F_FULLFSYNC with ENOTSUP/EOPNOTSUPP tolerance.
+ * Increments the supplied counters. */
+static void try_fullfsync(const struct statfs *mnt, fs_counts_t *c)
+{
+    int fd = open(mnt->f_mntonname, O_RDONLY);
+    if (fd < 0) {
+        LOG_WARN("Cannot open %s (%s) for sync: %s",
+                 mnt->f_mntonname, mnt->f_fstypename, strerror(errno));
+        /* The global sync() at the top of sync_all_volumes already flushed
+         * dirty buffers; count this as flushed_only rather than losing it. */
+        c->flushed_only++;
+        return;
+    }
+
+    if (fcntl(fd, F_FULLFSYNC) == 0) {
+        LOG_DEBUG("F_FULLFSYNC ok on %s (%s)",
+                  mnt->f_mntonname, mnt->f_fstypename);
+        c->fullfsynced++;
+    } else if (errno == ENOTSUP || errno == EOPNOTSUPP) {
+        /* By design on filesystems that don't implement F_FULLFSYNC
+         * (older MS-DOS driver on Tiger-era macOS, third-party FUSE
+         * drivers, etc.). The global sync() already flushed dirty
+         * buffers — count as flushed_only at DEBUG, not WARN. */
+        LOG_DEBUG("F_FULLFSYNC unsupported on %s (%s) — flushed via sync() only",
+                  mnt->f_mntonname, mnt->f_fstypename);
+        c->flushed_only++;
+    } else {
+        /* Unexpected error (EIO, EAGAIN, EACCES, etc.). Real problem —
+         * surface it. Still count as flushed_only — sync() covered the data. */
+        LOG_WARN("F_FULLFSYNC failed on %s (%s): %s",
+                 mnt->f_mntonname, mnt->f_fstypename, strerror(errno));
+        c->flushed_only++;
+    }
+
+    close(fd);
+}
+
+/* ---- Sync Operations ----
+ *
+ * Caller initialises `counts` (typically by setting snapshotted /
+ * zfs_snapshotted to reflect APFS / ZFS snapshot outcomes captured
+ * elsewhere, then zeroing the rest). sync_all_volumes only INCREMENTS
+ * counts as it iterates — it does not reset them — so any snapshot
+ * results captured by the caller before invocation are preserved.
+ *
+ * Returns the total of "did-something" counters
+ * (snapshotted + zfs_snapshotted + fullfsynced + flushed_only) for the
+ * caller's wire response.
+ */
+static int sync_all_volumes(int do_fullfsync, fs_counts_t *counts)
 {
     if (test_mode) {
         LOG_DEBUG("Dry-run: would sync all volumes (F_FULLFSYNC=%d)", do_fullfsync);
-        return 1; /* Pretend 1 volume synced */
+        counts->fullfsynced += 1;  /* pretend one volume succeeded */
+        return counts->snapshotted + counts->zfs_snapshotted +
+               counts->fullfsynced + counts->flushed_only;
     }
 
     sync();
 
-    if (!do_fullfsync) return 0;
+    if (!do_fullfsync) {
+        return counts->snapshotted + counts->zfs_snapshotted +
+               counts->fullfsynced + counts->flushed_only;
+    }
 
-    /* F_FULLFSYNC on each mounted local, writable volume */
     struct statfs *mntbuf;
     int mntcount = getmntinfo(&mntbuf, MNT_NOWAIT);
-    int synced = 0;
 
     for (int i = 0; i < mntcount; i++) {
-        /* Skip non-local (network) volumes */
-        if (strncmp(mntbuf[i].f_mntfromname, "/dev/", 5) != 0)
-            continue;
-        /* Skip read-only volumes */
-        if (mntbuf[i].f_flags & MNT_RDONLY)
-            continue;
+        fs_class_t cls = fs_dispatch_class(&mntbuf[i]);
+        const char *mp = mntbuf[i].f_mntonname;
+        const char *type = mntbuf[i].f_fstypename;
 
-        int fd = open(mntbuf[i].f_mntonname, O_RDONLY);
-        if (fd >= 0) {
-            if (fcntl(fd, F_FULLFSYNC) == 0) {
-                synced++;
-            } else {
-                LOG_WARN("F_FULLFSYNC failed on %s: %s",
-                         mntbuf[i].f_mntonname, strerror(errno));
-            }
-            close(fd);
+        switch (cls) {
+        case FS_SKIP_RDONLY:
+            LOG_DEBUG("Skip %s (%s): read-only", mp, type);
+            counts->skipped_readonly++;
+            break;
+        case FS_SKIP_NETWORK:
+            LOG_DEBUG("Skip %s (%s): network mount", mp, type);
+            counts->skipped_network++;
+            break;
+        case FS_SKIP_SPECIAL:
+            LOG_DEBUG("Skip %s (%s): special filesystem", mp, type);
+            counts->skipped_special++;
+            break;
+        case FS_APFS_WRITABLE:
+        case FS_HFS_WRITABLE:
+        case FS_GENERIC_WRITABLE:
+            try_fullfsync(&mntbuf[i], counts);
+            break;
+        case FS_ZFS_WRITABLE:
+            /* Phase 2 item 3 will add `zfs snapshot` integration.
+             * Until then ZFS gets the same treatment as GENERIC_WRITABLE. */
+            try_fullfsync(&mntbuf[i], counts);
+            break;
         }
     }
 
-    return synced;
+    return counts->snapshotted + counts->zfs_snapshotted +
+           counts->fullfsynced + counts->flushed_only;
 }
 
 /* ---- APFS Snapshot ---- */
@@ -298,15 +422,21 @@ static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const 
     }
 
     /* Step 2: APFS snapshot FIRST (10.13+) — this IS the consistency point */
+    fs_counts_t counts;
+    memset(&counts, 0, sizeof(counts));
+
     int has_snapshot = 0;
     if (compat_has_apfs()) {
         has_snapshot = create_apfs_snapshot();
     }
+    counts.snapshotted = has_snapshot;
 
-    /* Step 3: sync + F_FULLFSYNC on all local writable volumes */
-    int synced = sync_all_volumes(1);  /* 1 = do F_FULLFSYNC */
+    /* Step 3: sync + per-FS dispatch on writable local volumes.
+     * sync_all_volumes() increments counts; it does not reset them, so
+     * the snapshotted value set above is preserved in the totals. */
+    int total = sync_all_volumes(1, &counts);
 
-    if (synced == 0 && !has_snapshot) {
+    if (total == 0) {
         *err_class = "GenericError";
         *err_desc = "Failed to sync any volumes";
         run_hooks("thaw");  /* Undo freeze hooks */
@@ -316,15 +446,25 @@ static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const 
     /* Step 4: Set frozen state */
     freeze_status = 1;
     freeze_start_time = time(NULL);
-    frozen_volume_count = synced + has_snapshot;
+    frozen_volume_count = total;
     auto_thaw_fired = 0;
 
     /* Step 5: Set auto-thaw alarm */
     signal(SIGALRM, auto_thaw_handler);
     alarm(AUTO_THAW_SECS);
 
-    LOG_INFO("Filesystem frozen: %d volumes synced, APFS snapshot=%s",
-             synced, has_snapshot ? "yes" : "no");
+    /* Single INFO line capturing the full per-treatment breakdown.
+     * This is what scripts/pve-verify.sh greps for to report the per-FS
+     * outcome from the host side (Phase 3 work). */
+    int skipped = counts.skipped_network + counts.skipped_special +
+                  counts.skipped_readonly;
+    LOG_INFO("Filesystem frozen: %d snapshotted, %d zfs_snapshotted, "
+             "%d fullfsynced, %d flushed_only (=%d total); "
+             "skipped %d (%d network, %d special, %d readonly)",
+             counts.snapshotted, counts.zfs_snapshotted,
+             counts.fullfsynced, counts.flushed_only, total,
+             skipped,
+             counts.skipped_network, counts.skipped_special, counts.skipped_readonly);
 
     return cJSON_CreateNumber(frozen_volume_count);
 }
