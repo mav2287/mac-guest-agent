@@ -33,7 +33,7 @@
  * flush new writes. This closes the write window to ~100ms maximum.
  */
 
-#define HOOK_DIR "/etc/qemu/fsfreeze-hook.d"
+#define HOOK_DIR_DEFAULT "/etc/qemu/fsfreeze-hook.d"
 #define HOOK_TIMEOUT_SECS 30
 #define AUTO_THAW_SECS 600   /* 10 minutes */
 #define FREEZE_POLL_MS 100
@@ -42,6 +42,27 @@
 static int test_mode = 0;
 
 void fsfreeze_set_test_mode(int enabled) { test_mode = enabled; }
+
+/* Resolve the freeze-hook directory.
+ *
+ * In production this is always `/etc/qemu/fsfreeze-hook.d` (root-owned,
+ * root-only writable, the standard location every Linux/Windows QGA
+ * also uses for fsfreeze-hook scripts). In --test mode ONLY, an
+ * MGA_HOOK_DIR_OVERRIDE env var can substitute a different path so
+ * integration tests can install a failing-hook fixture without root
+ * and without polluting the host's real hook directory. The override
+ * is gated on test_mode (set only by main.c when --test is on the
+ * command line) — attacker-controlled QGA traffic cannot enable test
+ * mode, so this is safe in production. See audit.md finding 5 and the
+ * tests/run_tests.sh "Freeze hook abort contract" block. */
+static const char *hook_dir(void)
+{
+    if (test_mode) {
+        const char *override = getenv("MGA_HOOK_DIR_OVERRIDE");
+        if (override && *override) return override;
+    }
+    return HOOK_DIR_DEFAULT;
+}
 
 /* Freeze state */
 static int freeze_status = 0;        /* 0=thawed, 1=frozen */
@@ -62,17 +83,22 @@ static void auto_thaw_handler(int sig)
 
 static int run_hooks(const char *action)
 {
+    const char *hd = hook_dir();
     struct stat dir_st;
-    if (stat(HOOK_DIR, &dir_st) != 0)
+    if (stat(hd, &dir_st) != 0)
         return 0;  /* Directory doesn't exist — skip silently */
 
-    /* Validate directory ownership: must be owned by root */
-    if (dir_st.st_uid != 0) {
-        LOG_WARN("Hook directory %s not owned by root, skipping", HOOK_DIR);
+    /* Validate directory ownership: must be owned by root in production.
+     * In test_mode the override path is owned by the test user, so the
+     * root check is bypassed there. The world-writability + executable
+     * checks below (correctness, not security) stay enforced in both
+     * modes. */
+    if (!test_mode && dir_st.st_uid != 0) {
+        LOG_WARN("Hook directory %s not owned by root, skipping", hd);
         return 0;
     }
 
-    DIR *dir = opendir(HOOK_DIR);
+    DIR *dir = opendir(hd);
     if (!dir) return 0;
 
     /* Collect script names and sort alphabetically */
@@ -84,15 +110,20 @@ static int run_hooks(const char *action)
         if (entry->d_name[0] == '.') continue;
 
         char path[512];
-        snprintf(path, sizeof(path), "%s/%s", HOOK_DIR, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", hd, entry->d_name);
 
         struct stat st;
         if (stat(path, &st) != 0) continue;
         if (!S_ISREG(st.st_mode)) continue;
         if (!(st.st_mode & S_IXUSR)) continue;
 
-        /* Security: must be owned by root, not world-writable */
-        if (st.st_uid != 0) {
+        /* Security: must be owned by root, not world-writable.
+         * The root-ownership check is bypassed in test_mode (test
+         * scripts live in /tmp owned by the test runner). The world-
+         * writable check stays — that's a correctness concern (any
+         * user could modify the script content) independent of
+         * ownership. */
+        if (!test_mode && st.st_uid != 0) {
             LOG_WARN("Hook %s not owned by root, skipping", entry->d_name);
             continue;
         }
@@ -124,7 +155,7 @@ static int run_hooks(const char *action)
     int failed = 0;
     for (int i = 0; i < count; i++) {
         char path[512];
-        snprintf(path, sizeof(path), "%s/%s", HOOK_DIR, scripts[i]);
+        snprintf(path, sizeof(path), "%s/%s", hd, scripts[i]);
 
         LOG_INFO("Running %s hook: %s", action, scripts[i]);
 

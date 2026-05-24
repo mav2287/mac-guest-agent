@@ -1135,6 +1135,70 @@ fi
 
 # =========================================================
 echo ""
+echo "--- Freeze hook abort contract ---"
+# =========================================================
+#
+# Locks the docs/code contract from audit finding 5: a freeze hook
+# script that exits non-zero must abort the freeze with a GenericError
+# carrying "Freeze hook script failed". Uses the MGA_HOOK_DIR_OVERRIDE
+# env var (honored only in --test mode) to install a failing hook in
+# /tmp/ without polluting the host's real /etc/qemu/fsfreeze-hook.d.
+HOOK_TEST_DIR="/tmp/mga-hook-abort-test-$$"
+mkdir -p "$HOOK_TEST_DIR"
+cat > "$HOOK_TEST_DIR/01-failing-hook.sh" <<'HOOKEOF'
+#!/bin/bash
+exit 1
+HOOKEOF
+chmod 755 "$HOOK_TEST_DIR/01-failing-hook.sh"
+
+ABORT_RESP=$(printf '%s\n' '{"execute":"guest-fsfreeze-freeze"}' \
+    | MGA_HOOK_DIR_OVERRIDE="$HOOK_TEST_DIR" "$BINARY" --test 2>/dev/null \
+    | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+
+if echo "$ABORT_RESP" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert 'error' in d, f'expected error envelope, got: {d}'
+err = d['error']
+desc = err.get('desc', '')
+assert 'Freeze hook script failed' in desc, f'wrong error desc: {desc!r}'
+" 2>/dev/null; then
+    echo "  PASS: failing freeze hook aborts the freeze with GenericError"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: failing freeze hook should abort the freeze (got: $ABORT_RESP)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Follow-up: a successful hook (exit 0) must NOT abort the freeze.
+# Proves the abort path is gated on non-zero exit specifically, not
+# on the mere fact of running a hook.
+cat > "$HOOK_TEST_DIR/01-failing-hook.sh" <<'HOOKEOF'
+#!/bin/bash
+exit 0
+HOOKEOF
+SUCCESS_RESP=$(printf '%s\n' '{"execute":"guest-fsfreeze-freeze"}' \
+    | MGA_HOOK_DIR_OVERRIDE="$HOOK_TEST_DIR" "$BINARY" --test 2>/dev/null \
+    | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+
+if echo "$SUCCESS_RESP" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert 'return' in d, f'expected success envelope, got: {d}'
+assert isinstance(d['return'], (int, float)), f'expected numeric count, got: {d[\"return\"]}'
+" 2>/dev/null; then
+    echo "  PASS: succeeding freeze hook does NOT abort the freeze"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: succeeding freeze hook should let the freeze proceed (got: $SUCCESS_RESP)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Cleanup.
+rm -rf "$HOOK_TEST_DIR"
+
+# =========================================================
+echo ""
 echo "--- Command Filtering During Freeze ---"
 # =========================================================
 
