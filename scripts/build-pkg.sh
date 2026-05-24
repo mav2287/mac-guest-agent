@@ -11,7 +11,16 @@
 
 set -e
 
-VERSION="2.4.0"
+# Single-source the version from the Makefile so a release tag never
+# ships a .pkg whose stamped version disagrees with the binary. Honour
+# a VERSION env override (used by .github/workflows/release.yml to stamp
+# the git-tag version on tagged releases). See audit.md finding 4.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERSION="${VERSION:-$(awk -F':= *' '/^VERSION[[:space:]]*:=/{print $2; exit}' "$SCRIPT_DIR/../Makefile")}"
+if [ -z "$VERSION" ]; then
+    echo "Error: could not determine VERSION (Makefile parse failed and no env override)" >&2
+    exit 1
+fi
 ARCH="${1:-$(uname -m | sed 's/x86_64/amd64/;s/arm64/arm64/')}"
 PKG_ID="com.github.mac-guest-agent"
 PKG_NAME="mac-guest-agent-${VERSION}-${ARCH}.pkg"

@@ -20,18 +20,21 @@ jobs:
       - name: Extract version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
+      # Per audit.md finding 4: pass VERSION through to make so a tagged
+      # release ships binaries whose embedded version matches the git
+      # tag, not whatever the Makefile happens to hold at tag time.
       - name: Build all architectures
-        run: make build-all
+        run: make VERSION="$VERSION" build-all
 
       - name: Download legacy SDK and build i386
         run: |
           curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
           tar xf /tmp/sdk.tar.xz -C /tmp
-          make build-i386 I386_SDK=/tmp/MacOSX10.13.sdk
+          make VERSION="$VERSION" build-i386 I386_SDK=/tmp/MacOSX10.13.sdk
 
       - name: Run test suite
         run: |
-          make build
+          make VERSION="$VERSION" build
           ./tests/run_tests.sh ./build/mac-guest-agent
 
       - name: Prepare release binaries
