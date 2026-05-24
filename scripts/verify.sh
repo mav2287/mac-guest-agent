@@ -363,6 +363,174 @@ pve_guest_exec_json() {
     fi
 }
 
+# --- Transport: libvirt ---------------------------------------------------
+
+libvirt_describe() {
+    printf 'libvirt (virsh qemu-agent-command); domain=%s' "$VMID"
+}
+
+libvirt_preflight() {
+    # 1. virsh and perl on PATH.
+    for tool in virsh perl base64; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            fail "preflight — '$tool' not found"
+            return 1
+        fi
+    done
+
+    # 2. Connect to the system libvirtd: requires root or libvirt-group
+    # membership. `virsh list --all` is a cheap probe that exits non-zero
+    # if the socket is unreachable. Honour LIBVIRT_DEFAULT_URI if set.
+    if ! virsh list --all >/dev/null 2>&1; then
+        fail "preflight — virsh cannot connect to libvirtd (run as root, join the 'libvirt' group, or set LIBVIRT_DEFAULT_URI)"
+        return 1
+    fi
+
+    # 3. Domain exists.
+    if ! virsh dominfo "$VMID" >/dev/null 2>&1; then
+        fail "preflight — libvirt domain '$VMID' not found (try: virsh list --all)"
+        return 1
+    fi
+
+    return 0
+}
+
+libvirt_vm_state() {
+    local state
+    state=$(virsh domstate "$VMID" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+    case "$state" in
+        running)              printf 'running' ;;
+        shutoff|"shut off")   printf 'stopped' ;;
+        "")                   printf 'unknown' ;;
+        *)                    printf '%s' "$state" ;;
+    esac
+}
+
+libvirt_config_summary() {
+    local xml
+    xml=$(virsh dumpxml "$VMID" 2>/dev/null)
+    if [ -z "$xml" ]; then
+        fail "domain config not retrievable via virsh dumpxml"
+        return
+    fi
+    # Look for the QGA virtio-serial channel that libvirt documents:
+    #   <channel type='unix'>
+    #     <target type='virtio' name='org.qemu.guest_agent.0'/>
+    #   </channel>
+    # Without this, the in-guest agent has nothing to talk to and the
+    # transport simply doesn't work — same effect as type=isa missing on
+    # PVE, even though the underlying reason (virtio vs ISA) differs.
+    if printf '%s' "$xml" | grep -q "org.qemu.guest_agent.0"; then
+        pass "guest-agent virtio channel present (org.qemu.guest_agent.0)"
+    else
+        fail "guest-agent virtio channel missing — add <channel><target name='org.qemu.guest_agent.0'/></channel> to the domain XML"
+    fi
+    # discard / SSD emulation hints (best-effort grep — libvirt's disk XML
+    # is structured but a string grep is enough for an evidence check).
+    if printf '%s' "$xml" | grep -q "discard='unmap'\|discard=\"unmap\""; then
+        pass "disk discard=unmap (TRIM enabled)"
+    else
+        info "disk discard not enabled (optional — needed for guest-fstrim)"
+    fi
+    if printf '%s' "$xml" | grep -q "rotation_rate=\"1\"\|rotation_rate='1'"; then
+        pass "disk rotation_rate=1 (SSD emulation)"
+    else
+        info "disk rotation_rate=1 not set (optional — needed for guest-fstrim)"
+    fi
+}
+
+# libvirt_qga_cmd <command-suffix> [json-args]
+# Issues `guest-<command-suffix>` via `virsh qemu-agent-command` and prints
+# the unwrapped response body so downstream `json_query` calls work with
+# the same `$d->{field}` shape PVE produces. virsh's envelope is
+# `{"return": <body>}` or `{"error": ...}`; we strip `return` if present
+# and pass error envelopes through unchanged so the freeze-behavioural
+# check can still see the "Command not allowed while filesystem is
+# frozen" string in $d->{error}->{desc}.
+libvirt_qga_cmd() {
+    local cmd="$1"; shift
+    local frame
+    if [ $# -gt 0 ] && [ -n "$1" ]; then
+        frame=$(printf '{"execute":"guest-%s","arguments":%s}' "$cmd" "$1")
+    else
+        frame=$(printf '{"execute":"guest-%s"}' "$cmd")
+    fi
+    local raw
+    raw=$(virsh qemu-agent-command --timeout "$EXEC_TIMEOUT" "$VMID" "$frame" 2>/dev/null)
+    [ -z "$raw" ] && return
+    printf '%s' "$raw" | perl -MJSON::PP -e '
+        local $/;
+        my $d = eval { decode_json(scalar <STDIN>) };
+        exit 1 if $@ || !defined $d;
+        if (ref $d eq "HASH" && exists $d->{return}) {
+            print encode_json($d->{return});
+        } else {
+            print encode_json($d);
+        }
+    ' 2>/dev/null
+}
+
+# libvirt_guest_exec_json <path> [args...]
+# Drives `guest-exec` + `guest-exec-status` via `virsh qemu-agent-command`,
+# base64-decodes out-data/err-data, returns a PVE-shaped envelope
+# ({exited, exitcode, "out-data": <text>, "err-data": <text>}) so the
+# downstream check code is transport-agnostic.
+#
+# Polls exec-status until exited=true, capped at EXEC_TIMEOUT seconds.
+# Sleep granularity is 250ms (Perl select() — no `sleep 0.25` portability
+# issue with /bin/sleep on older BSDs).
+libvirt_guest_exec_json() {
+    local path="$1"; shift
+    LV_DOMAIN="$VMID" LV_PATH="$path" LV_TIMEOUT="$EXEC_TIMEOUT" LV_ARGS_JSON=$(
+        perl -MJSON::PP -e 'print encode_json([@ARGV])' -- "$@"
+    ) perl -MJSON::PP -MMIME::Base64 -e '
+        my $domain  = $ENV{LV_DOMAIN};
+        my $timeout = $ENV{LV_TIMEOUT} + 0;
+        my $args    = decode_json($ENV{LV_ARGS_JSON});
+        my $exec_req = encode_json({
+            execute   => "guest-exec",
+            arguments => {
+                path             => $ENV{LV_PATH},
+                arg              => $args,
+                "capture-output" => JSON::PP::true,
+            },
+        });
+        my $exec_raw = `virsh qemu-agent-command --timeout $timeout \Q$domain\E \Q$exec_req\E 2>/dev/null`;
+        exit 1 unless length $exec_raw;
+        my $exec = eval { decode_json($exec_raw) };
+        exit 1 if $@ || !$exec || !$exec->{return} || !defined $exec->{return}->{pid};
+        my $pid = $exec->{return}->{pid};
+
+        my $status_req = encode_json({
+            execute   => "guest-exec-status",
+            arguments => { pid => $pid + 0 },
+        });
+        my $deadline = time() + $timeout;
+        my $status;
+        while (time() < $deadline) {
+            my $status_raw = `virsh qemu-agent-command --timeout 5 \Q$domain\E \Q$status_req\E 2>/dev/null`;
+            if (length $status_raw) {
+                $status = eval { decode_json($status_raw) };
+                last if $status && $status->{return} && $status->{return}->{exited};
+            }
+            select(undef, undef, undef, 0.25);
+        }
+        exit 1 unless $status && $status->{return} && $status->{return}->{exited};
+
+        my $r = $status->{return};
+        my $out = defined $r->{"out-data"} ? decode_base64($r->{"out-data"}) : "";
+        my $err = defined $r->{"err-data"} ? decode_base64($r->{"err-data"}) : "";
+        print encode_json({
+            exited       => JSON::PP::true,
+            exitcode     => $r->{exitcode} // 0,
+            "out-data"   => $out,
+            "err-data"   => $err,
+            "out-truncated" => $r->{"out-truncated"} ? JSON::PP::true : JSON::PP::false,
+            "err-truncated" => $r->{"err-truncated"} ? JSON::PP::true : JSON::PP::false,
+        });
+    ' 2>/dev/null
+}
+
 # --- Transport dispatch ---------------------------------------------------
 
 # Detect the transport from environment when --transport is omitted.
@@ -375,7 +543,11 @@ auto_detect_transport() {
         TRANSPORT="pve"
         return 0
     fi
-    # libvirt and utm auto-detect arrive in commits 2 and 3.
+    if command -v virsh >/dev/null 2>&1 && virsh dominfo "$VMID" >/dev/null 2>&1; then
+        TRANSPORT="libvirt"
+        return 0
+    fi
+    # utm auto-detect arrives in commit 3.
     echo "Error: could not auto-detect transport. Pass --transport pve|libvirt|utm|qga-socket explicitly." >&2
     exit 2
 }
@@ -391,7 +563,15 @@ bind_transport() {
             transport_qga_cmd=pve_qga_cmd
             transport_guest_exec_json=pve_guest_exec_json
             ;;
-        libvirt|utm|qga-socket)
+        libvirt)
+            transport_describe=libvirt_describe
+            transport_preflight=libvirt_preflight
+            transport_vm_state=libvirt_vm_state
+            transport_config_summary=libvirt_config_summary
+            transport_qga_cmd=libvirt_qga_cmd
+            transport_guest_exec_json=libvirt_guest_exec_json
+            ;;
+        utm|qga-socket)
             echo "Error: transport '$TRANSPORT' not yet implemented (lands in a subsequent commit)." >&2
             exit 2
             ;;
