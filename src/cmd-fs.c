@@ -247,7 +247,16 @@ static int  create_zfs_snapshot(const struct statfs *mnt, fs_counts_t *c);
 static void delete_zfs_snapshots(void);
 
 /* Per-mount F_FULLFSYNC with ENOTSUP/EOPNOTSUPP tolerance.
- * Increments the supplied counters. */
+ * Increments the supplied counters.
+ *
+ * `__attribute__((nonnull))` on the pointer parameters documents the
+ * precondition (always satisfied — invoked with `&mntbuf[i]` from
+ * sync_all_volumes) and silences a clang static-analyzer false positive
+ * ("1st argument to 'open' is NULL") that the analyzer would otherwise
+ * raise from being unable to prove `mnt->f_mntonname` (a fixed char
+ * array) is non-NULL without an explicit non-NULL constraint on `mnt`. */
+static void try_fullfsync(const struct statfs *mnt, fs_counts_t *c)
+    __attribute__((nonnull));
 static void try_fullfsync(const struct statfs *mnt, fs_counts_t *c)
 {
     int fd = open(mnt->f_mntonname, O_RDONLY);

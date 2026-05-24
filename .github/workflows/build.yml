@@ -124,6 +124,9 @@ jobs:
       - name: Integration tests
         run: ./tests/run_tests.sh ./build/mac-guest-agent
 
+      - name: Verify-transports tests (scripts/verify.sh)
+        run: make test-verify-transports
+
       - name: Code coverage
         run: make test-coverage
 

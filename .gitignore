@@ -5,6 +5,9 @@ dist/
 *.a
 *.dSYM/
 
+# clang --analyze output (one .plist per analyzed .c file when run locally)
+/*.plist
+
 # Binary
 mac-guest-agent
 mac-guest-agent-*
