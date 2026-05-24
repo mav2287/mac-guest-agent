@@ -49,7 +49,7 @@ All 45 registered commands with their actual status, Linux parity, and requireme
 | `guest-get-cpustats` | hardware | stable | partial | no | Via Mach host_statistics (not /proc/stat) |
 | `guest-get-disks` | disk | stable | partial | no | Via diskutil, no PCI address mapping |
 | `guest-get-fsinfo` | disk | stable | full | no | Via getmntinfo + statfs |
-| `guest-get-diskstats` | disk | caveated | partial | no | Returns raw iostat output, not structured per-disk stats |
+| `guest-get-diskstats` | disk | stable | partial | no | IOKit `IOBlockStorageDriver` Statistics → 6 spec fields (read/write sectors/ios/ticks); 9 Linux-only fields (merges, discard*, in-flight, io-ticks, time-in-queue) zero-valued; major/minor=0 (no macOS equivalent) |
 | `guest-fsfreeze-freeze` | fs | caveated | partial | yes | sync + F_FULLFSYNC + continuous sync. APFS snapshot on 10.13+. Not kernel-level FIFREEZE. |
 | `guest-fsfreeze-freeze-list` | fs | caveated | partial | yes | Same handler as freeze (mountpoint list not yet filtered) |
 | `guest-fsfreeze-thaw` | fs | caveated | partial | yes | Cleans up APFS snapshot, runs thaw hooks |
@@ -73,7 +73,7 @@ All 45 registered commands with their actual status, Linux parity, and requireme
 ## Summary
 
 - **Stable:** 35 commands
-- **Caveated:** 5 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, get-diskstats, set-user-password)
+- **Caveated:** 4 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, set-user-password)
 - **No-op:** 1 command (fstrim)
 - **Error:** 2 commands (set-vcpus, set-memory-blocks)
 - **Alias:** 2 commands (sync-id, get-hostname)

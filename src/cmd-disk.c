@@ -3,8 +3,14 @@
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOBSD.h>
+#include <IOKit/storage/IOBlockStorageDriver.h>
+#include <IOKit/storage/IOMedia.h>
 
 /* ---- guest-get-disks ---- */
 
@@ -180,77 +186,137 @@ static cJSON *handle_get_fsinfo(cJSON *args, const char **err_class, const char 
 
 /* ---- guest-get-diskstats ---- */
 
+/* Read a uint64 value out of a CFDictionary keyed by a C string.
+ * Returns 0 if the key isn't present or doesn't hold a CFNumber. */
+static uint64_t cfdict_u64(CFDictionaryRef d, const char *key)
+{
+    if (!d || !key) return 0;
+    CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+    if (!k) return 0;
+    CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, k);
+    CFRelease(k);
+    if (!n || CFGetTypeID(n) != CFNumberGetTypeID()) return 0;
+    uint64_t v = 0;
+    CFNumberGetValue(n, kCFNumberSInt64Type, &v);
+    return v;
+}
+
+/* Per-disk stats matched to the QGA GuestDiskStats schema. macOS-native
+ * counters cover 6 of the 15 spec fields (the byte/operation/total-time
+ * counters IOKit exposes via IOBlockStorageDriver's `Statistics` dict).
+ * The remaining 9 are Linux-block-layer concepts (request merging,
+ * discard accounting, in-flight count, weighted I/O ticks) that
+ * IOKit doesn't expose; we emit them as 0 — same precedent as
+ * `guest-get-cpustats` emitting `nice: 0` on macOS (where
+ * host_processor_info doesn't split niced time from user) and as
+ * `guest-network-get-route` emitting `metric: 0` / `irtt: 0`. Honest
+ * zeros over silently dropping the field, so spec-strict consumers
+ * (virsh / PVE plugins) get the canonical shape they can parse.
+ *
+ * Audit.md finding 2c. */
 static cJSON *handle_get_diskstats(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
 
-    /* Use iostat for disk statistics - available on all macOS */
-    char *out = NULL;
-    if (run_command_capture("iostat -d -c 1 2>/dev/null", &out) != 0 || !out) {
-        free(out);
+    CFMutableDictionaryRef match = IOServiceMatching(kIOBlockStorageDriverClass);
+    if (!match) {
         *err_class = "GenericError";
-        *err_desc = "Failed to get disk statistics";
+        *err_desc  = "IOServiceMatching(IOBlockStorageDriver) failed";
         return NULL;
     }
 
-    /* Parse iostat -d output into per-disk stats.
-     * Format: line 1 = disk names, line 2 = headers, line 3 = values.
-     * Values are grouped 3 per disk: KB/t, tps, MB/s. */
-
-    /* Make a copy since we'll parse with strtok */
-    char *copy = safe_strdup(out);
-    if (!copy) { free(out); *err_class = "GenericError"; *err_desc = "Out of memory"; return NULL; }
-
-    /* Extract disk names from line 1 */
-    char disk_names[16][32];
-    int disk_count = 0;
-    char *line_end = strchr(copy, '\n');
-    if (line_end) {
-        *line_end = '\0';
-        char *save2 = NULL;
-        char *tok = strtok_r(copy, " \t", &save2);
-        while (tok && disk_count < 16) {
-            strncpy(disk_names[disk_count], tok, 31);
-            disk_names[disk_count][31] = '\0';
-            disk_count++;
-            tok = strtok_r(NULL, " \t", &save2);
-        }
+    io_iterator_t iter = IO_OBJECT_NULL;
+    /* IOServiceGetMatchingServices CONSUMES the matching dict — no
+     * separate CFRelease needed below regardless of the result. */
+    kern_return_t kr = IOServiceGetMatchingServices(kIOMasterPortDefault, match, &iter);
+    if (kr != KERN_SUCCESS) {
+        *err_class = "GenericError";
+        *err_desc  = "IOServiceGetMatchingServices failed";
+        return NULL;
     }
-
-    /* Find data line (3rd line in original output) */
-    char *p = out;
-    int newlines = 0;
-    while (*p && newlines < 2) { if (*p == '\n') newlines++; p++; }
 
     cJSON *result = cJSON_CreateArray();
-    if (*p) {
-        double vals[48];
-        int nvals = 0;
-        char *save2 = NULL;
-        char *data_copy = safe_strdup(p);
-        if (data_copy) {
-            char *nl = strchr(data_copy, '\n');
-            if (nl) *nl = '\0';
-            char *tok = strtok_r(data_copy, " \t", &save2);
-            while (tok && nvals < 48) {
-                vals[nvals++] = strtod(tok, NULL);
-                tok = strtok_r(NULL, " \t", &save2);
-            }
-            free(data_copy);
+    io_object_t drv;
+    int count = 0;
+    while ((drv = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
+        /* IOBlockStorageDriver hangs its cumulative per-disk counters
+         * off the "Statistics" CFDictionary property. */
+        CFDictionaryRef stats = (CFDictionaryRef)IORegistryEntryCreateCFProperty(
+            drv, CFSTR(kIOBlockStorageDriverStatisticsKey),
+            kCFAllocatorDefault, 0);
 
-            for (int i = 0; i < disk_count && i * 3 + 2 < nvals; i++) {
-                cJSON *disk = cJSON_CreateObject();
-                cJSON_AddStringToObject(disk, "name", disk_names[i]);
-                cJSON_AddNumberToObject(disk, "kb-per-transfer", vals[i * 3]);
-                cJSON_AddNumberToObject(disk, "transfers-per-second", vals[i * 3 + 1]);
-                cJSON_AddNumberToObject(disk, "mb-per-second", vals[i * 3 + 2]);
-                cJSON_AddItemToArray(result, disk);
-            }
+        /* BSD device name ("disk0", "disk1s2" etc.) lives on the
+         * IOBlockStorageDriver's CHILD IOMedia node, not on the driver
+         * itself and not on its parent (which is typically the
+         * controller — IONVMeBlockStorageDevice etc.). Use
+         * IORegistryEntrySearchCFProperty with kIORegistryIterateRecursively
+         * to walk the children looking for the BSD Name property. */
+        char bsd_name[64] = {0};
+        CFStringRef bsd = (CFStringRef)IORegistryEntrySearchCFProperty(
+            drv, kIOServicePlane, CFSTR(kIOBSDNameKey),
+            kCFAllocatorDefault, kIORegistryIterateRecursively);
+        if (bsd) {
+            CFStringGetCString(bsd, bsd_name, sizeof(bsd_name), kCFStringEncodingUTF8);
+            CFRelease(bsd);
         }
-    }
 
-    free(copy);
-    free(out);
+        if (stats && bsd_name[0]) {
+            uint64_t bytes_r = cfdict_u64(stats, kIOBlockStorageDriverStatisticsBytesReadKey);
+            uint64_t bytes_w = cfdict_u64(stats, kIOBlockStorageDriverStatisticsBytesWrittenKey);
+            uint64_t ops_r   = cfdict_u64(stats, kIOBlockStorageDriverStatisticsReadsKey);
+            uint64_t ops_w   = cfdict_u64(stats, kIOBlockStorageDriverStatisticsWritesKey);
+            uint64_t ns_r    = cfdict_u64(stats, kIOBlockStorageDriverStatisticsTotalReadTimeKey);
+            uint64_t ns_w    = cfdict_u64(stats, kIOBlockStorageDriverStatisticsTotalWriteTimeKey);
+
+            /* Spec sectors are 512 bytes by convention (matches Linux
+             * /proc/diskstats — sectors there are always 512 regardless
+             * of the device's actual physical sector size). */
+            uint64_t sectors_r = bytes_r / 512;
+            uint64_t sectors_w = bytes_w / 512;
+
+            /* Spec ticks are milliseconds (Linux /proc/diskstats unit).
+             * IOKit reports total time as nanoseconds — convert. */
+            uint64_t ms_r = ns_r / 1000000;
+            uint64_t ms_w = ns_w / 1000000;
+
+            cJSON *info = cJSON_CreateObject();
+            cJSON_AddStringToObject(info, "name", bsd_name);
+            /* major/minor: macOS doesn't have stable Linux-style
+             * (major, minor) device numbers. The closest is st_dev
+             * from stat(2), but that's per-filesystem not per-block-
+             * device. Emit 0 honestly. */
+            cJSON_AddNumberToObject(info, "major", 0);
+            cJSON_AddNumberToObject(info, "minor", 0);
+
+            cJSON *st = cJSON_CreateObject();
+            /* Mappable from IOKit. */
+            cJSON_AddNumberToObject(st, "read-sectors",  (double)sectors_r);
+            cJSON_AddNumberToObject(st, "read-ios",      (double)ops_r);
+            cJSON_AddNumberToObject(st, "write-sectors", (double)sectors_w);
+            cJSON_AddNumberToObject(st, "write-ios",     (double)ops_w);
+            cJSON_AddNumberToObject(st, "read-ticks",    (double)ms_r);
+            cJSON_AddNumberToObject(st, "write-ticks",   (double)ms_w);
+            /* Linux-only concepts — honest 0s. */
+            cJSON_AddNumberToObject(st, "read-merges",    0);
+            cJSON_AddNumberToObject(st, "write-merges",   0);
+            cJSON_AddNumberToObject(st, "discard-sectors", 0);
+            cJSON_AddNumberToObject(st, "discard-ios",     0);
+            cJSON_AddNumberToObject(st, "discard-merges",  0);
+            cJSON_AddNumberToObject(st, "discard-ticks",   0);
+            cJSON_AddNumberToObject(st, "in-flight",       0);
+            cJSON_AddNumberToObject(st, "io-ticks",        0);
+            cJSON_AddNumberToObject(st, "time-in-queue",   0);
+            cJSON_AddItemToObject(info, "stats", st);
+            cJSON_AddItemToArray(result, info);
+            count++;
+        }
+
+        if (stats) CFRelease(stats);
+        IOObjectRelease(drv);
+    }
+    IOObjectRelease(iter);
+
+    LOG_DEBUG("Retrieved diskstats for %d block device(s)", count);
     return result;
 }
 

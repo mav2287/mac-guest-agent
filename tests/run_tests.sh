@@ -391,6 +391,40 @@ test_cmd "guest-get-diskstats" \
     '{"execute":"guest-get-diskstats"}' \
     "array"
 
+# Deeper shape contract: each entry must match the QGA GuestDiskStatsInfo
+# schema — {name, major, minor, stats: {15 fields}}. macOS supplies real
+# cumulative counters for 6 of the 15 stats fields (read/write sectors
+# + ios + ticks); the remaining 9 Linux-block-layer-specific fields are
+# zero-valued (same honest-zero pattern as cpustats nice:0 and route
+# metric:0 / irtt:0). Audit finding 2c.
+DISKSTATS=$(echo '{"execute":"guest-get-diskstats"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$DISKSTATS" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)['return']
+assert isinstance(d, list)
+assert len(d) > 0, 'expected at least one disk'
+required_top = {'name', 'major', 'minor', 'stats'}
+required_stats = {
+    'read-sectors', 'read-ios', 'read-merges',
+    'write-sectors', 'write-ios', 'write-merges',
+    'discard-sectors', 'discard-ios', 'discard-merges',
+    'read-ticks', 'write-ticks', 'discard-ticks',
+    'in-flight', 'io-ticks', 'time-in-queue',
+}
+for d_entry in d:
+    missing = required_top - set(d_entry)
+    assert not missing, f'missing top-level: {missing}'
+    assert isinstance(d_entry['stats'], dict), 'stats must be a nested object'
+    missing_s = required_stats - set(d_entry['stats'])
+    assert not missing_s, f'missing stats fields: {missing_s}'
+" 2>/dev/null; then
+    echo "  PASS: guest-get-diskstats matches GuestDiskStatsInfo schema (name+major+minor+15-field stats)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: guest-get-diskstats shape contract"
+    FAIL=$((FAIL + 1))
+fi
+
 # =========================================================
 echo ""
 echo "--- Filesystem Freeze Commands ---"
