@@ -146,12 +146,21 @@ FAIL=0
 FROZE=""                  # set to "1" while the agent is frozen; cleared on thaw
 HOST_CHECKS_JSON='[]'     # accumulated structured records for the appendix
 SECTION=""                # current section name, attached to each record
+REDACT_HOSTNAMES=""       # newline-separated literal hostnames to redact
+                          # (populated by collect_hostnames after the
+                          # transport is bound; see comments there)
 
 # redact: apply PII redaction to a stream when REDACT=1.
 #   - IPv4 addresses → <REDACTED-IPV4>
 #   - IPv6 addresses (full, compressed, link-local) → <REDACTED-IPV6>
 #     (covers routable GUAs that leak ISP prefix + EUI-64-derived MAC).
 #   - 6-octet MAC addresses → <REDACTED-MAC>
+#   - Hostnames (PVE host's hostname forms, PVE cluster node names,
+#     and the VM's `guest-get-host-name`) → <REDACTED-HOSTNAME>.
+#     Captured once at script startup by collect_hostnames(), redacted
+#     here as literal word-bounded substrings — case-sensitive, so
+#     "PVE host" capitalised in our own messages doesn't collide with
+#     a lowercase "pve" hostname.
 #   - The supplied identifier → <REDACTED-VMID> in known contexts
 #     ("VM ID: <id>", "VM <id>", "vmid <id>", "\"vmid\":<id>" in JSON).
 #     Bare numeric matches NOT redacted — would eat block counts /
@@ -163,7 +172,7 @@ redact() {
     if [ "$REDACT" -eq 0 ]; then
         cat
     else
-        REDACT_VMID="$VMID" perl -ne '
+        REDACT_VMID="$VMID" REDACT_HOSTNAMES="$REDACT_HOSTNAMES" perl -ne '
             # MAC FIRST — a MAC is 6 colon-separated 2-hex-digit groups,
             # which falls inside the IPv6 pattern. Redacting MAC first
             # rewrites it to <REDACTED-MAC> (no colons), so the IPv6
@@ -175,13 +184,33 @@ redact() {
             # characters, so `\b::1` never fires when preceded by
             # whitespace. The (?<![0-9a-fA-F:]) / (?![0-9a-fA-F:])
             # lookarounds handle the colon-bordered cases correctly.
-            # Three branches: full / dotted-prefix (1234:5678:...:abcd),
-            # compressed (fe80::1), and pure-colon-prefix (::1).
-            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
-            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{0,4}:){2,7}:[0-9a-fA-F]{0,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
-            s{(?<![0-9a-fA-F:])::[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+            # Three branches cover the canonical forms:
+            #   (a) <prefix>::<suffix>   — at least 1 prefix group, 0+
+            #       suffix groups (covers fe80::1, fe80::1:2, fe80::).
+            #   (b) ::<suffix>           — no prefix, 0+ suffix groups
+            #       (covers ::1, ::).
+            #   (c) full 8-group form    — no :: at all (7 colons).
+            # Each branch was verified against real agent output (the
+            # El Cap drop has both fe80::ca33:... and a routable GUA
+            # 2605:a601:...:1544 — both match here).
+            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+            s{(?<![0-9a-fA-F:])::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
 
             s/\b[0-9]{1,3}(?:\.[0-9]{1,3}){3}\b/<REDACTED-IPV4>/g;
+
+            # Hostname redaction — literal word-bounded substrings.
+            # The list comes from collect_hostnames() and is the set of
+            # hostnames the script discovered (PVE host, cluster nodes,
+            # VMs own guest-get-host-name). Case-sensitive so a literal
+            # "pve" hostname doesnt collide with our "PVE host" prose.
+            if (length $ENV{REDACT_HOSTNAMES}) {
+                for my $h (split /\n/, $ENV{REDACT_HOSTNAMES}) {
+                    next unless length $h;
+                    my $hq = quotemeta $h;
+                    s/\b$hq\b/<REDACTED-HOSTNAME>/g;
+                }
+            }
 
             if (length $ENV{REDACT_VMID}) {
                 my $v = quotemeta $ENV{REDACT_VMID};
@@ -1196,6 +1225,72 @@ trap emergency_thaw EXIT INT TERM
 
 auto_detect_transport
 bind_transport
+
+# Discover the set of hostnames that should be redacted before ANY
+# emit fires (preflight messages, launchd_status captures, mount
+# tables for smbfs `//user@host/share`, etc. all carry hostnames).
+# Three sources:
+#   1. PVE host's own hostname forms (short / full / FQDN) — only when
+#      `hostname` is on PATH, which it is on every host class.
+#   2. PVE cluster node names — `pvesh get /cluster/resources` filtered
+#      to `type==node`. No-op if pvesh isn't present (libvirt / UTM /
+#      qga-socket transports).
+#   3. The VM's own hostname via `guest-get-host-name` — works on any
+#      transport that has the QGA channel up at this point. Failures
+#      (transport not ready, agent not responding) are silent — they
+#      just mean no hostname is added from that source.
+# Stored newline-separated in REDACT_HOSTNAMES; consumed by the
+# redact() helper.
+collect_hostnames() {
+    local raw=""
+    if command -v hostname >/dev/null 2>&1; then
+        raw="$(hostname -s 2>/dev/null)
+$(hostname -f 2>/dev/null)
+$(hostname 2>/dev/null)"
+    fi
+    if command -v pvesh >/dev/null 2>&1; then
+        local cluster_json node_names
+        cluster_json=$(pvesh get /cluster/resources --output-format json 2>/dev/null)
+        if [ -n "$cluster_json" ]; then
+            node_names=$(printf '%s' "$cluster_json" | perl -MJSON::PP -e '
+                local $/;
+                my $arr = eval { decode_json(scalar <STDIN>) };
+                exit if $@ || ref $arr ne "ARRAY";
+                my %seen;
+                for my $r (@$arr) {
+                    next unless ref $r eq "HASH";
+                    next unless ($r->{type} // "") eq "node";
+                    my $n = $r->{node} // "";
+                    next unless length $n;
+                    print "$n\n" unless $seen{$n}++;
+                }
+            ' 2>/dev/null)
+            raw="$raw
+$node_names"
+        fi
+    fi
+    # VM hostname — works on any transport with a live QGA channel.
+    local vm_host_resp vm_host
+    vm_host_resp=$("$transport_qga_cmd" get-host-name 2>/dev/null)
+    if [ -n "$vm_host_resp" ]; then
+        vm_host=$(json_query "$vm_host_resp" '$d->{"host-name"} // $d->{return}->{"host-name"} // ""')
+        if [ -n "$vm_host" ]; then
+            raw="$raw
+$vm_host"
+            # If the VM hostname is FQDN-shaped (contains a dot), also
+            # redact the short form so "foo.example.com" + "foo" are
+            # both caught.
+            case "$vm_host" in
+                *.*) raw="$raw
+${vm_host%%.*}" ;;
+            esac
+        fi
+    fi
+    # Deduplicate, drop blank/short entries (anything < 2 chars is
+    # too risky — would over-redact common words).
+    REDACT_HOSTNAMES=$(printf '%s\n' "$raw" | awk 'length >= 2 && !seen[$0]++')
+}
+collect_hostnames
 
 emit "mac-guest-agent — Host-side Verification"
 emit "=========================================="
