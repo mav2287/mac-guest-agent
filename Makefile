@@ -36,12 +36,23 @@ else
 endif
 
 # Build for current architecture with proper deployment target
-build: plist-header
+build: plist-header docs/mac-guest-agent.8
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) ($(ARCH), $(BUILD_DEPLOY)+)..."
 	@mkdir -p $(BUILD_DIR)
 	MACOSX_DEPLOYMENT_TARGET=$(BUILD_DEPLOY) $(CC) $(CFLAGS) $(INCLUDES) -arch $(ARCH) \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME) $(SRCS) $(LDFLAGS)
 	@echo "Build complete: $(BUILD_DIR)/$(PROGRAM_NAME)"
+
+# Generate the man page from the .in template, substituting $(VERSION)
+# from this Makefile (single source of truth — audit finding 4) and the
+# current month/year. Triggered when the template OR the Makefile changes.
+# CI has a "no-diff" check that fails if a VERSION bump landed without
+# regenerating this file.
+docs/mac-guest-agent.8: docs/mac-guest-agent.8.in Makefile
+	@sed -e 's/@VERSION@/$(VERSION)/g' \
+	     -e 's/@DATE@/$(shell date "+%B %Y")/g' \
+	     < docs/mac-guest-agent.8.in > docs/mac-guest-agent.8
+	@echo "Regenerated docs/mac-guest-agent.8 (version $(VERSION), date $$(date '+%B %Y'))"
 
 # i386 targeting 10.4+ (requires MacOSX10.13.sdk or earlier for i386 libs)
 # Download SDK: curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz && tar xf /tmp/sdk.tar.xz -C /tmp
