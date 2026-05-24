@@ -12,7 +12,7 @@ qm set <vmid> --agent enabled=1,type=isa
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
 
-> **Why `type=isa`?** macOS Big Sur and newer include Apple's own built-in VirtIO guest agent which claims the default VirtIO serial channel. Using `type=isa` ensures our agent gets its own dedicated serial channel via `Apple16X50Serial.kext`. This is required on **all** macOS versions.
+> **Why `type=isa`?** macOS guests run in two distinct environments: under **Apple's Virtualization.framework** (UTM, `vz_run`, anything backed by `VZVirtualMachine`), and under **plain QEMU/KVM** (Proxmox, libvirt, raw QEMU — typically with OpenCore as the bootloader). On Virtualization.framework hosts, Apple's own `AppleQEMUGuestAgent` is IOKit-launched on the VirtIO console channel and would conflict with ours. On Proxmox/QEMU/OpenCore hosts, Apple's agent never launches (its `AppleVirtIOAgentDevice` IOKit match is only set by `applevirtio.console`, which only loads on VZ). We use ISA serial universally to keep one transport across both host types — no host-detection logic, no per-environment conditional registration — at the cost of using a slightly older transport, which every macOS version from 10.4 onwards supports natively via `Apple16X50Serial.kext`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#isa-serial-transport--why) for the full evidence.
 
 **2. In the macOS VM:**
 ```bash
@@ -39,7 +39,7 @@ sudo mac-guest-agent --self-test
 
 The agent communicates via an **ISA serial port** (16550 UART) using Apple's built-in `Apple16X50Serial.kext` driver, present on every macOS since 10.4. No custom kexts, no SIP changes, no code signing.
 
-> **Note:** macOS Big Sur and newer ship with Apple's own built-in VirtIO guest agent (18 commands, no freeze support). The default VirtIO serial channel is claimed by Apple's agent, which is why `type=isa` is required — it gives our agent a dedicated channel with all 45 commands and full freeze support.
+> **Note:** macOS Big Sur and newer ship Apple's own `AppleQEMUGuestAgent` (18 commands, no filesystem freeze). It only launches on Apple Virtualization.framework hosts — its IOKit match (`AppleVirtIOAgentDevice`) is set by the `applevirtio.console` driver, which doesn't load under QEMU/OpenCore — so on Proxmox the VirtIO channel is actually free. We still default to ISA for symmetry across both host classes (see the [Quick Start callout](#quick-start-proxmox-ve) for the trade-off). Our agent provides 45 commands plus a real per-filesystem freeze dispatch — see [docs/design/FREEZE_SEMANTICS.md](docs/design/FREEZE_SEMANTICS.md) for what "freeze" actually does per `f_fstypename`.
 
 ## Compatibility
 
@@ -85,6 +85,7 @@ make test              # Run all tests
 | [Commands](docs/COMMAND_STATUS.md) | All 45 commands with status, Linux parity, privilege requirements |
 | [Compatibility](docs/COMPATIBILITY.md) | Support tiers, kext timeline, verification evidence per version |
 | [Backup & Freeze](docs/BACKUP.md) | Filesystem freeze, APFS snapshots, hook scripts, TRIM |
+| [Freeze Semantics](docs/design/FREEZE_SEMANTICS.md) | What "freeze" actually does per `f_fstypename`; divergences from upstream QGA |
 | [Security](SECURITY.md) | Trust model, recommended profiles, freeze-state restrictions |
 | [Architecture](docs/ARCHITECTURE.md) | Data flow, protocol spec, macOS API usage |
 | [CLI Reference](docs/CLI.md) | All flags, config file format, examples |

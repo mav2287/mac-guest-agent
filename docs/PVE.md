@@ -264,20 +264,22 @@ qm guest cmd $VMID fsfreeze-freeze >/dev/null 2>&1 && \
 echo "=== Done ==="
 ```
 
-## Accurate Memory Reporting
+## Memory reporting on macOS guests
 
-Without a guest agent, PVE shows macOS VMs using 100% of allocated RAM because macOS has no balloon driver. With this agent installed, PVE displays actual memory usage from inside the guest.
+Proxmox's per-VM memory gauge in the web UI for a macOS guest reflects the **QEMU process's host-side memory footprint** (cgroup RSS of the per-VM scope), not the guest's own view of its RAM usage. This is a structural limitation, not an agent gap. PVE's gauge sources its "memory used" figure from the virtio-balloon device when it can; that path requires a guest-side balloon driver that has negotiated `VIRTIO_BALLOON_F_STATS_VQ`. Most Linux distributions ship one; macOS does not, on any version. Apple has never shipped a virtio-balloon driver, and the virtio-balloon protocol has no host-pull alternative — without the driver, the balloon stats vq is empty and PVE falls back to cgroup RSS.
 
-The agent reports real memory usage via `guest-get-memory-blocks`, using macOS Mach VM statistics (wired + active + compressed pages). PVE reads this data and displays it in the VM summary.
+This agent does not change that. Installing it does not move the PVE web UI gauge.
 
-**Before agent:** `mem: 8.00 GiB / maxmem: 8.00 GiB` (always 100%)
-**With agent:** `mem: 4.10 GiB / maxmem: 8.00 GiB` (actual usage)
+What the agent *does* provide is the **guest's** memory view, on a separate query path. The `guest-get-memory-blocks` and `guest-get-memory-block-info` commands report the guest's memory blocks (block size × online block count), derived from macOS's Mach VM statistics. PVE's `pvestatd` and web UI don't call those — they're not in the cgroup/balloon code path the gauge reads — but you can call them yourself:
 
-No balloon driver needed. The agent handles it.
+```bash
+qm agent <vmid> get-memory-block-info   # block size in bytes
+qm agent <vmid> get-memory-blocks        # array of {phys-index, online, can-offline}
+```
 
-**Important:** This is accurate *reporting*, not memory reclamation. There is no balloon driver for macOS — the full allocated RAM remains reserved by the VM on the host regardless of what the guest is actually using. PVE now shows you how much the guest is using, but it cannot reclaim unused guest memory for other VMs. If you need to free host RAM, reduce the VM's memory allocation in PVE.
+`scripts/pve-verify.sh` does this and renders the result as a human-readable `~<used> GB used / ~<total> GB total` line, which is the canonical "is the agent's memory path working" check for this project. If you need the same data from inside the VM, `sudo mac-guest-agent --self-test-json` also surfaces total memory under `system_info.memory_bytes`.
 
-**Note:** A VM reboot is required after installing the agent for PVE to start showing accurate memory numbers. If you still see 100% after install, reboot the VM.
+**On reclamation:** even if the gauge did read the agent, the host couldn't reclaim unused guest RAM — there is no balloon driver to inflate. The full allocated memory remains reserved by the VM on the host regardless. To free host RAM for other VMs, reduce the macOS VM's memory allocation in PVE.
 
 ## PVE Command Limitations
 

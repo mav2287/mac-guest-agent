@@ -29,20 +29,32 @@ struct channel {
 };
 
 static const char *known_devices[] = {
-    /* ISA serial — primary transport. Required on all macOS versions because
-     * Big Sur+ ships Apple's own VirtIO guest agent which claims the default
-     * VirtIO serial channel. ISA serial via Apple16X50Serial.kext is the only
-     * channel Apple's agent doesn't claim.
-     * Covers: PVE (agent type=isa), plain QEMU (-device isa-serial), libvirt */
+    /* ISA serial — primary transport on every host class. macOS guests run
+     * either under Apple's Virtualization.framework (UTM/vz_run) or under
+     * plain QEMU (Proxmox/libvirt/raw QEMU, usually OpenCore-booted). On
+     * VZ hosts, Apple's own AppleQEMUGuestAgent is IOKit-launched on the
+     * VirtIO console channel via the `AppleVirtIOAgentDevice` match set
+     * by `applevirtio.console` — using VirtIO there would conflict. On
+     * plain QEMU hosts that driver doesn't load and VirtIO is actually
+     * free, but we still default to ISA so the install / launchd config /
+     * channel-detection list stay identical across both host classes
+     * (and so an image moved between QEMU and VZ keeps working without
+     * reinstall). Apple16X50Serial.kext has shipped on every macOS from
+     * 10.4 onwards with an identical PCI class match. Full rationale:
+     * docs/COMPATIBILITY.md#isa-serial-transport--why.
+     * Covers: PVE (agent type=isa), plain QEMU (-device isa-serial), libvirt. */
     "/dev/cu.serial1",
     "/dev/tty.serial1",
     "/dev/cu.serial2",
     "/dev/tty.serial2",
     "/dev/cu.serial",
     "/dev/tty.serial",
-    /* VirtIO serial — only works if Apple's built-in agent is not present
-     * (pre-Big Sur) or if specifically configured to avoid conflict.
-     * Kept for edge cases and UTM compatibility. */
+    /* VirtIO serial — fallback for the small set of plain-QEMU configs that
+     * don't present an ISA serial device (e.g. UTM's QEMU backend, or
+     * custom QEMU command lines that omit `-device isa-serial`). On Apple
+     * Virtualization.framework hosts these would conflict with Apple's
+     * AppleQEMUGuestAgent (see ISA-block comment above); detection order
+     * here puts ISA first so the conflict is avoided in practice. */
     "/dev/cu.org.qemu.guest_agent.0",
     "/dev/tty.org.qemu.guest_agent.0",
     "/dev/cu.virtio-console.0",

@@ -19,6 +19,22 @@ These terms are used consistently throughout all project documentation:
 | **Tier 2** | High confidence | Installer-verified (kext, symbols, frameworks, PCI class match all confirmed) |
 | **Tier 3** | Theoretical | Best-effort only |
 
+## ISA Serial Transport — Why
+
+macOS can be a guest in two distinct virtualisation environments, and they treat the QGA transport differently:
+
+| Host class | Examples | Apple's `AppleQEMUGuestAgent` behaviour | VirtIO channel availability |
+|---|---|---|---|
+| **Apple Virtualization.framework** | UTM (VZ backend), `vz_run`, anything backed by `VZVirtualMachine` | IOKit-launched on-demand once the `AppleVirtIOAgentDevice` property is matched by the `applevirtio.console` driver | Claimed by Apple's agent |
+| **Plain QEMU/KVM** | Proxmox VE, libvirt, raw QEMU (typically with OpenCore for macOS guests) | Never launches — the `applevirtio.console` driver does not load on QEMU, so `AppleVirtIOAgentDevice` is never set and the IOKit match never fires | Technically free |
+
+The historical "use ISA because Apple claims VirtIO" framing is correct for the first row and oversimplified for the second. On Proxmox/QEMU/OpenCore guests, Apple's agent isn't running and the VirtIO console channel would in fact be available. We still default to ISA universally for two reasons:
+
+1. **One transport across both host classes.** Detecting which environment we're in at runtime would require IOKit introspection and would diverge the launchd plist between VZ and QEMU installs. Using ISA everywhere keeps the install, the launchd config, and the channel-detection list (`src/channel.c`) identical on every macOS guest.
+2. **No conflict with Apple's agent on VZ.** If a user moves a disk image from QEMU to UTM (or vice versa), an ISA-based install keeps working without reinstall. A VirtIO-based install would silently conflict with `AppleQEMUGuestAgent` the moment the same image boots under Virtualization.framework.
+
+The cost is using a slightly older transport. `Apple16X50Serial.kext` has been present on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026) with an identical PCI class match — see [Kext Version Timeline](#kext-version-timeline) below — so this cost is essentially zero in practice. Apple's own `AppleQEMUGuestAgent`, where it does launch, also speaks the QGA protocol but ships only 18 commands and no filesystem freeze (per local inspection on macOS 26.5; see `docs/research/UPSTREAM_NOTES.md` Target 6 for the symbol survey). That feature gap, not the transport question, is the primary reason this project exists.
+
 ## macOS Version Matrix
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
@@ -121,7 +137,7 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 | HFS+ → APFS | 10.13 High Sierra | Freeze mechanism changes | Runtime detection, APFS snapshot on 10.13+, sync-only fallback |
 | No SIP → SIP | 10.11 El Capitan | Kext loading restricted | Not applicable (ISA serial uses built-in kext) |
 | Intel → Apple Silicon | 11.0 Big Sur | Architecture change | Separate arm64 binary, universal fat binary |
-| No VirtIO → Native VirtIO | 11.0 Big Sur | Communication path | ISA serial primary, VirtIO auto-detected as secondary |
+| No VirtIO → Native VirtIO | 11.0 Big Sur | Apple's `AppleQEMUGuestAgent` launches on VZ-backed hosts only — see [ISA Serial Transport — Why](#isa-serial-transport--why) | ISA serial primary on all host classes for symmetry; VirtIO devices in `src/channel.c` covered as a fallback for hosts where ISA isn't presented (UTM with the QEMU backend, custom QEMU configs without `-device isa-serial`) |
 | PPC → Intel | 10.4.4 Tiger | Architecture change | i386 Makefile target for 10.4–10.5, x86_64 from 10.6 |
 | 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 target from 10.6, i386 Makefile target for older |
 | Monolithic libc → split sub-libs | 10.7 Lion | Library layout | Symbol check adapts: libc.dylib → libSystem.B → sub-libraries |

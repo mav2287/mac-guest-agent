@@ -6,27 +6,35 @@ The agent implements real filesystem freeze for consistent PVE backups — not a
 
 **On freeze (`guest-fsfreeze-freeze`):**
 1. Runs hook scripts from `/etc/qemu/fsfreeze-hook.d/` (for database flush, service pause, etc.)
-2. APFS (10.13+): creates an atomic COW snapshot via `tmutil localsnapshot` — this is the consistency point
-3. All versions: `sync()` + `F_FULLFSYNC` flushes all data to physical media
-4. Continuous `sync()` every 100ms during the freeze window to catch new writes
-5. Auto-thaw after 10 minutes if PVE never sends thaw (safety net)
-6. Commands are restricted during freeze (only ping, sync, info, freeze/thaw allowed)
+2. Global `sync(2)` flushes dirty buffers system-wide.
+3. Per-mount dispatch by `f_fstypename` — APFS gets `tmutil localsnapshot` plus `F_FULLFSYNC`, HFS+ gets `F_FULLFSYNC`, FAT/exFAT/UDF/NTFS try `F_FULLFSYNC` and tolerate `ENOTSUP`, ZFS gets `zfs snapshot` when the CLI is present, network mounts (smbfs/afpfs/nfs/webdav/ftp) and special FS (devfs/autofs/fdesc/synthfs/volfs/lifs) are skipped categorically. The full table lives in [docs/design/FREEZE_SEMANTICS.md](design/FREEZE_SEMANTICS.md).
+4. Continuous `sync()` every 100ms during the freeze window to catch new writes (best-effort; macOS has no `FIFREEZE`).
+5. Auto-thaw after 10 minutes if PVE never sends thaw (safety net).
+6. Commands are restricted during freeze. The allowlist is 9 commands: the upstream 6 (`guest-ping`, `guest-sync`, `guest-sync-delimited`, `guest-info`, `guest-fsfreeze-status`, `guest-fsfreeze-thaw`) plus our `guest-sync-id` extension and the two freeze handlers themselves (`guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`) — see [FREEZE_SEMANTICS.md → Divergences from upstream QGA](design/FREEZE_SEMANTICS.md#divergences-from-upstream-qga).
+7. Emits a single INFO log line summarising the per-treatment breakdown (snapshotted / zfs_snapshotted / fullfsynced / flushed_only / skipped) — the wire response is the spec-conformant `int` total; the breakdown is in the log.
 
 **On thaw (`guest-fsfreeze-thaw`):**
-1. Cleans up APFS snapshot
-2. Runs thaw hooks in reverse order
-3. Restores normal operation
+1. Cleans up APFS snapshot (`tmutil deletelocalsnapshots` for the snapshot name tracked at freeze time).
+2. Cleans up ZFS snapshots (`zfs destroy` for each snapshot tracked at freeze time).
+3. Runs thaw hooks in reverse order.
+4. Restores normal operation.
 
-## Freeze Methods by macOS Version
+## What "freeze" means per filesystem
 
-| macOS | Method | Consistency Level |
+macOS has no kernel-level filesystem freeze (`FIFREEZE`) like Linux, and no `UFSSUSPEND` like FreeBSD. VMware Tools for Mac never supported quiesced snapshots either. What the agent does is the best consistency guarantee available on macOS, applied per filesystem type:
+
+| `f_fstypename` | Treatment | Guarantee |
 |---|---|---|
-| 10.4–10.12 | `sync()` + `F_FULLFSYNC` | Disk-level flush (equivalent to most Linux VMs without LVM) |
-| 10.13+ | `sync()` + `F_FULLFSYNC` + APFS snapshot | Point-in-time consistent (best available on macOS) |
+| `apfs` | `tmutil` snapshot + `F_FULLFSYNC` per mount | Atomic point-in-time view (10.13+) |
+| `hfs` | `F_FULLFSYNC` per mount | Disk-level flush (10.4–10.12; equivalent to a Linux ext4 backup without LVM) |
+| `zfs` (OpenZFS-on-macOS, CLI present) | `zfs snapshot` per dataset | Atomic point-in-time view |
+| `msdos` / `vfat` / `exfat` / `udf` / `ntfs` | `F_FULLFSYNC`, tolerate `ENOTSUP` | Disk-level flush (covered by global `sync` if the fcntl is unimplemented) |
+| `smbfs` / `afpfs` / `nfs` / `webdav` / `ftp` | Skipped | Remote mount — backing server owns its own consistency |
+| `devfs` / `autofs` / `fdesc` / `synthfs` / `volfs` / `lifs` | Skipped | Synthetic/pseudo FS, no backing storage |
 
-macOS has no kernel-level filesystem freeze (FIFREEZE) like Linux. VMware Tools for Mac never supported quiesced snapshots either. Our implementation provides the best consistency guarantee available on macOS.
+The full dispatch table — including the `_default_writable_dev_backed` and `_default_unknown_non_dev` sentinels, the failure-mode classification, and the divergences from upstream QGA — is in [docs/design/FREEZE_SEMANTICS.md](design/FREEZE_SEMANTICS.md). The same table is surfaced statically by `mac-guest-agent --self-test-json` under `freeze_dispatch.per_fstypename`, so you can introspect the policy without running a freeze.
 
-**Note on `guest-fsfreeze-freeze-list`:** This command accepts a mountpoint list parameter but currently freezes all filesystems regardless — the mountpoint filter is not yet implemented. In practice this rarely matters because macOS VMs typically have a single data volume, so freezing everything is the correct behavior. If you need selective freeze, use hook scripts to manage specific services instead.
+**`guest-fsfreeze-freeze-list`** accepts a `mountpoints` JSON array argument and freezes only those mounts (since v2.4.3 — earlier versions silently ignored the argument and froze globally). With no argument or an empty array it delegates to the global `guest-fsfreeze-freeze` handler. Subset freezes deliberately skip the container-level APFS snapshot even when an APFS mount is in the list — container-level snapshots are not partitionable per-mount, so taking one for a subset request would snapshot state the caller didn't ask us to capture. APFS mounts in a subset freeze get the same per-mount `F_FULLFSYNC` treatment as HFS+ mounts.
 
 Verified on El Capitan 10.11.6 with LVM snapshot + mount test (290/290 stress cycles clean).
 
