@@ -213,37 +213,40 @@ A version is promoted to **Tier 2** when all four core checks pass:
 
 ### Step 2: Runtime Validation (Tier 2 → Tier 1)
 
-Boot a VM from the installer on PVE, then run two pieces:
+Boot a VM from the installer on PVE, install the agent, then run a single host-side command:
 
-**Inside the VM** — install and capture the structured diagnostics:
+**Inside the VM — install the agent (one-time):**
 
 ```bash
 sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
-
-sudo mac-guest-agent --self-test-json > selftest-10.X.json
-sudo mac-guest-agent --safe-test-json > safetest-10.X.json
 ```
 
-`--self-test-json` is the environment diagnostic (serial device, kext, service, hooks, tools, backup readiness). `--safe-test-json` is the 21-command read-only sweep against the agent's command handlers.
-
-**From the PVE host** — the bundled one-shot verification script covers config, VM state, ping, `get-osinfo`, `network-get-interfaces`, the full command sweep (`info` returns the 45-command list and version), agent-sourced memory usage, and a freeze/thaw round-trip with behavioural verification (the agent must reject a non-freeze command while frozen and recover after thaw):
+**From the PVE host — run the one-shot verifier:**
 
 ```bash
 curl -fsSL -o /tmp/pve-verify.sh \
   https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/pve-verify.sh
 chmod +x /tmp/pve-verify.sh
-/tmp/pve-verify.sh <vmid>
+/tmp/pve-verify.sh <vmid> | tee pve-verify.txt
 ```
 
-A version is promoted to **Tier 1** when the in-VM diagnostics succeed and `pve-verify.sh` reports `ALL CHECKS PASSED`.
+`pve-verify.sh` now runs a single end-to-end pass:
+
+- **Host-side checks** — config (`agent: enabled=1,type=isa`, `discard=on`, `ssd=1`), VM running, `ping`, `get-osinfo`, `network-get-interfaces`, `info` (the 45-command list + version), agent-sourced memory (block-info × blocks).
+- **Freeze/thaw round-trip with behavioural verification by content** — verifies the agent genuinely gates non-freeze commands while frozen by inspecting *response content* (not `qm` exit code; see [docs/research/UPSTREAM_NOTES.md Target 4](research/UPSTREAM_NOTES.md) for the reasoning) and recovers after thaw.
+- **In-VM diagnostics via `qm guest exec`** — drives `mac-guest-agent --self-test-json` and `mac-guest-agent --safe-test-json` from the host. Validates the `freeze_dispatch` contract (per-FS table + cpustats discriminator) and the read-only command sweep. Tails the agent log for the per-event "Filesystem frozen:" INFO line so the per-treatment breakdown surfaces in the report.
+- **PII redaction** is on by default — IPv4 addresses, MAC addresses, and the supplied VM ID are replaced before output. Disable with `--no-redact` if you want raw values.
+- **Structured JSON appendix** at the end of the report — paste it into `docs/evidence/<version>/pve-verify.json`. Run `pve-verify.sh --help` for all flags.
+
+A version is promoted to **Tier 1** when `pve-verify.sh` reports `ALL CHECKS PASSED` (and, by implication, both in-VM JSON diagnostics succeed inside the same run).
 
 ### Storing Results
 
 Internally, JSON outputs are kept under `results/` (gitignored) during development and referenced by build number in the Evidence column of the matrix above.
 
-External contributors: paste the `pve-verify.sh` output and the two JSON files in a GitHub issue comment, or open a small PR adding them under `docs/evidence/<version>/` and updating the corresponding matrix row.
+External contributors: paste the `pve-verify.sh` text output and the JSON appendix in a GitHub issue comment, or open a small PR adding them under `docs/evidence/<version>/` (as `pve-verify.txt` and `pve-verify.json`) and updating the corresponding matrix row.
 
 ## Quality Metrics
 

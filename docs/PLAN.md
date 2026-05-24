@@ -140,7 +140,7 @@ Implementation work flows from the spec and is tracked as separate commits: `src
 | Phase | Status | Deliverable | Started | Completed |
 |---|---|---|---|---|
 | 1 | **done** | `docs/research/UPSTREAM_NOTES.md` | 2026-05-23 | 2026-05-23 |
-| 2 | **design done; implementation queue ready** | `docs/design/AGENT_BEHAVIOUR_SPEC.md` | 2026-05-23 | 2026-05-23 (design); implementation in progress |
-| 3 | blocked on Phase 2 implementation | `scripts/pve-verify.sh` updates | — | — |
+| 2 | **done** | `docs/design/AGENT_BEHAVIOUR_SPEC.md` + implementation items 1–7 (per-FS dispatch, freeze-list subset, ZFS, cpustats array, allowlist test, `freeze_dispatch` JSON block, doc honesty) + `docs/design/FREEZE_SEMANTICS.md` | 2026-05-23 | 2026-05-23 |
+| 3 | **code + docs done; reply to @vit9696 still pending user OK** | `scripts/pve-verify.sh` Phase 3 rewrite (content-not-exit-code behavioural check, `qm guest exec` driven in-VM `--self-test-json` / `--safe-test-json`, freeze-log fetch, structured report + JSON appendix, PII redaction); `docs/COMPATIBILITY.md` Step 2 + `docs/evidence/README.md` updated for the one-shot flow | 2026-05-23 | 2026-05-23 (code/docs); reply pending |
 
 Update this table as phases progress.
