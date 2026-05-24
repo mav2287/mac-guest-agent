@@ -149,6 +149,8 @@ SECTION=""                # current section name, attached to each record
 
 # redact: apply PII redaction to a stream when REDACT=1.
 #   - IPv4 addresses → <REDACTED-IPV4>
+#   - IPv6 addresses (full, compressed, link-local) → <REDACTED-IPV6>
+#     (covers routable GUAs that leak ISP prefix + EUI-64-derived MAC).
 #   - 6-octet MAC addresses → <REDACTED-MAC>
 #   - The supplied identifier → <REDACTED-VMID> in known contexts
 #     ("VM ID: <id>", "VM <id>", "vmid <id>", "\"vmid\":<id>" in JSON).
@@ -162,8 +164,25 @@ redact() {
         cat
     else
         REDACT_VMID="$VMID" perl -ne '
-            s/\b[0-9]{1,3}(?:\.[0-9]{1,3}){3}\b/<REDACTED-IPV4>/g;
+            # MAC FIRST — a MAC is 6 colon-separated 2-hex-digit groups,
+            # which falls inside the IPv6 pattern. Redacting MAC first
+            # rewrites it to <REDACTED-MAC> (no colons), so the IPv6
+            # regex below cannot misclassify it.
             s/\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b/<REDACTED-MAC>/g;
+
+            # IPv6: bounded by "not adjacent to hex digit or colon".
+            # \b is unreliable around `:` because colons are non-word
+            # characters, so `\b::1` never fires when preceded by
+            # whitespace. The (?<![0-9a-fA-F:]) / (?![0-9a-fA-F:])
+            # lookarounds handle the colon-bordered cases correctly.
+            # Three branches: full / dotted-prefix (1234:5678:...:abcd),
+            # compressed (fe80::1), and pure-colon-prefix (::1).
+            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+            s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{0,4}:){2,7}:[0-9a-fA-F]{0,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+            s{(?<![0-9a-fA-F:])::[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
+
+            s/\b[0-9]{1,3}(?:\.[0-9]{1,3}){3}\b/<REDACTED-IPV4>/g;
+
             if (length $ENV{REDACT_VMID}) {
                 my $v = quotemeta $ENV{REDACT_VMID};
                 s/(VM ID: |VM |vmid )$v\b/$1<REDACTED-VMID>/g;
@@ -1236,8 +1255,28 @@ fi
 NETINFO=$("$transport_qga_cmd" network-get-interfaces 2>/dev/null)
 IFCOUNT=$(json_query "$NETINFO" 'ref $d eq "ARRAY" ? scalar @$d : ""')
 if [ -n "$IFCOUNT" ] && [ "$IFCOUNT" -gt 0 ] 2>/dev/null; then
-    IP=$(json_query "$NETINFO" \
-        'my $ip; for my $i (@$d) { for my $a (@{$i->{"ip-addresses"} || []}) { $ip ||= $a->{"ip-address"} } } $ip // "no IP"')
+    # Prefer a routable IPv4 first, then a routable IPv6, then any
+    # link-local. Earlier versions of this picker did "first-encountered
+    # wins" and would surface link-local fe80:: even when a real IPv4
+    # was present, because getifaddrs() on macOS commonly returns the
+    # link-local IPv6 before the IPv4 on the same interface.
+    IP=$(json_query "$NETINFO" '
+        my ($v4, $v6, $ll) = ("", "", "");
+        for my $i (@$d) {
+            next if ($i->{name} // "") eq "lo0";
+            for my $a (@{$i->{"ip-addresses"} || []}) {
+                my $addr = $a->{"ip-address"} // "";
+                next unless length $addr;
+                my $type = $a->{"ip-address-type"} // "";
+                if    ($addr =~ /^127\./)         { next; }
+                elsif ($addr =~ /^fe80:/i)        { $ll ||= $addr; }
+                elsif ($addr =~ /^::1$/)          { next; }
+                elsif ($type eq "ipv4")           { $v4 ||= $addr; }
+                elsif ($type eq "ipv6")           { $v6 ||= $addr; }
+            }
+        }
+        $v4 || $v6 || $ll || "no IP";
+    ')
     pass "network-get-interfaces — $IFCOUNT interface(s), IP $IP"
 else
     fail "network-get-interfaces — no valid response"
@@ -1438,9 +1477,15 @@ if [ "$RUN_FREEZE" -eq 1 ]; then
             for my $m (@{$he->{mounts} // []}) {
                 my $fs = lc($m->{fstype} // "");
                 next if $skip_net{$fs} || $skip_special{$fs};
-                # Treat read-only mounts as freeze-relevant — they still get
-                # counted under skipped_readonly which contributes to the
-                # wire response. Same for any unknown writable type.
+                # Skip read-only mounts — the agents wire response (per
+                # sync_all_volumes in src/cmd-fs.c:421) is
+                # `snapshotted + zfs_snapshotted + fullfsynced + flushed_only`
+                # and does NOT include `skipped_readonly`. Read-only mounts
+                # therefore should not be counted in the expected total.
+                # Bites on macOS 11+ where the system root is APFS-sealed
+                # read-only ("/" with read-only in the options string).
+                my $opts = lc($m->{options} // "");
+                next if $opts =~ /\bread-only\b/;
                 $n++;
             }
             print $n;

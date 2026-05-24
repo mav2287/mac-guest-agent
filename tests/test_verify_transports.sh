@@ -241,7 +241,7 @@ case "$1" in
                 OUT='+-o AppleVirtIO  <class IOService>'
                 ;;
             "/sbin/mount ")
-                OUT=$'/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n/dev/disk3s6 on /System/Volumes/Data (apfs, local, journaled, nobrowse)\n//user@host/share on /Volumes/net (smbfs, local)\nmap auto_home on /System/Volumes/Data/home (autofs, automounted)'
+                OUT=$'/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n/dev/disk3s6 on /System/Volumes/Data (apfs, local, journaled, nobrowse)\n/dev/disk3s2 on /System/Volumes/Preboot (apfs, local, nobrowse)\n//user@host/share on /Volumes/net (smbfs, local)\nmap auto_home on /System/Volumes/Data/home (autofs, automounted)'
                 ;;
             "/bin/launchctl list"*)
                 OUT=$'{\n\t"PID" = 1234;\n\t"Label" = "com.macos.guest-agent";\n}'
@@ -323,7 +323,7 @@ assert_eq "PVE: host_environment has hardware.hw_model" "Mac14,5" "$(json_field 
 # categorically skipped during freeze anyway, so the parse miss has no
 # behavioural consequence). Assert the 3 standard lines parsed.
 MCOUNT=$(json_field "$APP" 'scalar @{$d->{host_environment}->{mounts} // []}')
-assert_eq "PVE: mount table parsed 3 standard entries" "3" "${MCOUNT:-0}"
+assert_eq "PVE: mount table parsed 4 standard entries" "4" "${MCOUNT:-0}"
 # kextstat parse not asserted here — the gx_capture path passes the
 # full shell command as the path+args to the shim, and the shim's
 # case-match on $BIN $ARG1 only sees `/bin/sh -c`; faithfully shimming

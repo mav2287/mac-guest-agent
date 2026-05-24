@@ -13,8 +13,12 @@ docs/evidence/<version>/
 │                 # in-VM --self-test-json and --safe-test-json as parsed
 │                 # objects, plus host-side check records and the
 │                 # freeze-event "Filesystem frozen:" log line
-└── NOTES.md      # (optional) host hardware, hypervisor version, OpenCore
-                  # config notes, contributor name
+└── README.md     # (optional) host hardware, hypervisor version, OpenCore
+                  # config notes, contributor name. Named README.md
+                  # specifically so GitHub renders it inline on the
+                  # directory listing — operators landing on the
+                  # per-version page see the reproduction context
+                  # without an extra click.
 ```
 
 The two files come out of a single `verify.sh` invocation: the human-readable text section ends, then a `JSON Appendix (paste into docs/evidence/<version>/verify.json)` header, then the JSON object. Split the output at that header.
@@ -45,7 +49,7 @@ The two files come out of a single `verify.sh` invocation: the human-readable te
 
 The schema is additive — every 1.0 field is preserved in 2.0. Consumers reading 1.0 fields by name continue to work; consumers wanting the new context read the new fields. No migration of existing evidence files is required.
 
-`NOTES.md` is genuinely optional — only include it if there's context that would help someone reproducing your setup (Apple Xserve vs commodity hardware, specific QEMU CPU type, OpenCore Serial settings, etc.).
+`README.md` is genuinely optional — only include it if there's context that would help someone reproducing your setup (Apple Xserve vs commodity hardware, specific QEMU CPU type, OpenCore Booter quirks, kernel patches, NVRAM variables, etc.). Previously-submitted directories may have this file named `NOTES.md` — both are accepted; new submissions should prefer `README.md` for the inline-render benefit.
 
 ## How to capture the evidence
 
