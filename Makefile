@@ -205,7 +205,7 @@ test-proactive:
 	@echo "Building proactive tests..."
 	@$(CC) -Isrc -Isrc/third_party -o $(BUILD_DIR)/test_proactive tests/test_proactive.c \
 		src/channel.c src/util.c src/protocol.c src/compat.c src/log.c \
-		src/cmd-fs.c \
+		src/cmd-fs.c src/cmd-ssh.c \
 		src/third_party/cJSON.c -framework CoreFoundation -framework IOKit
 	@echo "Running proactive tests..."
 	@$(BUILD_DIR)/test_proactive

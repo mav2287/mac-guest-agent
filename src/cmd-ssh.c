@@ -3,11 +3,179 @@
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 #include <pwd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+
+/* Read a file via O_NOFOLLOW + fstat — refuses to open a symlink at the
+ * final path component, which is the privesc surface for SSH paths run
+ * as root (an attacker who owns the home dir can swap a symlink in for
+ * .ssh/authorized_keys and trick a root-running agent into reading a
+ * root-owned file like /etc/shadow). See audit.md finding 6.
+ *
+ * Returns a heap-allocated NUL-terminated buffer (caller frees) and
+ * sets *out_len, OR NULL on any error including:
+ *  - path is a symlink (open returns ELOOP with O_NOFOLLOW)
+ *  - path is not a regular file (fstat S_ISREG check)
+ *  - open failed for any other reason (ENOENT, EACCES, etc.)
+ *
+ * O_NOFOLLOW is POSIX.1-2001 and present on every macOS from 10.0
+ * onwards — works on the i386/10.4 build. */
+/* Exposed (not static) for unit testing in tests/test_proactive.c —
+ * see audit finding 6 regression tests. */
+char *ssh_safe_read_file(const char *path, size_t *out_len);
+char *ssh_safe_read_file(const char *path, size_t *out_len)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) return NULL;
+
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return NULL;
+    }
+    if (st.st_size < 0 || (uintmax_t)st.st_size > (uintmax_t)SIZE_MAX - 1) {
+        close(fd);
+        return NULL;
+    }
+
+    size_t size = (size_t)st.st_size;
+    char *buf = malloc(size + 1);
+    if (!buf) { close(fd); return NULL; }
+
+    size_t total = 0;
+    while (total < size) {
+        ssize_t n = read(fd, buf + total, size - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(buf); close(fd); return NULL;
+        }
+        if (n == 0) break;
+        total += (size_t)n;
+    }
+    close(fd);
+    buf[total] = '\0';
+    if (out_len) *out_len = total;
+    return buf;
+}
+
+/* Atomically write `data` to `path` as a regular file owned by `uid:gid`
+ * with mode 0600. Uses O_NOFOLLOW + fchown/fchmod by fd to prevent the
+ * root-running SSH-command path from being tricked into truncating or
+ * chowning a file outside the intended directory via a symlink swap.
+ *
+ * If the target already exists as a symlink, the open fails with ELOOP.
+ * If it exists as a non-regular file (device, fifo, etc.), the fstat
+ * check rejects it before any write. Otherwise the file is truncated
+ * and rewritten, then fchown'd and fchmod'd by fd (so even if a racing
+ * attacker swaps the path between open and our checks, the metadata
+ * changes apply to OUR fd, not whatever the path now resolves to).
+ *
+ * Returns 0 on success, -1 on any error.
+ *
+ * Tiger-compatible: O_NOFOLLOW, fchown, fchmod are all POSIX.1-2001
+ * and present on macOS since 10.0. Doesn't use openat/renameat (those
+ * are POSIX.1-2008 / macOS 10.5+). The trade-off is no atomic rename
+ * — readers may briefly see the truncated-but-not-rewritten state.
+ * Acceptable for authorized_keys: SSH only re-reads the file on next
+ * authentication, and a backup mid-rewrite would just retry. */
+/* Exposed (not static) for unit testing — see audit finding 6
+ * regression tests in tests/test_proactive.c. */
+int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
+                         const char *data, size_t len);
+int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
+                         const char *data, size_t len)
+{
+    /* O_TRUNC + O_NOFOLLOW: refuses to truncate a symlink target.
+     * O_CREAT with mode 0600 in case the file doesn't exist yet. */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        LOG_WARN("ssh_safe_write_file(%s) open failed: %s",
+                 path, strerror(errno));
+        return -1;
+    }
+
+    /* Defence in depth: confirm the fd is a regular file before we
+     * write to it. open() with O_NOFOLLOW already prevents symlink
+     * resolution, but a non-symlink non-regular file (a fifo or
+     * device a local attacker pre-created) would silently consume
+     * the write otherwise. */
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return -1;
+    }
+
+    /* fchown/fchmod by fd, not by path. If the path now resolves to
+     * something else (an attacker raced us between open and chown),
+     * we still only touch our fd's inode. */
+    if (fchown(fd, uid, gid) < 0) {
+        LOG_WARN("ssh_safe_write_file(%s) fchown failed: %s",
+                 path, strerror(errno));
+        /* Don't bail — fchown of a file we just created should never
+         * fail in practice, but if it does, the write is still safer
+         * than the prior chown-by-path. Mirror previous behaviour. */
+    }
+    if (fchmod(fd, 0600) < 0) {
+        LOG_WARN("ssh_safe_write_file(%s) fchmod failed: %s",
+                 path, strerror(errno));
+    }
+
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(fd, data + written, len - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return -1;
+        }
+        written += (size_t)n;
+    }
+    close(fd);
+    return 0;
+}
+
+/* Create (or verify) the user's .ssh directory safely.
+ *
+ *  - mkdir() doesn't follow symlinks for the final component, so a
+ *    pre-existing symlink at the .ssh path returns EEXIST. We lstat
+ *    to verify what's there is actually a directory (not a symlink).
+ *  - lchown() instead of chown() to set ownership without following
+ *    symlinks (defence in depth — we already verified it's a real
+ *    directory, but the lchown is one less attack surface).
+ *
+ * Returns 0 on success, -1 if .ssh is something other than a real
+ * directory we can put a file under. Logs the specific failure. */
+static int ssh_safe_ssh_dir(const char *home, uid_t uid, gid_t gid, char *out, size_t outsz)
+{
+    snprintf(out, outsz, "%s/.ssh", home);
+    if (mkdir(out, 0700) < 0 && errno != EEXIST) {
+        LOG_WARN("ssh_safe_ssh_dir(%s): mkdir failed: %s",
+                 out, strerror(errno));
+        return -1;
+    }
+    struct stat st;
+    if (lstat(out, &st) < 0) {
+        LOG_WARN("ssh_safe_ssh_dir(%s): lstat failed: %s",
+                 out, strerror(errno));
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        LOG_WARN("ssh_safe_ssh_dir(%s): not a regular directory "
+                 "(mode=0%o) — refusing to operate on it",
+                 out, (unsigned)st.st_mode);
+        return -1;
+    }
+    if (lchown(out, uid, gid) < 0) {
+        LOG_WARN("ssh_safe_ssh_dir(%s): lchown failed: %s",
+                 out, strerror(errno));
+    }
+    return 0;
+}
 
 static char *get_authorized_keys_path(const char *username)
 {
@@ -38,7 +206,11 @@ static cJSON *handle_ssh_get_keys(cJSON *args, const char **err_class, const cha
     }
 
     cJSON *keys = cJSON_CreateArray();
-    char *data = read_file(path, NULL);
+    /* O_NOFOLLOW read — refuse to follow a symlink at authorized_keys
+     * even for the read path. An attacker who owns the home dir could
+     * point the symlink at /etc/shadow and trick the root-running
+     * agent into exposing the content via the QGA response. */
+    char *data = ssh_safe_read_file(path, NULL);
     free(path);
 
     if (data) {
@@ -82,16 +254,13 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         return NULL;
     }
 
-    /* Create .ssh directory */
+    /* Create or verify .ssh directory safely (refuses to operate if
+     * .ssh is a symlink — see ssh_safe_ssh_dir). */
     char ssh_dir[512];
-    snprintf(ssh_dir, sizeof(ssh_dir), "%s/.ssh", pw->pw_dir);
-    if (mkdir(ssh_dir, 0700) < 0 && errno != EEXIST) {
+    if (ssh_safe_ssh_dir(pw->pw_dir, pw->pw_uid, pw->pw_gid, ssh_dir, sizeof(ssh_dir)) < 0) {
         *err_class = "GenericError";
-        *err_desc = "Failed to create .ssh directory";
+        *err_desc = "Failed to create or verify .ssh directory";
         return NULL;
-    }
-    if (chown(ssh_dir, pw->pw_uid, pw->pw_gid) < 0) {
-        LOG_WARN("Failed to chown %s: %s", ssh_dir, strerror(errno));
     }
 
     char *path = get_authorized_keys_path(user_item->valuestring);
@@ -101,8 +270,9 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         return NULL;
     }
 
-    /* Read existing keys */
-    char *existing = read_file(path, NULL);
+    /* Read existing keys via the O_NOFOLLOW safe reader (symlink at
+     * authorized_keys is rejected — see audit.md finding 6). */
+    char *existing = ssh_safe_read_file(path, NULL);
 
     /* Build new content with dedup */
     size_t cap = 4096;
@@ -158,17 +328,17 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
 
     free(existing);
 
-    if (write_file(path, content, content_len, 0600) != 0) {
+    /* Atomic-ish safe write: O_NOFOLLOW prevents symlink targets,
+     * fchown/fchmod by fd binds the metadata change to OUR fd's
+     * inode regardless of any racing path swap. See audit finding 6. */
+    if (ssh_safe_write_file(path, pw->pw_uid, pw->pw_gid, content, content_len) != 0) {
         free(content);
         free(path);
         *err_class = "GenericError";
-        *err_desc = "Failed to write authorized_keys";
+        *err_desc = "Failed to write authorized_keys (path may be a symlink or non-regular file)";
         return NULL;
     }
 
-    if (chown(path, pw->pw_uid, pw->pw_gid) < 0) {
-        LOG_WARN("Failed to chown authorized_keys: %s", strerror(errno));
-    }
     free(content);
     free(path);
 
@@ -199,7 +369,9 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
         return NULL;
     }
 
-    char *data = read_file(path, NULL);
+    /* O_NOFOLLOW read — symlink at authorized_keys is rejected
+     * before we expose its contents. See audit.md finding 6. */
+    char *data = ssh_safe_read_file(path, NULL);
     if (!data) {
         free(path);
         return cJSON_CreateObject(); /* No file = nothing to remove */
@@ -247,16 +419,22 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
     free(data);
 
     struct passwd *pw = getpwnam(user_item->valuestring);
-    if (write_file(path, result_buf, result_len, 0600) != 0) {
-        LOG_ERROR("Failed to write authorized_keys during remove");
+    if (!pw) {
+        free(result_buf);
+        free(path);
+        *err_class = "GenericError";
+        *err_desc = "User not found";
+        return NULL;
+    }
+    /* Same safe-write helper as the add path — O_NOFOLLOW + fchown/
+     * fchmod by fd. See audit finding 6. */
+    if (ssh_safe_write_file(path, pw->pw_uid, pw->pw_gid, result_buf, result_len) != 0) {
+        LOG_ERROR("Failed to write authorized_keys during remove (path may be a symlink or non-regular file)");
         free(result_buf);
         free(path);
         *err_class = "GenericError";
         *err_desc = "Failed to write authorized_keys file";
         return NULL;
-    }
-    if (pw && chown(path, pw->pw_uid, pw->pw_gid) < 0) {
-        LOG_WARN("Failed to chown authorized_keys: %s", strerror(errno));
     }
 
     free(result_buf);

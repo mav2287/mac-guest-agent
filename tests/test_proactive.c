@@ -500,6 +500,137 @@ static void test_base64_validation(void)
     ASSERT("NULL input -> NULL", base64_decode(NULL, NULL) == NULL);
 }
 
+/* ---- SSH safe-write symlink-attack regression (audit finding 6) ---- */
+
+/* Forward decls — defined in src/cmd-ssh.c, exposed for tests. */
+char *ssh_safe_read_file(const char *path, size_t *out_len);
+int   ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
+                           const char *data, size_t len);
+
+static void test_ssh_safe_write_symlink(void)
+{
+    printf("\n--- SSH safe write: symlink-attack regression ---\n");
+
+    char dir[256];
+    snprintf(dir, sizeof(dir), "/tmp/mga-ssh-safe-%d", getpid());
+    mkdir(dir, 0700);
+
+    /* Set up a "victim" file that an attacker would want the root-
+     * running agent to truncate by symlink swap. */
+    char victim[320];
+    snprintf(victim, sizeof(victim), "%s/victim.txt", dir);
+    const char *victim_content = "DO NOT OVERWRITE ME — this is the file an attacker tries to truncate\n";
+    write_file(victim, victim_content, strlen(victim_content), 0644);
+
+    /* Path the SSH writer would target — the attacker has replaced it
+     * with a symlink to the victim file. */
+    char target[320];
+    snprintf(target, sizeof(target), "%s/authorized_keys", dir);
+    if (symlink(victim, target) < 0) {
+        printf("  SKIP: could not create symlink (errno=%d)\n", errno);
+        unlink(victim);
+        rmdir(dir);
+        return;
+    }
+
+    /* The audit's attack: ssh_safe_write_file is asked to write to a
+     * path that's currently a symlink to a file the root-running agent
+     * shouldn't be touching. Must refuse with -1, and must NOT have
+     * truncated or modified the victim. */
+    const char *evil = "ssh-rsa AAAA... attacker@evil\n";
+    int rc = ssh_safe_write_file(target, getuid(), getgid(), evil, strlen(evil));
+    ASSERT("symlink target → write refused with -1", rc == -1);
+
+    /* Victim content unchanged — open it directly (not through the
+     * symlink path) to verify. */
+    size_t vlen = 0;
+    char *back = read_file(victim, &vlen);
+    ASSERT("victim file content unchanged",
+           back && strcmp(back, victim_content) == 0);
+    free(back);
+
+    /* Now remove the symlink; safe write to the now-nonexistent path
+     * must succeed (O_CREAT) and produce a real file. */
+    unlink(target);
+    rc = ssh_safe_write_file(target, getuid(), getgid(), evil, strlen(evil));
+    ASSERT("non-existent target → write succeeds", rc == 0);
+    struct stat st;
+    ASSERT("created file is a regular file (not a symlink)",
+           lstat(target, &st) == 0 && S_ISREG(st.st_mode));
+    ASSERT("created file mode is 0600",
+           (st.st_mode & 0777) == 0600);
+    /* Verify content was written. */
+    size_t blen = 0;
+    char *written = read_file(target, &blen);
+    ASSERT("written content matches input",
+           written && strlen(written) == strlen(evil)
+                   && memcmp(written, evil, strlen(evil)) == 0);
+    free(written);
+
+    /* Write again to existing regular file — should succeed
+     * (truncate-then-rewrite). */
+    const char *evil2 = "ssh-rsa BBBB... attacker2@evil\n";
+    rc = ssh_safe_write_file(target, getuid(), getgid(), evil2, strlen(evil2));
+    ASSERT("write to existing regular file succeeds", rc == 0);
+    char *written2 = read_file(target, NULL);
+    ASSERT("file was overwritten",
+           written2 && strstr(written2, "BBBB") != NULL
+                    && strstr(written2, "AAAA") == NULL);
+    free(written2);
+
+    /* Cleanup. */
+    unlink(target);
+    unlink(victim);
+    rmdir(dir);
+}
+
+static void test_ssh_safe_read_symlink(void)
+{
+    printf("\n--- SSH safe read: symlink-attack regression ---\n");
+
+    char dir[256];
+    snprintf(dir, sizeof(dir), "/tmp/mga-ssh-safe-r-%d", getpid());
+    mkdir(dir, 0700);
+
+    /* Sensitive file the attacker wants exfiltrated via the SSH-get
+     * response. */
+    char secret[320];
+    snprintf(secret, sizeof(secret), "%s/secret.txt", dir);
+    const char *secret_content = "SECRET — should not be exposed via SSH get\n";
+    write_file(secret, secret_content, strlen(secret_content), 0600);
+
+    char target[320];
+    snprintf(target, sizeof(target), "%s/authorized_keys", dir);
+    if (symlink(secret, target) < 0) {
+        printf("  SKIP: could not create symlink (errno=%d)\n", errno);
+        unlink(secret);
+        rmdir(dir);
+        return;
+    }
+
+    /* O_NOFOLLOW read refuses to follow the symlink — returns NULL
+     * rather than exposing the secret. */
+    size_t out_len = 99;
+    char *data = ssh_safe_read_file(target, &out_len);
+    ASSERT("symlink target → read returns NULL", data == NULL);
+    free(data);
+
+    /* Real regular file: read succeeds. */
+    unlink(target);
+    const char *real = "ssh-rsa AAAAB3...\n";
+    write_file(target, real, strlen(real), 0600);
+    out_len = 0;
+    data = ssh_safe_read_file(target, &out_len);
+    ASSERT("regular file → read returns data",
+           data && out_len == strlen(real) && strcmp(data, real) == 0);
+    free(data);
+
+    /* Cleanup. */
+    unlink(target);
+    unlink(secret);
+    rmdir(dir);
+}
+
 int main(void)
 {
     printf("=== Proactive Tests ===\n");
@@ -512,6 +643,8 @@ int main(void)
     test_freeze_hooks();
     test_password_validation();
     test_base64_validation();
+    test_ssh_safe_write_symlink();
+    test_ssh_safe_read_symlink();
 
     printf("\n=== Results: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
