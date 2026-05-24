@@ -48,6 +48,14 @@
 #                       (sw_vers / sysctl / kextstat / ioreg / mount /
 #                       launchctl / log-file stat). Use when guest-exec
 #                       is slow or you only want host-driven checks.
+#   --no-freeze         Skip the Freeze/Thaw section entirely. Useful
+#                       for cautious contributors who don't want to
+#                       freeze a production-ish VM; everything else
+#                       still runs (~80% of the evidence).
+#   --freeze-cycles N   Number of freeze/thaw cycles to run (default 3).
+#                       Multiple cycles catch state leakage between
+#                       cycles — a real bug class the prior single-cycle
+#                       check missed. Set to 1 for old behaviour.
 #   --help              Show this usage block and exit.
 #
 # Safety:
@@ -82,6 +90,8 @@ REDACT=1
 APPENDIX=1
 IN_VM=1
 ENV_CAPTURE=1
+RUN_FREEZE=1
+FREEZE_CYCLES=3
 
 usage() {
     # Print the header comment block (lines 2 through the blank line
@@ -106,6 +116,8 @@ while [ $# -gt 0 ]; do
         --no-appendix)    APPENDIX=0;        shift ;;
         --no-in-vm)       IN_VM=0;           shift ;;
         --no-env-capture) ENV_CAPTURE=0;     shift ;;
+        --no-freeze)      RUN_FREEZE=0;      shift ;;
+        --freeze-cycles)  FREEZE_CYCLES="$2"; shift 2 ;;
         --help|-h)        usage 0 ;;
         --)               shift; break ;;
         -*)               echo "Unknown option: $1" >&2; usage 2 ;;
@@ -119,6 +131,11 @@ done
 
 if [ -z "$VMID" ] && [ "$TRANSPORT" != "qga-socket" ]; then
     echo "Error: <identifier> is required." >&2
+    usage 2
+fi
+
+if ! [[ "$FREEZE_CYCLES" =~ ^[0-9]+$ ]] || [ "$FREEZE_CYCLES" -lt 1 ]; then
+    echo "Error: --freeze-cycles must be a positive integer (got: '$FREEZE_CYCLES')." >&2
     usage 2
 fi
 
@@ -207,7 +224,11 @@ emit_appendix() {
     HOST_CHECKS="$HOST_CHECKS_JSON" \
     HOST_ENVIRONMENT="$HOST_ENVIRONMENT_JSON" \
     SELFTEST="$SELFTEST_JSON" SAFETEST="$SAFETEST_JSON" \
-    FREEZE_LOG="$FREEZE_LOG_TAIL" SCRIPT_VERSION="2026-05-23-verify-v2" \
+    FREEZE_LOG="$FREEZE_LOG_TAIL" \
+    FREEZE_CYCLES_LOG="$FREEZE_CYCLES_JSON" \
+    FREEZE_CYCLES_COUNT="$FREEZE_CYCLES" \
+    MOUNT_XCHECK="$MOUNT_DISPATCH_CROSSCHECK_JSON" \
+    SCRIPT_VERSION="2026-05-23-verify-v2" \
     perl -MJSON::PP -e '
         sub maybe_decode {
             my $s = shift;
@@ -216,22 +237,25 @@ emit_appendix() {
             return $@ ? { _raw_unparseable => $s } : $d;
         }
         my $appendix = {
-            schema_version    => "2.0",
-            script_version    => $ENV{SCRIPT_VERSION},
-            generated_at      => scalar(gmtime) . " UTC",
-            transport         => $ENV{TRANSPORT_OUT},
-            vmid              => $ENV{VMID_OUT},
-            agent_path        => $ENV{AGENT_PATH_OUT},
-            log_path          => $ENV{LOG_PATH_OUT},
-            counts            => {
+            schema_version             => "2.0",
+            script_version             => $ENV{SCRIPT_VERSION},
+            generated_at               => scalar(gmtime) . " UTC",
+            transport                  => $ENV{TRANSPORT_OUT},
+            vmid                       => $ENV{VMID_OUT},
+            agent_path                 => $ENV{AGENT_PATH_OUT},
+            log_path                   => $ENV{LOG_PATH_OUT},
+            freeze_cycles              => $ENV{FREEZE_CYCLES_COUNT} + 0,
+            counts                     => {
                 passed => $ENV{PASS_OUT} + 0,
                 failed => $ENV{FAIL_OUT} + 0,
             },
-            host_checks       => maybe_decode($ENV{HOST_CHECKS}) // [],
-            host_environment  => maybe_decode($ENV{HOST_ENVIRONMENT}),
-            in_vm_selftest    => maybe_decode($ENV{SELFTEST}),
-            in_vm_safetest    => maybe_decode($ENV{SAFETEST}),
-            freeze_log_tail   => $ENV{FREEZE_LOG} // "",
+            host_checks                => maybe_decode($ENV{HOST_CHECKS}) // [],
+            host_environment           => maybe_decode($ENV{HOST_ENVIRONMENT}),
+            in_vm_selftest             => maybe_decode($ENV{SELFTEST}),
+            in_vm_safetest             => maybe_decode($ENV{SAFETEST}),
+            freeze_log_tail            => $ENV{FREEZE_LOG} // "",
+            freeze_cycles_log          => maybe_decode($ENV{FREEZE_CYCLES_LOG}) // [],
+            mount_dispatch_crosscheck  => maybe_decode($ENV{MOUNT_XCHECK}),
         };
         print JSON::PP->new->pretty->canonical->encode($appendix);
     ' 2>/dev/null
@@ -1255,72 +1279,183 @@ if [ "$IN_VM" -eq 1 ] && [ "$ENV_CAPTURE" -eq 1 ]; then
     capture_host_environment
 fi
 
-# --- Freeze / thaw --------------------------------------------------------
-section "Freeze / Thaw"
+# --- Freeze / thaw (multi-cycle) ------------------------------------------
 # macOS has no FIFREEZE; freeze is per-FS dispatch (see docs/design/FREEZE_SEMANTICS.md).
-# Beyond the command path this verifies the frozen STATE behaviourally:
-# while frozen, a non-freeze command must be rejected BY CONTENT (PVE's
-# register_command dispatcher exits 0 on QGA errors — see Target 4 in
-# docs/research/UPSTREAM_NOTES.md — so we cannot use exit code).
+# Beyond the command path this verifies:
+#  (a) the frozen STATE behaviourally — while frozen, a non-freeze command
+#      must be rejected BY CONTENT (PVE's register_command dispatcher exits
+#      0 on QGA errors — see Target 4 in docs/research/UPSTREAM_NOTES.md
+#      — so we cannot use exit code);
+#  (b) state cleanliness across multiple cycles — re-freezing immediately
+#      after thaw must work as if the first cycle never ran, catching
+#      state-leak bugs the single-cycle check missed;
+#  (c) mount-dispatch consistency — the frozen count reported by the
+#      agent must be within range of the writable, non-network, non-
+#      special mounts observed in the captured mount table.
+
 FREEZE_LOG_TAIL=""
+FREEZE_CYCLES_JSON='[]'
+LAST_FROZEN_N=""
 
-FREEZE=$("$transport_qga_cmd" fsfreeze-freeze 2>/dev/null)
-FROZEN_N=$(echo "$FREEZE" | grep -oE '[0-9]+' | head -1)
-if [ -n "$FROZEN_N" ] && [ "$FROZEN_N" -ge 1 ]; then
-    FROZE=1                                        # arm the auto-thaw trap
-    pass "fsfreeze-freeze — $FROZEN_N filesystem(s) frozen"
+# record_cycle <cycle> <frozen_n> <thawed_n> <status_ok> <behavioural> <post_thaw> <log_line>
+record_cycle() {
+    FREEZE_CYCLES_JSON=$(printf '%s' "$FREEZE_CYCLES_JSON" | \
+        CYC="$1" FN="$2" TN="$3" SOK="$4" BHV="$5" PT="$6" LL="$7" \
+        perl -MJSON::PP -e '
+            local $/;
+            my $arr = decode_json(scalar <STDIN>);
+            push @$arr, {
+                cycle             => $ENV{CYC} + 0,
+                frozen_n          => length($ENV{FN}) ? $ENV{FN} + 0 : undef,
+                thawed_n          => length($ENV{TN}) ? $ENV{TN} + 0 : undef,
+                fsfreeze_status   => $ENV{SOK},
+                behavioural_check => $ENV{BHV},
+                post_thaw_check   => $ENV{PT},
+                freeze_log_line   => $ENV{LL},
+            };
+            print encode_json($arr);
+        ' 2>/dev/null || printf '%s' "$FREEZE_CYCLES_JSON")
+}
 
-    STATUS=$("$transport_qga_cmd" fsfreeze-status 2>/dev/null)
-    if echo "$STATUS" | grep -qw "frozen"; then
-        pass "fsfreeze-status — reports frozen"
-    else
-        fail "fsfreeze-status — not reported frozen after freeze"
-    fi
+run_freeze_cycle() {
+    local n="$1"
+    local frozen_n="" thawed_n="" status_ok="fail" behavioural="ambiguous" post_thaw="fail" log_line=""
 
-    FROZEN_RESP=$("$transport_qga_cmd" get-osinfo 2>&1)
-    if echo "$FROZEN_RESP" | grep -qE '"pretty-name"|pretty-name:'; then
-        fail "frozen state — agent served get-osinfo while frozen (NOT genuinely gated)"
-    elif echo "$FROZEN_RESP" | grep -qiE 'Command not allowed while filesystem is frozen|"error"'; then
-        pass "frozen state — non-freeze command rejected by content"
-    else
-        info "frozen state — ambiguous response: $(printf '%s' "$FROZEN_RESP" | head -c 200)"
-    fi
+    local freeze_resp frozen_n_raw
+    freeze_resp=$("$transport_qga_cmd" fsfreeze-freeze 2>/dev/null)
+    frozen_n_raw=$(echo "$freeze_resp" | grep -oE '[0-9]+' | head -1)
+    if [ -n "$frozen_n_raw" ] && [ "$frozen_n_raw" -ge 1 ]; then
+        frozen_n="$frozen_n_raw"
+        FROZE=1                                  # arm the auto-thaw trap
+        pass "cycle $n: fsfreeze-freeze — $frozen_n filesystem(s) frozen"
 
-    THAW=$("$transport_qga_cmd" fsfreeze-thaw 2>/dev/null)
-    THAWED_N=$(echo "$THAW" | grep -oE '[0-9]+' | head -1)
-    if [ -n "$THAWED_N" ] && [ "$THAWED_N" -ge 1 ]; then
-        FROZE=""                                    # disarm the trap
-        pass "fsfreeze-thaw — $THAWED_N filesystem(s) thawed"
-    else
-        fail "fsfreeze-thaw — thaw not confirmed; the VM filesystem may still be frozen"
-    fi
-
-    POST_RESP=$("$transport_qga_cmd" get-osinfo 2>&1)
-    if echo "$POST_RESP" | grep -qE '"pretty-name"|pretty-name:'; then
-        pass "post-thaw — agent answers get-osinfo normally again"
-    else
-        fail "post-thaw — get-osinfo response did not carry pretty-name after thaw"
-    fi
-
-    # Per-event freeze INFO line from the agent log (Phase 2 Q3 surface).
-    if [ "$IN_VM" -eq 1 ]; then
-        LOG_RAW=$("$transport_guest_exec_json" /usr/bin/tail -n 200 "$LOG_PATH")
-        if [ -n "$LOG_RAW" ]; then
-            LOG_TEXT=$(json_query "$LOG_RAW" '$d->{"out-data"} // ""')
-            FREEZE_LOG_TAIL=$(printf '%s' "$LOG_TEXT" | grep -E 'Filesystem frozen:' | tail -n 1)
-            if [ -n "$FREEZE_LOG_TAIL" ]; then
-                pass "freeze log — $FREEZE_LOG_TAIL"
-            else
-                info "freeze log — '$LOG_PATH' tail had no 'Filesystem frozen:' INFO line in the last 200 lines"
-            fi
+        local status_resp
+        status_resp=$("$transport_qga_cmd" fsfreeze-status 2>/dev/null)
+        if echo "$status_resp" | grep -qw "frozen"; then
+            status_ok="pass"
+            pass "cycle $n: fsfreeze-status — reports frozen"
         else
-            info "freeze log — guest-exec tail $LOG_PATH returned no JSON (binary or log missing?)"
+            fail "cycle $n: fsfreeze-status — not reported frozen after freeze"
+        fi
+
+        local frozen_resp
+        frozen_resp=$("$transport_qga_cmd" get-osinfo 2>&1)
+        if echo "$frozen_resp" | grep -qE '"pretty-name"|pretty-name:'; then
+            behavioural="fail"
+            fail "cycle $n: frozen state — agent served get-osinfo while frozen (NOT genuinely gated)"
+        elif echo "$frozen_resp" | grep -qiE 'Command not allowed while filesystem is frozen|"error"'; then
+            behavioural="pass"
+            pass "cycle $n: frozen state — non-freeze command rejected by content"
+        else
+            info "cycle $n: frozen state — ambiguous response: $(printf '%s' "$frozen_resp" | head -c 200)"
+        fi
+
+        local thaw_resp thawed_n_raw
+        thaw_resp=$("$transport_qga_cmd" fsfreeze-thaw 2>/dev/null)
+        thawed_n_raw=$(echo "$thaw_resp" | grep -oE '[0-9]+' | head -1)
+        if [ -n "$thawed_n_raw" ] && [ "$thawed_n_raw" -ge 1 ]; then
+            thawed_n="$thawed_n_raw"
+            FROZE=""                              # disarm the trap
+            pass "cycle $n: fsfreeze-thaw — $thawed_n filesystem(s) thawed"
+        else
+            fail "cycle $n: fsfreeze-thaw — thaw not confirmed; the VM filesystem may still be frozen"
+        fi
+
+        local post_resp
+        post_resp=$("$transport_qga_cmd" get-osinfo 2>&1)
+        if echo "$post_resp" | grep -qE '"pretty-name"|pretty-name:'; then
+            post_thaw="pass"
+            pass "cycle $n: post-thaw — agent answers get-osinfo normally again"
+        else
+            fail "cycle $n: post-thaw — get-osinfo response did not carry pretty-name after thaw"
+        fi
+
+        # Per-event freeze INFO line from the agent log (Phase 2 Q3
+        # surface). For multi-cycle runs the log carries one INFO line
+        # per cycle; we want THIS cycle's line — take the N-th-from-last
+        # matching line.
+        if [ "$IN_VM" -eq 1 ]; then
+            local log_raw log_text
+            log_raw=$("$transport_guest_exec_json" /usr/bin/tail -n 500 "$LOG_PATH")
+            if [ -n "$log_raw" ]; then
+                log_text=$(json_query "$log_raw" '$d->{"out-data"} // ""')
+                # Take the LAST matching line — it's the one this cycle
+                # just wrote. Earlier cycles' lines are also present but
+                # ordered before it.
+                log_line=$(printf '%s' "$log_text" | grep -E 'Filesystem frozen:' | tail -n 1)
+                if [ -n "$log_line" ]; then
+                    pass "cycle $n: freeze log — $log_line"
+                else
+                    info "cycle $n: freeze log — no 'Filesystem frozen:' INFO line in last 500 lines"
+                fi
+            fi
+        fi
+
+        LAST_FROZEN_N="$frozen_n"
+        FREEZE_LOG_TAIL="$log_line"               # last cycle's line for the appendix top-level field
+    elif [ -n "$frozen_n_raw" ]; then
+        fail "cycle $n: fsfreeze-freeze — froze 0 filesystems (freeze had no effect)"
+    else
+        fail "cycle $n: fsfreeze-freeze — no response"
+    fi
+
+    record_cycle "$n" "$frozen_n" "$thawed_n" "$status_ok" "$behavioural" "$post_thaw" "$log_line"
+}
+
+MOUNT_DISPATCH_CROSSCHECK_JSON='null'
+if [ "$RUN_FREEZE" -eq 1 ]; then
+    section "Freeze / Thaw ($FREEZE_CYCLES cycle(s))"
+    for cyc in $(seq 1 "$FREEZE_CYCLES"); do
+        run_freeze_cycle "$cyc"
+    done
+
+    # Mount-dispatch cross-check: the frozen count from the LAST cycle
+    # should be in a reasonable range relative to the count of writable,
+    # non-network, non-special mounts captured in the Host Environment
+    # section. Loose tolerance (1 to 2x expected) — APFS containers can
+    # produce more snapshot rows than mount rows because one container
+    # snapshot covers multiple mount points, and ZFS datasets can pad
+    # the count too. Strict equality would false-positive.
+    section "Mount-Dispatch Cross-Check"
+    if [ -z "$HOST_ENVIRONMENT_JSON" ]; then
+        info "skipped — no captured mount table (env-capture was off or failed)"
+        MOUNT_DISPATCH_CROSSCHECK_JSON='{"skipped":true,"reason":"no captured mount table"}'
+    elif [ -z "$LAST_FROZEN_N" ]; then
+        info "skipped — no successful freeze cycle to cross-check against"
+        MOUNT_DISPATCH_CROSSCHECK_JSON='{"skipped":true,"reason":"no successful freeze cycle"}'
+    else
+        EXPECTED_N=$(HE="$HOST_ENVIRONMENT_JSON" perl -MJSON::PP -e '
+            my $he = decode_json($ENV{HE});
+            my %skip_net     = map { $_ => 1 } qw(smbfs afpfs nfs webdav ftp);
+            my %skip_special = map { $_ => 1 } qw(devfs autofs fdesc volfs synthfs lifs);
+            my $n = 0;
+            for my $m (@{$he->{mounts} // []}) {
+                my $fs = lc($m->{fstype} // "");
+                next if $skip_net{$fs} || $skip_special{$fs};
+                # Treat read-only mounts as freeze-relevant — they still get
+                # counted under skipped_readonly which contributes to the
+                # wire response. Same for any unknown writable type.
+                $n++;
+            }
+            print $n;
+        ' 2>/dev/null)
+        if [ -z "$EXPECTED_N" ] || [ "$EXPECTED_N" -eq 0 ]; then
+            info "expected count not derivable from mount table; freeze reported $LAST_FROZEN_N"
+            MOUNT_DISPATCH_CROSSCHECK_JSON=$(printf '{"expected_freeze_n":%s,"actual_freeze_n":%s,"match":null,"reason":"expected count not derivable"}' "${EXPECTED_N:-0}" "$LAST_FROZEN_N")
+        else
+            UPPER=$((EXPECTED_N * 2))
+            if [ "$LAST_FROZEN_N" -ge 1 ] && [ "$LAST_FROZEN_N" -le "$UPPER" ]; then
+                pass "mount-dispatch cross-check — $LAST_FROZEN_N mount(s) frozen vs ~$EXPECTED_N expected (within 1..2x range)"
+                MOUNT_DISPATCH_CROSSCHECK_JSON=$(printf '{"expected_freeze_n":%s,"actual_freeze_n":%s,"upper_bound":%s,"match":true}' "$EXPECTED_N" "$LAST_FROZEN_N" "$UPPER")
+            else
+                fail "mount-dispatch cross-check — $LAST_FROZEN_N mount(s) frozen vs ~$EXPECTED_N expected (expected 1..$UPPER)"
+                MOUNT_DISPATCH_CROSSCHECK_JSON=$(printf '{"expected_freeze_n":%s,"actual_freeze_n":%s,"upper_bound":%s,"match":false}' "$EXPECTED_N" "$LAST_FROZEN_N" "$UPPER")
+            fi
         fi
     fi
-elif [ -n "$FROZEN_N" ]; then
-    fail "fsfreeze-freeze — froze 0 filesystems (freeze had no effect)"
 else
-    fail "fsfreeze-freeze — no response"
+    section "Freeze / Thaw"
+    info "skipped (--no-freeze)"
 fi
 
 # --- In-VM diagnostics (--self-test-json + --safe-test-json) --------------
