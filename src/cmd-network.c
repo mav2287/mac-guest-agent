@@ -3,6 +3,7 @@
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -179,6 +180,35 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
     return result;
 }
 
+/* Format an IPv4 prefix length as a dotted-quad netmask string.
+ * prefix=24 → "255.255.255.0". Out of range → "0.0.0.0". */
+static void ipv4_prefix_to_mask(int prefix, char *out, size_t outsz)
+{
+    if (prefix < 0 || prefix > 32) prefix = 0;
+    uint32_t mask = (prefix == 0) ? 0u : (0xFFFFFFFFu << (32 - prefix));
+    snprintf(out, outsz, "%u.%u.%u.%u",
+             (mask >> 24) & 0xFFu, (mask >> 16) & 0xFFu,
+             (mask >> 8)  & 0xFFu,  mask        & 0xFFu);
+}
+
+/* Format an IPv6 prefix length as a colon-separated hex netmask string.
+ * prefix=64 → "ffff:ffff:ffff:ffff:0000:0000:0000:0000". Out of range → all-zero. */
+static void ipv6_prefix_to_mask(int prefix, char *out, size_t outsz)
+{
+    if (prefix < 0 || prefix > 128) prefix = 0;
+    unsigned char bytes[16] = {0};
+    int full = prefix / 8;
+    int rem  = prefix % 8;
+    for (int i = 0; i < full && i < 16; i++) bytes[i] = 0xFFu;
+    if (rem > 0 && full < 16) bytes[full] = (unsigned char)(0xFFu << (8 - rem));
+    snprintf(out, outsz,
+             "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+             bytes[0],  bytes[1],  bytes[2],  bytes[3],
+             bytes[4],  bytes[5],  bytes[6],  bytes[7],
+             bytes[8],  bytes[9],  bytes[10], bytes[11],
+             bytes[12], bytes[13], bytes[14], bytes[15]);
+}
+
 static cJSON *handle_network_get_route(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
@@ -222,26 +252,61 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
 
         /* Parse route line: Destination Gateway Flags Netif [Expire] */
         char dest[128] = "", gateway[128] = "", flags[32] = "", netif[32] = "";
-        if (sscanf(line, "%127s %127s %31s %31s", dest, gateway, flags, netif) >= 3) {
-            cJSON *route = cJSON_CreateObject();
-            cJSON_AddStringToObject(route, "destination", dest);
-            cJSON_AddStringToObject(route, "nexthop", gateway);
-            cJSON_AddStringToObject(route, "source", "");
-            cJSON_AddStringToObject(route, "interface", netif);
-            cJSON_AddNumberToObject(route, "version", in_inet4 ? 4 : 6);
-
-            /* Parse prefix length from CIDR notation if present */
-            char *slash = strchr(dest, '/');
-            if (slash) {
-                cJSON_AddStringToObject(route, "prefix", slash + 1);
-            } else if (strcmp(dest, "default") == 0) {
-                cJSON_AddStringToObject(route, "prefix", "0");
-            } else {
-                cJSON_AddStringToObject(route, "prefix", in_inet4 ? "32" : "128");
-            }
-
-            cJSON_AddItemToArray(result, route);
+        if (sscanf(line, "%127s %127s %31s %31s", dest, gateway, flags, netif) < 3) {
+            line = strtok_r(NULL, "\n", &save_ptr);
+            continue;
         }
+
+        /* Field shapes here track the QGA GuestNetworkRoute schema:
+         *   iface, destination, mask, metric, gateway, irtt, version,
+         *   desprefixlen, nexthop.
+         * macOS's `netstat -rn` doesn't expose a routing-table `metric`
+         * column at all (would require per-route `route -n get`) and has
+         * no `irtt` concept; we emit 0 for both — same precedent as
+         * cpustats' `nice: 0` on macOS (audit.md finding 2b, Q4-style
+         * spec-conformant-with-honest-zeros). */
+
+        /* Derive the prefix length first — destination may carry /CIDR
+         * suffix, may be "default", or may be an abbreviated form like
+         * "127" / "192.168.1" that macOS netstat shows for legacy
+         * classful and CIDR routes without an explicit suffix. */
+        int prefix_int;
+        const char *prefix_str;
+        char dest_clean[128];
+        strncpy(dest_clean, dest, sizeof(dest_clean) - 1);
+        dest_clean[sizeof(dest_clean) - 1] = '\0';
+        char *slash = strchr(dest_clean, '/');
+        if (slash) {
+            *slash = '\0';
+            prefix_str = slash + 1;
+            prefix_int = atoi(prefix_str);
+        } else if (strcmp(dest_clean, "default") == 0) {
+            /* "default" is the zero-prefix any-destination route. */
+            snprintf(dest_clean, sizeof(dest_clean), "%s", in_inet4 ? "0.0.0.0" : "::");
+            prefix_str = "0";
+            prefix_int = 0;
+        } else {
+            /* Host route — no CIDR suffix, full-length prefix. */
+            prefix_str = in_inet4 ? "32" : "128";
+            prefix_int = in_inet4 ? 32 : 128;
+        }
+
+        char mask[64] = "";
+        if (in_inet4) ipv4_prefix_to_mask(prefix_int, mask, sizeof(mask));
+        else           ipv6_prefix_to_mask(prefix_int, mask, sizeof(mask));
+
+        cJSON *route = cJSON_CreateObject();
+        cJSON_AddStringToObject(route, "iface",        netif);
+        cJSON_AddStringToObject(route, "destination",  dest_clean);
+        cJSON_AddStringToObject(route, "gateway",      gateway);
+        cJSON_AddStringToObject(route, "nexthop",      gateway);     /* spec allows both; on macOS they're the same */
+        cJSON_AddStringToObject(route, "mask",         mask);
+        cJSON_AddNumberToObject(route, "metric",       0);            /* macOS netstat doesn't expose route metric */
+        cJSON_AddNumberToObject(route, "irtt",         0);            /* Linux-only concept; constant 0 on macOS */
+        cJSON_AddNumberToObject(route, "version",      in_inet4 ? 4 : 6);
+        cJSON_AddStringToObject(route, "desprefixlen", prefix_str);
+
+        cJSON_AddItemToArray(result, route);
 
         line = strtok_r(NULL, "\n", &save_ptr);
     }
