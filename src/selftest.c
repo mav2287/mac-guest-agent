@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "compat.h"
 #include "commands.h"
+#include "cmd-fs.h"
 #include "log.h"
 #include "util.h"
 #include <stdio.h>
@@ -517,6 +518,72 @@ static void emit_system_info(void)
     printf("},");
 }
 
+/* Emit the freeze_dispatch JSON object — sibling of system_info. Surfaces
+ * the per-FS dispatch policy, the agent's log file path, the ZFS CLI
+ * availability, and the documented divergences from upstream QGA, so that
+ * pve-verify.sh (and contributors) can introspect what the agent will do
+ * during freeze without having to run a real freeze. See Q3 of
+ * docs/design/AGENT_BEHAVIOUR_SPEC.md for the rationale. */
+static void emit_freeze_dispatch(void)
+{
+    printf("\"freeze_dispatch\":{");
+
+    /* Log file — default path used by the launchd plist; CLI may override
+     * via -l/--logfile. Documented here so verifier tooling knows where to
+     * grep for the per-event "Filesystem frozen:" INFO line. */
+    printf("\"log_path_default\":\"/var/log/mac-guest-agent.log\",");
+    printf("\"log_line_prefix\":\"Filesystem frozen:\",");
+
+    /* Per-fstypename dispatch table. Keys are f_fstypename strings as
+     * returned by getfsstat(2); values are the freeze treatment applied
+     * by sync_all_volumes() / fs_dispatch_class(). Mirrors src/cmd-fs.c
+     * exactly — keep these two in sync. */
+    printf("\"per_fstypename\":{");
+    printf("\"apfs\":\"tmutil_snapshot+f_fullfsync\",");
+    printf("\"hfs\":\"f_fullfsync\",");
+    printf("\"msdos\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"vfat\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"exfat\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"udf\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"ntfs\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"zfs\":\"zfs_snapshot_if_cli_else_f_fullfsync\",");
+    printf("\"smbfs\":\"skip_network\",");
+    printf("\"afpfs\":\"skip_network\",");
+    printf("\"nfs\":\"skip_network\",");
+    printf("\"webdav\":\"skip_network\",");
+    printf("\"ftp\":\"skip_network\",");
+    printf("\"devfs\":\"skip_special\",");
+    printf("\"autofs\":\"skip_special\",");
+    printf("\"fdesc\":\"skip_special\",");
+    printf("\"volfs\":\"skip_special\",");
+    printf("\"synthfs\":\"skip_special\",");
+    printf("\"lifs\":\"skip_special\",");
+    printf("\"_default_writable_dev_backed\":\"f_fullfsync_with_enotsup_tolerated\",");
+    printf("\"_default_unknown_non_dev\":\"skip_special\"");
+    printf("},");
+
+    /* ZFS CLI runtime check — operators can confirm at install time
+     * whether ZFS dispatch will actually use `zfs snapshot`. */
+    printf("\"zfs_cli_available\":%s,", fsfreeze_has_zfs_cli() ? "true" : "false");
+
+    /* Divergences from upstream QEMU Guest Agent (spec-conformance notes
+     * — see Phase 1 Target 1/2 in docs/research/UPSTREAM_NOTES.md). */
+    printf("\"divergences_from_upstream_qga\":{");
+    printf("\"idempotent_re_freeze\":true,");          /* re-freeze does not error */
+    printf("\"persistent_frozen_state_marker\":false,"); /* in-process flag only */
+    printf("\"logging_disabled_during_freeze\":false"); /* we log to the configured logfile */
+    printf("},");
+
+    /* CPU stats discriminator note — Q4 of AGENT_BEHAVIOUR_SPEC.md.
+     * The QGA schema's GuestCpuStats union has no "darwin" variant, so
+     * macOS emits type="linux" with per-CPU jiffy-equivalents derived
+     * from host_processor_info(PROCESSOR_CPU_LOAD_INFO). */
+    printf("\"cpustats_discriminator\":\"linux\",");
+    printf("\"cpustats_note\":\"type=linux emitted on macOS (no darwin enum value exists upstream); see docs/design/AGENT_BEHAVIOUR_SPEC.md Q4\"");
+
+    printf("},");
+}
+
 static void output_json(int errs, int warns, int passes)
 {
     char esc_name[128], esc_detail[512];
@@ -526,6 +593,7 @@ static void output_json(int errs, int warns, int passes)
     printf("\"status\":\"%s\",", errs > 0 ? "fail" : "pass");
 
     emit_system_info();
+    emit_freeze_dispatch();
 
     printf("\"checks\":[");
 

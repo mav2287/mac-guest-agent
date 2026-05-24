@@ -860,6 +860,15 @@ int fsfreeze_command_allowed(const char *cmd_name)
     return fsfreeze_is_allowlisted(cmd_name);
 }
 
+/* Public, side-effect-free check used by --self-test-json so operators can
+ * confirm at install time whether ZFS dispatch will use `zfs snapshot` or
+ * fall back to F_FULLFSYNC. find_zfs_cli() caches its result so repeated
+ * calls are cheap. */
+int fsfreeze_has_zfs_cli(void)
+{
+    return find_zfs_cli() != NULL;
+}
+
 /* ---- Init ---- */
 
 void cmd_fs_init(void)

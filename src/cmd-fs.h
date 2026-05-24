@@ -16,6 +16,11 @@ int fsfreeze_command_allowed(const char *cmd_name);
  * command is in the freeze-safe allowlist, 0 otherwise. */
 int fsfreeze_is_allowlisted(const char *cmd_name);
 
+/* Returns 1 if the `zfs` CLI is present on this guest at one of the known
+ * OpenZFS-on-macOS install paths, 0 otherwise. Exposed so --self-test-json
+ * can report whether ZFS dispatch will actually use `zfs snapshot`. */
+int fsfreeze_has_zfs_cli(void);
+
 /* ---- Per-filesystem-type dispatch (see docs/design/AGENT_BEHAVIOUR_SPEC.md Q1) ---- */
 
 typedef enum {

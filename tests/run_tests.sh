@@ -1040,6 +1040,68 @@ fi
 
 # =========================================================
 echo ""
+echo "--- --self-test-json: freeze_dispatch block (Phase 2 Q3) ---"
+# =========================================================
+# pve-verify.sh and contributors rely on the freeze_dispatch block being
+# present and well-formed. Test both the structural shape and the
+# per-fstypename dispatch contract (key set + treatment strings).
+
+SELFTEST_JSON=$("$BINARY" --self-test-json 2>/dev/null)
+if echo "$SELFTEST_JSON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+fd = d['freeze_dispatch']
+for k in ('log_path_default', 'log_line_prefix', 'per_fstypename',
+         'zfs_cli_available', 'divergences_from_upstream_qga',
+         'cpustats_discriminator', 'cpustats_note'):
+    assert k in fd, f'missing freeze_dispatch.{k}'
+pf = fd['per_fstypename']
+assert pf['apfs'] == 'tmutil_snapshot+f_fullfsync'
+assert pf['hfs'] == 'f_fullfsync'
+assert pf['zfs'] == 'zfs_snapshot_if_cli_else_f_fullfsync'
+for net in ('smbfs', 'afpfs', 'nfs', 'webdav', 'ftp'):
+    assert pf[net] == 'skip_network', f'{net} not skip_network'
+for special in ('devfs', 'autofs', 'fdesc', 'volfs', 'synthfs', 'lifs'):
+    assert pf[special] == 'skip_special', f'{special} not skip_special'
+for fat in ('msdos', 'vfat', 'exfat', 'udf', 'ntfs'):
+    assert pf[fat] == 'f_fullfsync_with_enotsup_tolerated', f'{fat} wrong'
+assert fd['cpustats_discriminator'] == 'linux'
+dv = fd['divergences_from_upstream_qga']
+assert dv['idempotent_re_freeze'] is True
+assert dv['persistent_frozen_state_marker'] is False
+assert dv['logging_disabled_during_freeze'] is False
+assert isinstance(fd['zfs_cli_available'], bool)
+" 2>/dev/null; then
+    echo "  PASS: freeze_dispatch block shape and dispatch contract"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: freeze_dispatch block shape or dispatch contract"
+    FAIL=$((FAIL + 1))
+    ERRORS="$ERRORS\n  - --self-test-json freeze_dispatch contract"
+fi
+
+# Round-trip: the cpustats discriminator advertised in freeze_dispatch
+# must match the wire shape of guest-get-cpustats (Q4 contract).
+CPUSTATS_JSON=$(run_cmd '{"execute":"guest-get-cpustats"}')
+if echo "$CPUSTATS_JSON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+r = d['return']
+assert isinstance(r, list) and len(r) > 0, 'expected non-empty array'
+for cpu in r:
+    assert cpu.get('type') == 'linux', f\"expected type=linux, got {cpu.get('type')}\"
+    for f in ('user', 'system', 'idle'):
+        assert f in cpu, f'missing field {f}'
+" 2>/dev/null; then
+    echo "  PASS: guest-get-cpustats matches advertised discriminator (type=linux array)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: guest-get-cpustats discriminator mismatch with freeze_dispatch"
+    FAIL=$((FAIL + 1))
+    ERRORS="$ERRORS\n  - guest-get-cpustats discriminator round-trip"
+fi
+
+echo ""
 echo "=============================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "=============================================="
