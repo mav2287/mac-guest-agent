@@ -9,7 +9,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 1,
-         "freeze_log_line" : "2026-05-24 01:02:22 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-24 01:46:10 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -18,7 +18,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 2,
-         "freeze_log_line" : "2026-05-24 01:02:31 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-24 01:46:18 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -27,55 +27,15 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 3,
-         "freeze_log_line" : "2026-05-24 01:02:40 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-24 01:46:27 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
          "thawed_n" : 1
       }
    ],
-   "freeze_log_tail" : "2026-05-24 01:02:40 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
-   "generated_at" : "Sun May 24 06:02:51 2026 UTC",
-   "host_checks" : [
-      { "detail" : "", "level" : "pass", "name" : "agent: enabled=1, type=isa",                                                                                                              "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "discard=on (TRIM enabled)",                                                                                                               "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "ssd=1 (SSD emulation)",                                                                                                                   "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "VM <REDACTED-VMID> is running",                                                                                                           "section" : "VM State" },
-      { "detail" : "", "level" : "pass", "name" : "ping",                                                                                                                                    "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "get-osinfo — Mac OS X 10.11.6",                                                                                                           "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "network-get-interfaces — 1 interface(s), IP fe80::ca33:4bff:feaa:1544",                                                                   "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "info — 45 commands registered, agent v2.4.3",                                                                                             "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "memory — agent reports ~2.0 GB used / ~8.0 GB total (4/16 blocks online)",                                                                "section" : "Memory (guest agent)" },
-      { "detail" : "", "level" : "pass", "name" : "sw_vers captured (ProductName:\tMac OS X ProductVersion:\t10.11.6 BuildVersion:\t15G22010...)",                                            "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "sysctl captured (Xserve3,1|2|8589934592|Intel(R) Xeon(R) CPU           W5590  @ 3.33GHz)",                                                "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "kextstat captured (2 matching kext line(s))",                                                                                             "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "ioreg serial nodes captured (903 bytes)",                                                                                                 "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "mount table captured (4 mount lines)",                                                                                                    "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "launchd job state captured",                                                                                                              "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "log-file stat: size=23008 mtime=2026-05-24T01:02:21 name=/var/log/mac-guest-agent.log",                                                   "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-freeze — 1 filesystem(s) frozen",                                                                                       "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-status — reports frozen",                                                                                               "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: frozen state — non-freeze command rejected by content",                                                                          "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-thaw — 1 filesystem(s) thawed",                                                                                         "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: post-thaw — agent answers get-osinfo normally again",                                                                            "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: freeze log — 2026-05-24 01:02:22 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-freeze — 1 filesystem(s) frozen",                                                                                       "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-status — reports frozen",                                                                                               "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: frozen state — non-freeze command rejected by content",                                                                          "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-thaw — 1 filesystem(s) thawed",                                                                                         "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: post-thaw — agent answers get-osinfo normally again",                                                                            "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: freeze log — 2026-05-24 01:02:31 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-freeze — 1 filesystem(s) frozen",                                                                                       "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-status — reports frozen",                                                                                               "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: frozen state — non-freeze command rejected by content",                                                                          "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-thaw — 1 filesystem(s) thawed",                                                                                         "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: post-thaw — agent answers get-osinfo normally again",                                                                            "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: freeze log — 2026-05-24 01:02:40 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "mount-dispatch cross-check — 1 mount(s) frozen vs ~1 expected (within 1..2x range)",                                                       "section" : "Mount-Dispatch Cross-Check" },
-      { "detail" : "", "level" : "pass", "name" : "--self-test-json — agent v2.4.3: 20 pass / 0 warn / 0 err",                                                                                "section" : "In-VM Diagnostics" },
-      { "detail" : "", "level" : "pass", "name" : "freeze_dispatch contract — apfs=tmutil_snapshot+f_fullfsync, cpustats=linux, zfs_cli=0",                                                  "section" : "In-VM Diagnostics" },
-      { "detail" : "", "level" : "pass", "name" : "--safe-test-json — 21/21 read-only commands passed (status=pass)",                                                                        "section" : "In-VM Diagnostics" }
-   ],
+   "freeze_log_tail" : "2026-05-24 01:46:27 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+   "generated_at" : "Sun May 24 06:46:38 2026 UTC",
    "host_environment" : {
       "hardware" : {
          "cpu_brand" : "Intel(R) Xeon(R) CPU           W5590  @ 3.33GHz",
@@ -90,9 +50,9 @@
       ],
       "launchd_status" : "{\n\t\"StandardOutPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"LimitLoadToSessionType\" = \"System\";\n\t\"StandardErrorPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"Label\" = \"com.macos.guest-agent\";\n\t\"TimeOut\" = 30;\n\t\"OnDemand\" = false;\n\t\"LastExitStatus\" = 0;\n\t\"PID\" = 22711;\n\t\"Program\" = \"/usr/local/bin/mac-guest-agent\";\n\t\"ProgramArguments\" = (\n\t\t\"/usr/local/bin/mac-guest-agent\";\n\t\t\"--daemon\";\n\t);\n};",
       "log_file" : {
-         "mtime" : "2026-05-24T01:02:21",
+         "mtime" : "2026-05-24T01:46:08",
          "path" : "/var/log/mac-guest-agent.log",
-         "size_bytes" : 23008
+         "size_bytes" : 25069
       },
       "mounts" : [
          { "device" : "/dev/disk0s2", "fstype" : "hfs",   "mount_point" : "/",    "options" : "local, with quotas, journaled" },

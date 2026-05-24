@@ -23,7 +23,7 @@
 
 ## Notable
 
-- The VM has both IPv4 and link-local IPv6 on its single NIC. The verifier's PASS line picked the link-local IPv6 because the IP picker in `verify.sh` took the first address `getifaddrs()` returned rather than preferring a non-link-local IPv4 — flagged on this run, fixed in a follow-up so subsequent evidence drops show the routable address.
+- The VM's single NIC carries link-local IPv6, a routable IPv6 GUA, and a routable IPv4. The verifier preferentially reports the IPv4 (and redacts it in `verify.txt` / `verify.json`).
 - `network-get-interfaces` showed 1 interface — single-NIC setup over the VM bridge.
 - Memory: agent reports 4 of 16 blocks online → ~2 GiB used / ~8 GiB total. Block-quantised estimate; correlates with the host-side balloon-less view (PVE web UI gauge reads cgroup RSS, doesn't read the agent — see `docs/PVE.md`).
 
