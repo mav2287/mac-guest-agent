@@ -198,7 +198,10 @@ case "$1" in
         esac
         ;;
     guest)
-        # qm guest exec --output-format json --timeout N <vmid> -- <path> [args]
+        # qm guest exec --timeout N <vmid> -- <path> [args]
+        # (PVE's default output is already JSON; --output-format json
+        # was removed from verify.sh after a real-world El Cap run
+        # caught that the flag isn't accepted on some PVEs.)
         # Build the canned envelope based on which binary was asked for.
         BIN=""
         ARG1=""

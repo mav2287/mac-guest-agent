@@ -563,12 +563,18 @@ pve_qga_cmd() {
 }
 
 # pve_guest_exec_json <path> [args...]
-# Runs `qm guest exec --output-format json --timeout N <vmid> -- <path> [args]`
-# and prints the envelope JSON ({exited, exitcode, out-data, err-data}).
-# Empty output on parse failure.
+# Runs `qm guest exec --timeout N <vmid> -- <path> [args]` and prints
+# the envelope JSON ({exited, exitcode, out-data, err-data}). Empty
+# output on parse failure.
+#
+# Earlier versions of this function passed `--output-format json` — that
+# flag is not supported by `qm guest exec` on PVE versions tested in
+# the wild (PVE returns `400 unable to parse option`). The default
+# output IS already valid JSON (PVE's CLIFormatter renders single-hash
+# results as indented JSON-compatible text), so no flag is needed.
 pve_guest_exec_json() {
     local raw
-    raw=$(qm guest exec --timeout "$EXEC_TIMEOUT" --output-format json "$VMID" -- "$@" 2>/dev/null)
+    raw=$(qm guest exec --timeout "$EXEC_TIMEOUT" "$VMID" -- "$@" 2>/dev/null)
     if printf '%s' "$raw" | perl -MJSON::PP -e 'local $/; eval { decode_json(scalar <STDIN>) }; exit($@ ? 1 : 0)' 2>/dev/null; then
         printf '%s' "$raw"
     fi
