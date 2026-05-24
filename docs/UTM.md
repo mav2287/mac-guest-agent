@@ -30,7 +30,7 @@ sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
 
-### 3. Verify
+### 3. Verify (in-VM quick check)
 
 ```bash
 # Inside the VM
@@ -41,6 +41,29 @@ The self-test should show:
 ```
   PASS  VirtIO serial device: /dev/cu.virtio
 ```
+
+### 4. Verify end-to-end from the host (`scripts/verify.sh`)
+
+For a single end-to-end pass — environment capture, agent communication, freeze/thaw cycles, and the in-VM `--self-test-json` / `--safe-test-json` diagnostics, all driven from your macOS host — use `scripts/verify.sh`:
+
+```bash
+# Pick a name shown in `utmctl list`
+curl -fsSL -o /tmp/verify.sh \
+  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
+chmod +x /tmp/verify.sh
+/tmp/verify.sh --transport utm "macOS Dev" | tee verify.txt
+```
+
+How the UTM transport works:
+
+- **Socket discovery.** `verify.sh` reads `~/Library/Containers/com.utmapp.UTM/Data/Documents/<VM Name>.utm/config.plist`, finds the Serial entry where `Interface == "QemuGuestAgent"`, and uses its `Path` (the Unix socket UTM provisions for the QGA serial). `utmctl exec` uses the same socket under the hood, but `utmctl` itself has no arbitrary-QGA subcommand — talking to the socket directly is what gives us full PVE-parity coverage (host-driven ping / get-osinfo / fsfreeze round-trip / get-memory).
+- **Prerequisite.** Your UTM VM needs a Serial device with **Interface: QemuGuestAgent** (Edit → Devices → Serial → Add → Interface: QemuGuestAgent). This is the same setup that makes `utmctl exec` work; if you've used `utmctl exec` against this VM successfully, the socket is already there.
+- **Run as the desktop user.** UTM's socket is owned by the user that owns the .utm bundle. **Don't sudo** — `verify.sh` will refuse to run as root in UTM mode.
+- **`--qga-socket PATH` override.** If your UTM install diverges from the default bundle layout (custom paths, older UTM versions with a different plist schema, etc.), pass `--qga-socket /path/to/socket.sock` and `verify.sh` will skip discovery and talk to that socket directly.
+
+If discovery fails — bundle not found, or the plist exists but has no QemuGuestAgent serial — the script errors with the exact UTM GUI steps to fix it. It never writes to the `.utm` bundle.
+
+`verify.sh --help` lists the rest of the flags (`--no-freeze`, `--no-in-vm`, `--no-env-capture`, `--no-appendix`, `--no-redact`, `--freeze-cycles N`, `--agent-path`, `--log-path`, `--exec-timeout`). PII (IPv4, MAC, supplied identifier) is redacted by default.
 
 ## Guest Agent vs utmctl
 

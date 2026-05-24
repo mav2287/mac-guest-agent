@@ -66,6 +66,27 @@ Disk and network devices are separate from the agent transport — use VirtIO fo
 </devices>
 ```
 
+## Host-side end-to-end verification (`scripts/verify.sh`)
+
+For a single host-driven verification pass — environment capture, agent communication, freeze/thaw cycles with a content-based behavioural check, and the in-VM `--self-test-json` / `--safe-test-json` diagnostics — use `scripts/verify.sh`:
+
+```bash
+curl -fsSL -o /tmp/verify.sh \
+  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
+chmod +x /tmp/verify.sh
+/tmp/verify.sh --transport libvirt macos-vm | tee verify.txt
+```
+
+How the libvirt transport works:
+
+- **QGA over `virsh qemu-agent-command`.** All host-driven commands round-trip through `virsh qemu-agent-command <domain> '{...}'`. The `{return: ...}` envelope is unwrapped so the same check pipeline used for PVE / UTM / qga-socket transports works without per-transport branching. Error envelopes pass through unchanged so the freeze-behavioural check still sees `error.desc`.
+- **guest-exec polling.** `verify.sh` issues `guest-exec` via virsh, then polls `guest-exec-status` at 250ms granularity until `exited == true`, base64-decodes `out-data`/`err-data`, and returns the same envelope shape PVE's `qm guest exec --output-format json` produces. The script's in-VM diagnostics section calls into this primitive without caring which transport is bound.
+- **Auto-detection.** With no `--transport` flag, `verify.sh` tries `virsh dominfo <identifier>` and binds the libvirt transport when it exits 0.
+- **Privilege.** `virsh qemu-agent-command` needs root or `libvirt`-group membership on the host — the script's preflight runs `virsh list --all` and fails clean with the three standard remediations (run as root, join the `libvirt` group, or set `LIBVIRT_DEFAULT_URI`) if the libvirtd socket isn't reachable.
+- **Channel prereq.** The agent's [Domain XML Configuration](#domain-xml-configuration) section above adds the documented `<channel><target type='virtio' name='org.qemu.guest_agent.0'/></channel>` element. Without it the in-guest agent has nothing to talk to and `verify.sh`'s configuration check flags it as FAIL before any real test runs.
+
+`verify.sh --help` lists the rest of the flags (`--no-freeze`, `--no-in-vm`, `--no-env-capture`, `--no-appendix`, `--no-redact`, `--freeze-cycles N`, `--agent-path`, `--log-path`, `--exec-timeout`). PII (IPv4, MAC, supplied identifier) is redacted by default.
+
 ## Guest Agent Commands via virsh
 
 ### Basic Commands
