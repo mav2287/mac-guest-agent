@@ -223,23 +223,22 @@ sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
 
-**From the PVE host — run the unified verifier:**
+**From the PVE host — run the unified verifier (single command):**
 
 ```bash
-curl -fsSL -o /tmp/verify.sh \
-  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
-chmod +x /tmp/verify.sh
-/tmp/verify.sh <vmid> | tee verify.txt
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh | bash -s -- <vmid> | tee verify.txt
 ```
 
 `scripts/verify.sh` is the single multi-transport verifier — auto-detects PVE (this section), libvirt, or UTM from the host environment, or accepts `--transport <name>` explicitly. On PVE it runs a single end-to-end pass:
 
 - **Preflight** — root check, cluster locality (multi-node clusters: verifier refuses to run if VM lives on a different node), backup lock (refuses to run if `vzdump` is in progress).
 - **Host-side checks** — config (`agent: enabled=1,type=isa`, `discard=on`, `ssd=1`), VM running, `ping`, `get-osinfo`, `network-get-interfaces`, `info` (the 45-command list + version), agent-sourced memory (block-info × blocks).
-- **Freeze/thaw round-trip with behavioural verification by content** — verifies the agent genuinely gates non-freeze commands while frozen by inspecting *response content* (not `qm` exit code; see [docs/research/UPSTREAM_NOTES.md Target 4](research/UPSTREAM_NOTES.md) for the reasoning) and recovers after thaw. An auto-thaw safety trap fires on Ctrl-C / crash to prevent leaving the VM frozen.
+- **Host Environment capture (schema 2.0)** — `sw_vers`, `sysctl` hardware (model / CPU / memory / brand string), `kextstat` (filtered to `Apple16X50Serial` / `AppleVirtIO` / `IOSerialFamily`), `ioreg` serial / virtio nodes, parsed mount table, `launchctl list com.macos.guest-agent`, agent-log `stat`. All assembled into a single `host_environment` object in the JSON appendix.
+- **Multi-cycle freeze/thaw with behavioural verification by content** — runs `--freeze-cycles N` (default 3) consecutive freeze/thaw cycles to catch state-leak bugs between cycles. Each cycle verifies the agent genuinely gates non-freeze commands while frozen by inspecting *response content* (not `qm` exit code; see [docs/research/UPSTREAM_NOTES.md Target 4](research/UPSTREAM_NOTES.md) for the reasoning) and recovers after thaw. An auto-thaw safety trap fires on Ctrl-C / crash to prevent leaving the VM frozen.
+- **Mount-dispatch cross-check** — compares the captured mount table to the actual frozen count from the last cycle (excluding network / special / read-only mounts the dispatch table categorically skips). Catches dispatch drift between `fs_dispatch_class()` and the live runtime.
 - **In-VM diagnostics via `qm guest exec`** — drives `mac-guest-agent --self-test-json` and `mac-guest-agent --safe-test-json` from the host. Validates the `freeze_dispatch` contract (per-FS table + cpustats discriminator) and the read-only command sweep. Tails the agent log for the per-event "Filesystem frozen:" INFO line so the per-treatment breakdown surfaces in the report.
-- **PII redaction** is on by default — IPv4 addresses, MAC addresses, and the supplied VM ID are replaced before output. Disable with `--no-redact` if you want raw values.
-- **Structured JSON appendix** at the end of the report — paste it into `docs/evidence/<version>/verify.json`. Run `verify.sh --help` for all flags.
+- **PII redaction** is on by default — IPv4, IPv6 (full / compressed / link-local), MAC, hostnames (PVE host + cluster nodes + guest), and the supplied VM ID are replaced before output. Disable with `--no-redact` if you want raw values.
+- **Structured JSON appendix** at the end of the report — paste it into `docs/evidence/<version>/verify.json`. Run `verify.sh --help` for all flags (`--no-redact`, `--no-appendix`, `--no-in-vm`, `--no-env-capture`, `--no-freeze`, `--freeze-cycles N`).
 
 A version is promoted to **Tier 1** when `verify.sh` reports `ALL CHECKS PASSED` (and, by implication, both in-VM JSON diagnostics succeed inside the same run).
 

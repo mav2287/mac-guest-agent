@@ -66,15 +66,12 @@ sudo /usr/local/bin/mac-guest-agent --install
 **On the host (one command — drives the in-VM diagnostics for you):**
 
 ```bash
-curl -fsSL -o /tmp/verify.sh \
-  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
-chmod +x /tmp/verify.sh
-/tmp/verify.sh <identifier> | tee verify.txt
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh | bash -s -- <identifier> | tee verify.txt
 # split the output at the "JSON Appendix" header — the JSON below it
 # is what goes into verify.json
 ```
 
-`<identifier>` is a numeric VMID on PVE, a domain name on libvirt, a VM name on UTM. Pass `--transport pve|libvirt|utm|qga-socket` to force a transport (skip auto-detect). PII (IPv4 addresses, MAC addresses, the supplied identifier) is redacted by default; pass `--no-redact` if you want raw values. `--help` lists the rest of the flags (`--no-appendix`, `--no-in-vm`, `--no-env-capture`, `--no-freeze`, `--freeze-cycles N`, `--qga-socket PATH`, `--agent-path`, `--log-path`, `--exec-timeout`).
+`<identifier>` is a numeric VMID on PVE, a domain name on libvirt, a VM name on UTM. Pass `--transport pve|libvirt|utm|qga-socket` to force a transport (skip auto-detect). PII (IPv4 / IPv6 / MAC / hostnames / the supplied identifier) is redacted by default; pass `--no-redact` if you want raw values. `--help` lists the rest of the flags (`--no-appendix`, `--no-in-vm`, `--no-env-capture`, `--no-freeze`, `--freeze-cycles N`, `--qga-socket PATH`, `--agent-path`, `--log-path`, `--exec-timeout`).
 
 ## How to submit
 
