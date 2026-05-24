@@ -178,5 +178,9 @@ jobs:
       - name: ASAN integration tests
         run: |
           make build
-          ./tests/run_tests.sh ./build/mac-guest-agent-asan || true
-          echo "ASAN integration tests complete"
+          # No `|| true` — ASAN integration failures should fail CI.
+          # Audit finding 7: the prior suppression let the job pass
+          # even if the ASAN binary failed the suite, defeating the
+          # purpose of running it. Verified 75/0 passes locally under
+          # -fsanitize=address,undefined on macOS 26.
+          ./tests/run_tests.sh ./build/mac-guest-agent-asan
