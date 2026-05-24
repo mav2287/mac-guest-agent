@@ -531,6 +531,346 @@ libvirt_guest_exec_json() {
     ' 2>/dev/null
 }
 
+# --- Shared: QGA over a Unix socket ---------------------------------------
+# Used by both the UTM and qga-socket transports. Both talk to a QGA
+# serial socket directly (UTM doesn't expose arbitrary QGA via utmctl,
+# only `utmctl exec`; raw QEMU users provide a socket path explicitly).
+#
+# The socket protocol is line-delimited JSON: write one JSON frame
+# followed by a newline, read one JSON frame back. Frames are decoded /
+# encoded by Perl using JSON::PP + IO::Socket::UNIX (both core modules
+# on stock macOS) so behaviour is uniform across BSD/GNU and doesn't
+# depend on `nc`/`socat` version quirks.
+
+# _qga_socket_cmd <socket-path> <command-suffix> [json-args]
+# Issues a single QGA frame, prints the unwrapped response body so
+# downstream `json_query` calls work with the same `$d->{field}` shape
+# PVE produces. Error envelopes pass through unchanged so the
+# behavioural-freeze check still sees the error desc.
+_qga_socket_cmd() {
+    local sock="$1" cmd="$2"; shift 2
+    local args="${1:-}"
+    QGA_SOCK="$sock" QGA_CMD="$cmd" QGA_ARGS="$args" QGA_TIMEOUT="$EXEC_TIMEOUT" perl -MJSON::PP -MIO::Socket::UNIX -e '
+        my $sock = IO::Socket::UNIX->new(
+            Peer    => $ENV{QGA_SOCK},
+            Type    => SOCK_STREAM(),
+            Timeout => $ENV{QGA_TIMEOUT} + 0,
+        );
+        exit 1 unless $sock;
+        my $frame;
+        if (length $ENV{QGA_ARGS}) {
+            my $args = eval { decode_json($ENV{QGA_ARGS}) };
+            exit 1 if $@;
+            $frame = encode_json({
+                execute   => "guest-" . $ENV{QGA_CMD},
+                arguments => $args,
+            });
+        } else {
+            $frame = encode_json({ execute => "guest-" . $ENV{QGA_CMD} });
+        }
+        $sock->autoflush(1);
+        print $sock $frame . "\n" or exit 1;
+        # Read one response frame. Some QGA implementations buffer; loop
+        # until we have valid JSON or the socket closes.
+        my $buf = "";
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm($ENV{QGA_TIMEOUT} + 0);
+        my $decoded;
+        while (defined(my $line = <$sock>)) {
+            $buf .= $line;
+            $decoded = eval { decode_json($buf) };
+            last if defined $decoded;
+        }
+        alarm(0);
+        close $sock;
+        exit 1 unless defined $decoded;
+        if (ref $decoded eq "HASH" && exists $decoded->{return}) {
+            print encode_json($decoded->{return});
+        } else {
+            print encode_json($decoded);
+        }
+    ' 2>/dev/null
+}
+
+# _qga_socket_guest_exec_json <socket-path> <path> [args...]
+# Drives guest-exec + guest-exec-status via the socket, polls until
+# exited=true (250ms granularity, EXEC_TIMEOUT deadline), base64-decodes
+# out-data/err-data, returns a PVE-shape-compatible envelope.
+_qga_socket_guest_exec_json() {
+    local sock="$1" path="$2"; shift 2
+    QGA_SOCK="$sock" QGA_PATH="$path" QGA_TIMEOUT="$EXEC_TIMEOUT" QGA_ARGS_JSON=$(
+        perl -MJSON::PP -e 'print encode_json([@ARGV])' -- "$@"
+    ) perl -MJSON::PP -MMIME::Base64 -MIO::Socket::UNIX -e '
+        sub send_frame {
+            my ($frame) = @_;
+            my $sock = IO::Socket::UNIX->new(
+                Peer    => $ENV{QGA_SOCK},
+                Type    => SOCK_STREAM(),
+                Timeout => 5,
+            );
+            return undef unless $sock;
+            $sock->autoflush(1);
+            print $sock $frame . "\n" or return undef;
+            my $buf = "";
+            my $decoded;
+            local $SIG{ALRM} = sub { die "timeout\n" };
+            alarm(5);
+            eval {
+                while (defined(my $line = <$sock>)) {
+                    $buf .= $line;
+                    $decoded = eval { decode_json($buf) };
+                    last if defined $decoded;
+                }
+            };
+            alarm(0);
+            close $sock;
+            return $decoded;
+        }
+
+        my $args = decode_json($ENV{QGA_ARGS_JSON});
+        my $exec_resp = send_frame(encode_json({
+            execute   => "guest-exec",
+            arguments => {
+                path             => $ENV{QGA_PATH},
+                arg              => $args,
+                "capture-output" => JSON::PP::true,
+            },
+        }));
+        exit 1 unless $exec_resp && $exec_resp->{return} && defined $exec_resp->{return}->{pid};
+        my $pid = $exec_resp->{return}->{pid};
+
+        my $deadline = time() + ($ENV{QGA_TIMEOUT} + 0);
+        my $status;
+        while (time() < $deadline) {
+            $status = send_frame(encode_json({
+                execute   => "guest-exec-status",
+                arguments => { pid => $pid + 0 },
+            }));
+            last if $status && $status->{return} && $status->{return}->{exited};
+            select(undef, undef, undef, 0.25);
+        }
+        exit 1 unless $status && $status->{return} && $status->{return}->{exited};
+
+        my $r = $status->{return};
+        my $out = defined $r->{"out-data"} ? decode_base64($r->{"out-data"}) : "";
+        my $err = defined $r->{"err-data"} ? decode_base64($r->{"err-data"}) : "";
+        print encode_json({
+            exited          => JSON::PP::true,
+            exitcode        => $r->{exitcode} // 0,
+            "out-data"      => $out,
+            "err-data"      => $err,
+            "out-truncated" => $r->{"out-truncated"} ? JSON::PP::true : JSON::PP::false,
+            "err-truncated" => $r->{"err-truncated"} ? JSON::PP::true : JSON::PP::false,
+        });
+    ' 2>/dev/null
+}
+
+# --- Transport: UTM -------------------------------------------------------
+# UTM ships utmctl with `list`, `status`, `start`, `stop`, `exec`,
+# `ip-address` etc., but no arbitrary-QGA subcommand. utmctl exec ALONE
+# would give us in-guest exec only, missing host-driven ping / osinfo /
+# freeze-thaw. We instead talk to the QGA Unix socket directly — same
+# socket utmctl exec uses under the hood.
+#
+# Discovery: UTM 4.x stores per-VM config at
+#   ~/Library/Containers/com.utmapp.UTM/Data/Documents/<VM Name>.utm/config.plist
+# The plist's Serial array lists each emulated serial interface; the one
+# we want has Interface == "QemuGuestAgent" with a Unix-socket Path.
+# If no QGA serial is configured, we error with the exact GUI steps to
+# add one — we do not mutate the .utm bundle.
+#
+# `--qga-socket PATH` overrides discovery entirely for users whose
+# UTM install differs from the default bundle layout (per-machine
+# bundles, custom paths, etc.).
+
+UTM_RESOLVED_SOCKET=""
+
+utm_describe() {
+    if [ -n "$QGA_SOCKET" ]; then
+        printf 'utm (QGA socket via --qga-socket override); identifier=%s; socket=%s' "$VMID" "$QGA_SOCKET"
+    else
+        printf 'utm (QGA socket discovered from .utm bundle); name=%s' "$VMID"
+    fi
+}
+
+# Locate the QGA socket path for a named UTM VM. Tries the standard
+# bundle location first; if the plist exists but has no QGA serial,
+# errors with the configuration steps. Honours --qga-socket override.
+utm_resolve_socket() {
+    if [ -n "$QGA_SOCKET" ]; then
+        UTM_RESOLVED_SOCKET="$QGA_SOCKET"
+        return 0
+    fi
+    local bundle_root="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents"
+    local bundle="$bundle_root/$VMID.utm"
+    if [ ! -d "$bundle" ]; then
+        # Try UUID lookup via utmctl list (some installs use UUIDs as bundle dirnames).
+        local from_list
+        from_list=$(utmctl list 2>/dev/null | awk -v name="$VMID" '
+            $0 ~ name { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9A-Fa-f-]{36}$/) { print $i; exit } }')
+        if [ -n "$from_list" ]; then
+            bundle="$bundle_root/$from_list.utm"
+        fi
+    fi
+    if [ ! -f "$bundle/config.plist" ]; then
+        fail "UTM bundle not found: $bundle (try --qga-socket PATH to override discovery)"
+        return 1
+    fi
+    local sock
+    sock=$(plutil -convert json -o - "$bundle/config.plist" 2>/dev/null | perl -MJSON::PP -e '
+        local $/;
+        my $cfg = eval { decode_json(scalar <STDIN>) };
+        exit 1 if $@ || !$cfg;
+        # UTM 4.x layout: top-level "Serial" array; each entry has
+        # "Interface" and "Path" (Unix socket) fields. The schema has
+        # shifted across point releases; tolerate either capitalisation.
+        my $serials = $cfg->{Serial} // $cfg->{serial} // [];
+        for my $s (@$serials) {
+            my $iface = $s->{Interface} // $s->{interface} // "";
+            next unless $iface eq "QemuGuestAgent";
+            my $path = $s->{Path} // $s->{path} // "";
+            if (length $path) { print $path; exit 0; }
+        }
+        exit 2;  # plist parsed, no QGA serial configured
+    ' 2>/dev/null)
+    local rc=$?
+    if [ $rc -eq 2 ]; then
+        fail "UTM bundle '$bundle' has no QemuGuestAgent serial port configured."
+        info "to fix: open the VM in UTM → Edit → Devices → Serial → Add → Interface: QemuGuestAgent; save and restart the VM."
+        info "or pass --qga-socket PATH to point at an existing socket directly."
+        return 1
+    fi
+    if [ -z "$sock" ]; then
+        fail "Could not parse a QGA socket path from $bundle/config.plist (UTM config schema may have changed; pass --qga-socket PATH)"
+        return 1
+    fi
+    if [ ! -S "$sock" ]; then
+        fail "QGA socket '$sock' (from $bundle/config.plist) is not a live Unix socket — is the VM running?"
+        return 1
+    fi
+    UTM_RESOLVED_SOCKET="$sock"
+    return 0
+}
+
+utm_preflight() {
+    for tool in perl plutil; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            fail "preflight — '$tool' not found"
+            return 1
+        fi
+    done
+    # `utmctl` is required only when --qga-socket isn't given (we need
+    # utmctl status / list to find the VM). With an override, utmctl
+    # presence is informational.
+    if [ -z "$QGA_SOCKET" ] && ! command -v utmctl >/dev/null 2>&1; then
+        fail "preflight — 'utmctl' not found (install UTM, or pass --qga-socket PATH to skip discovery)"
+        return 1
+    fi
+    # Running as root would break socket ownership — UTM sockets live in
+    # the desktop user's container directory and are owned by that user.
+    if [ "$(id -u)" -eq 0 ]; then
+        fail "preflight — must NOT run as root (UTM sockets are owned by the desktop user; rerun without sudo)"
+        return 1
+    fi
+    if ! utm_resolve_socket; then
+        return 1
+    fi
+    return 0
+}
+
+utm_vm_state() {
+    if [ -n "$QGA_SOCKET" ]; then
+        # In override mode there's no utmctl to ask. Probe the socket
+        # itself with a ping; if it answers we treat the VM as running.
+        if _qga_socket_cmd "$QGA_SOCKET" ping >/dev/null 2>&1; then
+            printf 'running'
+        else
+            printf 'unknown'
+        fi
+        return
+    fi
+    local state
+    state=$(utmctl status "$VMID" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+    case "$state" in
+        started|running)              printf 'running' ;;
+        stopped|"shut off"|"shutoff") printf 'stopped' ;;
+        "")                            printf 'unknown' ;;
+        *)                             printf '%s' "$state" ;;
+    esac
+}
+
+utm_config_summary() {
+    if [ -n "$QGA_SOCKET" ]; then
+        pass "QGA socket: $QGA_SOCKET (via --qga-socket override)"
+        return
+    fi
+    if [ -z "$UTM_RESOLVED_SOCKET" ]; then
+        fail "QGA socket not resolved (preflight discovery failed; see Preflight section above)"
+        return
+    fi
+    pass "QGA serial port discovered in UTM bundle: $UTM_RESOLVED_SOCKET"
+    # We can't usefully inspect UTM's disk-config plist for discard/SSD
+    # — the schema is fragmented across UTM releases. Surface as INFO
+    # rather than a misleading PASS/FAIL.
+    info "discard/SSD hints not checked on UTM (config schema not stable)"
+}
+
+utm_qga_cmd() {
+    _qga_socket_cmd "$UTM_RESOLVED_SOCKET" "$@"
+}
+
+utm_guest_exec_json() {
+    _qga_socket_guest_exec_json "$UTM_RESOLVED_SOCKET" "$@"
+}
+
+# --- Transport: qga-socket -----------------------------------------------
+# Generic raw-QEMU / explicit-socket transport. Identifier is purely
+# cosmetic — the socket path comes from --qga-socket PATH. Same socket
+# I/O as the UTM transport.
+
+qgasocket_describe() {
+    printf 'qga-socket (direct Unix socket); identifier=%s; socket=%s' "${VMID:-<unset>}" "$QGA_SOCKET"
+}
+
+qgasocket_preflight() {
+    if [ -z "$QGA_SOCKET" ]; then
+        fail "preflight — --qga-socket PATH is required for transport=qga-socket"
+        return 1
+    fi
+    for tool in perl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            fail "preflight — '$tool' not found"
+            return 1
+        fi
+    done
+    if [ ! -S "$QGA_SOCKET" ]; then
+        fail "preflight — '$QGA_SOCKET' is not a Unix socket (is the VM running?)"
+        return 1
+    fi
+    return 0
+}
+
+qgasocket_vm_state() {
+    if _qga_socket_cmd "$QGA_SOCKET" ping >/dev/null 2>&1; then
+        printf 'running'
+    else
+        printf 'unknown'
+    fi
+}
+
+qgasocket_config_summary() {
+    pass "QGA socket: $QGA_SOCKET"
+    info "host-side config check skipped (qga-socket transport — no hypervisor metadata to inspect)"
+}
+
+qgasocket_qga_cmd() {
+    _qga_socket_cmd "$QGA_SOCKET" "$@"
+}
+
+qgasocket_guest_exec_json() {
+    _qga_socket_guest_exec_json "$QGA_SOCKET" "$@"
+}
+
 # --- Transport dispatch ---------------------------------------------------
 
 # Detect the transport from environment when --transport is omitted.
@@ -547,8 +887,15 @@ auto_detect_transport() {
         TRANSPORT="libvirt"
         return 0
     fi
-    # utm auto-detect arrives in commit 3.
-    echo "Error: could not auto-detect transport. Pass --transport pve|libvirt|utm|qga-socket explicitly." >&2
+    if command -v utmctl >/dev/null 2>&1 && utmctl status "$VMID" >/dev/null 2>&1; then
+        TRANSPORT="utm"
+        return 0
+    fi
+    if [ -n "$QGA_SOCKET" ]; then
+        TRANSPORT="qga-socket"
+        return 0
+    fi
+    echo "Error: could not auto-detect transport. Pass --transport pve|libvirt|utm|qga-socket explicitly (or --qga-socket PATH for a generic QGA socket)." >&2
     exit 2
 }
 
@@ -571,9 +918,21 @@ bind_transport() {
             transport_qga_cmd=libvirt_qga_cmd
             transport_guest_exec_json=libvirt_guest_exec_json
             ;;
-        utm|qga-socket)
-            echo "Error: transport '$TRANSPORT' not yet implemented (lands in a subsequent commit)." >&2
-            exit 2
+        utm)
+            transport_describe=utm_describe
+            transport_preflight=utm_preflight
+            transport_vm_state=utm_vm_state
+            transport_config_summary=utm_config_summary
+            transport_qga_cmd=utm_qga_cmd
+            transport_guest_exec_json=utm_guest_exec_json
+            ;;
+        qga-socket)
+            transport_describe=qgasocket_describe
+            transport_preflight=qgasocket_preflight
+            transport_vm_state=qgasocket_vm_state
+            transport_config_summary=qgasocket_config_summary
+            transport_qga_cmd=qgasocket_qga_cmd
+            transport_guest_exec_json=qgasocket_guest_exec_json
             ;;
         *)
             echo "Error: unknown transport '$TRANSPORT' (expected: pve|libvirt|utm|qga-socket)." >&2
