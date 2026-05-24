@@ -114,15 +114,23 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
     const char *username = user_item->valuestring;
     const char *password = pass_item->valuestring;
 
-    /* If password is base64 encoded (crypted=false means plain base64 in QGA protocol) */
+    /* If password is base64 encoded (crypted=false means plain base64 in
+     * QGA protocol) — reject invalid base64 rather than silently using
+     * the raw literal as the password (the prior behaviour would have
+     * set the user's password to whatever literal bytes the caller
+     * happened to send, including non-base64 garbage like "!!!!"). See
+     * audit.md finding 3. */
     char *decoded_pass = NULL;
     if (!cJSON_IsTrue(crypted_item)) {
         size_t decoded_len;
         unsigned char *raw = base64_decode(password, &decoded_len);
-        if (raw) {
-            decoded_pass = (char *)raw;
-            password = decoded_pass;
+        if (!raw) {
+            *err_class = "InvalidParameter";
+            *err_desc  = "Invalid base64 in 'password' (crypted=false requires RFC 4648 base64)";
+            return NULL;
         }
+        decoded_pass = (char *)raw;
+        password = decoded_pass;
     }
 
     /* Validate username — prevent injection */

@@ -415,6 +415,91 @@ static void test_password_validation(void)
     }
 }
 
+/* ---- Base64 validation (audit finding 3) ---- */
+
+static void test_base64_validation(void)
+{
+    printf("\n--- Base64 decode validation ---\n");
+
+    /* Round-trip: known-good inputs decode to expected bytes. */
+    struct { const char *enc; const char *plain; size_t plen; } good[] = {
+        {"",                "",       0},
+        {"YQ==",            "a",      1},
+        {"YWI=",            "ab",     2},
+        {"YWJj",            "abc",    3},
+        {"YWJjZA==",        "abcd",   4},
+        {"SGVsbG8sIHdvcmxkIQ==", "Hello, world!", 13},
+        {NULL, NULL, 0}
+    };
+    for (int i = 0; good[i].enc; i++) {
+        size_t out_len = 99;
+        unsigned char *d = base64_decode(good[i].enc, &out_len);
+        char name[96];
+        snprintf(name, sizeof(name), "roundtrip ok: %s", good[i].enc);
+        if (d == NULL) { ASSERT(name, 0); continue; }
+        int ok = (out_len == good[i].plen) && (memcmp(d, good[i].plain, out_len) == 0);
+        ASSERT(name, ok);
+        free(d);
+    }
+
+    /* Invalid alphabet — chars outside [A-Za-z0-9+/]. The pre-fix
+     * implementation silently treated these as 0 (== 'A' in the decode
+     * table) and returned bogus decoded bytes. With the audit-finding-3
+     * fix in src/util.c, every entry below MUST return NULL. */
+    const char *bad_alphabet[] = {
+        "!!!!",         /* the audit's exact reproduction case */
+        "AAA!",         /* invalid char in the last non-pad slot */
+        "AA!=",         /* invalid in the only non-pad slot before '=' */
+        "A!==",         /* same, shorter run */
+        " AAA",         /* embedded whitespace */
+        "AA\nA",        /* embedded newline */
+        "AAA\x80",      /* high-bit char */
+        "AAA\xff",      /* 0xff */
+        "AA-A",         /* '-' isn't in standard base64 (would be url-safe)  */
+        "AA_A",         /* '_' likewise */
+        NULL
+    };
+    for (int i = 0; bad_alphabet[i]; i++) {
+        char name[96];
+        snprintf(name, sizeof(name), "rejects invalid alphabet: %s",
+                 bad_alphabet[i]);
+        ASSERT(name, base64_decode(bad_alphabet[i], NULL) == NULL);
+    }
+
+    /* Invalid padding — '=' must appear only in the last 1 or 2
+     * positions of the whole input. Three or more '=' is always invalid;
+     * '=' anywhere but the tail is invalid. */
+    const char *bad_padding[] = {
+        "====",          /* all padding */
+        "===A",          /* padding before non-padding */
+        "==AA",          /* same */
+        "=AAA",          /* same */
+        "AA==AAAA",      /* padding in the middle */
+        "AAA=AAAA",      /* same, single '=' */
+        NULL
+    };
+    for (int i = 0; bad_padding[i]; i++) {
+        char name[96];
+        snprintf(name, sizeof(name), "rejects invalid padding: %s",
+                 bad_padding[i]);
+        ASSERT(name, base64_decode(bad_padding[i], NULL) == NULL);
+    }
+
+    /* Bad length — anything not a multiple of 4 is invalid base64
+     * (whitespace tolerance is NOT enabled — that was a separate
+     * design decision called out by the audit). */
+    const char *bad_length[] = { "A", "AA", "AAA", "AAAAA", "AAAAAAA", NULL };
+    for (int i = 0; bad_length[i]; i++) {
+        char name[96];
+        snprintf(name, sizeof(name), "rejects bad length: %zu chars",
+                 strlen(bad_length[i]));
+        ASSERT(name, base64_decode(bad_length[i], NULL) == NULL);
+    }
+
+    /* NULL input safety. */
+    ASSERT("NULL input -> NULL", base64_decode(NULL, NULL) == NULL);
+}
+
 int main(void)
 {
     printf("=== Proactive Tests ===\n");
@@ -426,6 +511,7 @@ int main(void)
     test_ssh_temp();
     test_freeze_hooks();
     test_password_validation();
+    test_base64_validation();
 
     printf("\n=== Results: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

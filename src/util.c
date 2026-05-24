@@ -179,9 +179,36 @@ unsigned char *base64_decode(const char *input, size_t *out_len)
     size_t in_len = strlen(input);
     if (in_len % 4 != 0) return NULL;
 
+    /* RFC 4648 §3.2: '=' padding is allowed only in the last 1 or 2
+     * positions of the entire input. Three or more '=' is never valid
+     * base64 (each 4-char group encodes 1, 2, or 3 input bytes; the
+     * 3-input-byte case has no padding, 2-byte → 1 '=', 1-byte →
+     * 2 '='). */
+    size_t pad_count = 0;
+    if (in_len > 0 && input[in_len - 1] == '=') {
+        pad_count = 1;
+        if (in_len > 1 && input[in_len - 2] == '=') pad_count = 2;
+    }
+
+    /* Validate every non-padding char is in the base64 alphabet —
+     * [A-Za-z0-9+/]. Without this, the decode table defaults any
+     * character outside the alphabet to 0 (the lookup table is zero-
+     * initialised for non-listed entries, and 0 == 'A' in the table),
+     * so unvalidated input like "!!!!" silently decodes to three zero
+     * bytes. See audit.md finding 3 — the failure mode affects
+     * guest-file-write (writes wrong bytes) and password decoding
+     * (uses zero bytes as the password). */
+    for (size_t i = 0; i + pad_count < in_len; i++) {
+        unsigned char c = (unsigned char)input[i];
+        int valid = (c >= 'A' && c <= 'Z') ||
+                    (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '+' || c == '/';
+        if (!valid) return NULL;
+    }
+
     size_t decoded_len = in_len / 4 * 3;
-    if (in_len > 0 && input[in_len - 1] == '=') decoded_len--;
-    if (in_len > 1 && input[in_len - 2] == '=') decoded_len--;
+    if (pad_count > 0) decoded_len -= pad_count;
 
     unsigned char *out = malloc(decoded_len + 1);
     if (!out) return NULL;
