@@ -521,7 +521,7 @@ static void emit_system_info(void)
 /* Emit the freeze_dispatch JSON object — sibling of system_info. Surfaces
  * the per-FS dispatch policy, the agent's log file path, the ZFS CLI
  * availability, and the documented divergences from upstream QGA, so that
- * pve-verify.sh (and contributors) can introspect what the agent will do
+ * verify.sh (and contributors) can introspect what the agent will do
  * during freeze without having to run a real freeze. See Q3 of
  * docs/design/AGENT_BEHAVIOUR_SPEC.md for the rationale. */
 static void emit_freeze_dispatch(void)

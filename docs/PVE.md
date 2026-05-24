@@ -277,7 +277,7 @@ qm agent <vmid> get-memory-block-info   # block size in bytes
 qm agent <vmid> get-memory-blocks        # array of {phys-index, online, can-offline}
 ```
 
-`scripts/pve-verify.sh` does this and renders the result as a human-readable `~<used> GB used / ~<total> GB total` line, which is the canonical "is the agent's memory path working" check for this project. If you need the same data from inside the VM, `sudo mac-guest-agent --self-test-json` also surfaces total memory under `system_info.memory_bytes`.
+`scripts/verify.sh` does this and renders the result as a human-readable `~<used> GB used / ~<total> GB total` line, which is the canonical "is the agent's memory path working" check for this project. If you need the same data from inside the VM, `sudo mac-guest-agent --self-test-json` also surfaces total memory under `system_info.memory_bytes`.
 
 **On reclamation:** even if the gauge did read the agent, the host couldn't reclaim unused guest RAM — there is no balloon driver to inflate. The full allocated memory remains reserved by the VM on the host regardless. To free host RAM for other VMs, reduce the macOS VM's memory allocation in PVE.
 

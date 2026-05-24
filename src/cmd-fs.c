@@ -616,7 +616,7 @@ static cJSON *handle_fsfreeze_freeze(cJSON *args, const char **err_class, const 
     alarm(AUTO_THAW_SECS);
 
     /* Single INFO line capturing the full per-treatment breakdown.
-     * This is what scripts/pve-verify.sh greps for to report the per-FS
+     * This is what scripts/verify.sh greps for to report the per-FS
      * outcome from the host side (Phase 3 work). */
     int skipped = counts.skipped_network + counts.skipped_special +
                   counts.skipped_readonly;

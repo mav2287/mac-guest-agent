@@ -1042,7 +1042,7 @@ fi
 echo ""
 echo "--- --self-test-json: freeze_dispatch block (Phase 2 Q3) ---"
 # =========================================================
-# pve-verify.sh and contributors rely on the freeze_dispatch block being
+# verify.sh and contributors rely on the freeze_dispatch block being
 # present and well-formed. Test both the structural shape and the
 # per-fstypename dispatch contract (key set + treatment strings).
 

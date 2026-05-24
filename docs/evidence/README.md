@@ -8,18 +8,18 @@ Each subdirectory is named for the **exact macOS build** the evidence comes from
 
 ```
 docs/evidence/<version>/
-├── pve-verify.txt    # text output of: scripts/pve-verify.sh <vmid> | tee pve-verify.txt
-├── pve-verify.json   # the JSON appendix from the same run — embeds the
-│                     # in-VM --self-test-json and --safe-test-json as
-│                     # parsed objects, plus host-side check records and
-│                     # the freeze-event "Filesystem frozen:" log line
-└── NOTES.md          # (optional) host hardware, PVE version, OpenCore
-                      # config notes, contributor name
+├── verify.txt    # text output of: scripts/verify.sh <id> | tee verify.txt
+├── verify.json   # the JSON appendix from the same run — embeds the
+│                 # in-VM --self-test-json and --safe-test-json as parsed
+│                 # objects, plus host-side check records and the
+│                 # freeze-event "Filesystem frozen:" log line
+└── NOTES.md      # (optional) host hardware, hypervisor version, OpenCore
+                  # config notes, contributor name
 ```
 
-The two files come out of a single `pve-verify.sh` invocation: the human-readable text section ends, then a `JSON Appendix (paste into docs/evidence/<version>/pve-verify.json)` header, then the JSON object. Split the output at that header.
+The two files come out of a single `verify.sh` invocation: the human-readable text section ends, then a `JSON Appendix (paste into docs/evidence/<version>/verify.json)` header, then the JSON object. Split the output at that header.
 
-The previous three-file layout (separate `selftest.json` + `safetest.json` + `pve-verify.txt`) is still accepted — existing per-version directories won't be rewritten. New submissions should prefer the two-file form because everything comes from one host-side command.
+`verify.sh` auto-detects the host transport (PVE / libvirt / UTM) or accepts `--transport <name>`, so the same file layout applies regardless of which hypervisor the contributor is on. The previous PVE-only filenames (`pve-verify.txt` / `pve-verify.json`) and three-file layout (`selftest.json` + `safetest.json` + `pve-verify.txt`) are still accepted — existing per-version directories won't be rewritten — but new submissions should use `verify.txt` + `verify.json`.
 
 `NOTES.md` is genuinely optional — only include it if there's context that would help someone reproducing your setup (Apple Xserve vs commodity hardware, specific QEMU CPU type, OpenCore Serial settings, etc.).
 
@@ -35,18 +35,18 @@ sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
 
-**On the PVE host (one command — drives the in-VM diagnostics for you):**
+**On the host (one command — drives the in-VM diagnostics for you):**
 
 ```bash
-curl -fsSL -o /tmp/pve-verify.sh \
-  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/pve-verify.sh
-chmod +x /tmp/pve-verify.sh
-/tmp/pve-verify.sh <vmid> | tee pve-verify.txt
+curl -fsSL -o /tmp/verify.sh \
+  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
+chmod +x /tmp/verify.sh
+/tmp/verify.sh <identifier> | tee verify.txt
 # split the output at the "JSON Appendix" header — the JSON below it
-# is what goes into pve-verify.json
+# is what goes into verify.json
 ```
 
-PII (IPv4 addresses, MAC addresses, the VM ID) is redacted by default; pass `--no-redact` if you want raw values. `--help` lists the rest of the flags (`--no-appendix`, `--no-in-vm`, `--agent-path`, `--log-path`, `--exec-timeout`).
+`<identifier>` is a numeric VMID on PVE, a domain name on libvirt, a VM name on UTM. Pass `--transport pve|libvirt|utm|qga-socket` to force a transport (skip auto-detect). PII (IPv4 addresses, MAC addresses, the supplied identifier) is redacted by default; pass `--no-redact` if you want raw values. `--help` lists the rest of the flags (`--no-appendix`, `--no-in-vm`, `--agent-path`, `--log-path`, `--exec-timeout`).
 
 ## How to submit
 
@@ -64,4 +64,4 @@ Sanitise before committing:
 - Hostnames you'd rather not associate with the repo.
 - Anything else host-side you'd rather not publish.
 
-`selftest.json` and `safetest.json` are guest-side outputs and are generally safe — they describe the agent's environment inside the VM. `pve-verify.txt` is host-side and includes things like detected interface addresses, so give it a quick read before committing.
+`verify.json` includes the in-VM `--self-test-json` and `--safe-test-json` outputs as parsed objects (`in_vm_selftest` / `in_vm_safetest`) — those are guest-side and generally safe. The host-side records (`host_checks`, `freeze_log_tail`) can include detected interface addresses, so give the file a quick read before committing. The default redaction (on unless `--no-redact`) covers IPv4 / MAC / supplied identifier.

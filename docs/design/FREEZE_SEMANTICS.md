@@ -7,7 +7,7 @@ where the implementation deliberately diverges from the upstream QEMU
 Guest Agent (QGA), and what the failure modes are.
 
 It is the single source of truth that contributors, operators, and the
-verifier tooling (`scripts/pve-verify.sh`, `--self-test-json`) cross-reference.
+verifier tooling (`scripts/verify.sh`, `--self-test-json`) cross-reference.
 The dispatch table here mirrors `fs_dispatch_class()` in `src/cmd-fs.c` and
 the `freeze_dispatch` block emitted by `--self-test-json`. If the three
 ever disagree, the **code is canonical** and the docs are stale.
@@ -79,7 +79,7 @@ remains a single integer (`int`), matching the QGA spec
 (`['guest-fsfreeze-freeze']` returns `int`). The per-treatment breakdown
 is surfaced only in (a) the agent log INFO line, (b) the
 `--self-test-json` `freeze_dispatch` block, and (c) the verifier output
-of `scripts/pve-verify.sh` which fetches the log line via
+of `scripts/verify.sh` which fetches the log line via
 `qm agent <vmid> exec`. Extending the wire response with a structured
 breakdown would violate the spec for the only field PVE actually reads.
 
@@ -170,7 +170,7 @@ These are deliberate, documented divergences from
 |---|---|---|---|
 | **Idempotent re-freeze** | Calling `guest-fsfreeze-freeze` while already frozen returns `GenericError: command 'guest-fsfreeze-freeze' failed: already frozen` (see upstream `qmp_guest_fsfreeze_freeze` `if (ga_is_frozen(ga_state)) { ... }`). | Returns the same count it returned for the original freeze; logs a debug line; no state mutation. | macOS has no `FIFREEZE`, so a duplicate "freeze" is a no-op in terms of kernel state. PVE occasionally retries the freeze command when its first response is delayed; failing the retry would convert benign retries into spurious backup failures. The risk of the upstream behaviour (a stuck-frozen state if the agent restarts mid-freeze) doesn't apply here because we have no kernel-level suspension to leak. |
 | **No persistent frozen-state marker** | Upstream marks the agent process as frozen so that a daemon restart while frozen surfaces an error. | We track frozen state in-process only; a restart clears it. | Same reason — there is no kernel-level state to be inconsistent with. The 10-minute auto-thaw is the safety net. |
-| **Logging during freeze** | Upstream disables logging while frozen to avoid log writes hitting a frozen filesystem and deadlocking. | We continue logging normally. | Same reason — our log file (`/var/log/mac-guest-agent.log`) is not on a frozen filesystem in the upstream sense, because no filesystem is suspended. Disabling logging would lose the per-event INFO summary that `scripts/pve-verify.sh` greps for. |
+| **Logging during freeze** | Upstream disables logging while frozen to avoid log writes hitting a frozen filesystem and deadlocking. | We continue logging normally. | Same reason — our log file (`/var/log/mac-guest-agent.log`) is not on a frozen filesystem in the upstream sense, because no filesystem is suspended. Disabling logging would lose the per-event INFO summary that `scripts/verify.sh` greps for. |
 | **`guest-sync-id` extension** | Not in upstream schema. | Allowed during freeze (it's read-only — returns a caller-supplied id verbatim). | Convenience for callers that want a per-request correlation token across a freeze/thaw cycle. Read-only, no state change, no I/O. |
 | **Foreign-FS `F_FULLFSYNC` failure** | Upstream `FIFREEZE` returning `EOPNOTSUPP` is skipped silently (`qemu/qga/commands-posix.c` freeze loop). | `F_FULLFSYNC` returning `ENOTSUP`/`EOPNOTSUPP` is logged at `DEBUG` and the mount is counted as `flushed_only` (not as a failure). Other `errno` values (`EIO`, etc.) are logged at `WARN` and still counted as `flushed_only` rather than failing the whole freeze. | Mirrors the upstream "by-design, not a failure" treatment for the analogous case, applied to `F_FULLFSYNC` rather than `FIFREEZE`. Foreign filesystems where `F_FULLFSYNC` isn't implemented are still covered by the global `sync(2)`; failing the whole freeze for one foreign mount would convert a "you got a less-strong consistency guarantee for this one mount" condition into "your backup didn't run". |
 | **Freeze-time command allowlist** | Upstream allowlist is a shared 6-command list (`guest-ping`, `guest-sync`, `guest-sync-delimited`, `guest-info`, `guest-fsfreeze-status`, `guest-fsfreeze-thaw`). | Our list is 9: the upstream 6 **plus** `guest-sync-id` (our extension), **plus** `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` (re-callable because of idempotent re-freeze above). | Each addition is justified by another documented divergence on this same table. The list is otherwise principled-restrictive: read-only / state-neutral commands only, no `exec`, no writes, no power/network/SSH/user mutations. |
@@ -216,7 +216,7 @@ Filesystem frozen: <S> snapshotted, <Z> zfs_snapshotted, <F> fullfsynced, <FO> f
 ```
 
 This is the per-event breakdown the wire response intentionally omits
-(spec conformance). `scripts/pve-verify.sh` will fetch it via
+(spec conformance). `scripts/verify.sh` will fetch it via
 `qm agent <vmid> exec` (Phase 3) so the operator gets the breakdown
 without needing to SSH into the guest.
 
@@ -235,7 +235,7 @@ without needing to SSH into the guest.
   evidence on the QGA spec, the Linux QGA reference implementation, the
   Proxmox QGA wrapper, the Windows VSS path, and Apple's
   `AppleQEMUGuestAgent`.
-- **Verifier:** `scripts/pve-verify.sh` — the host-side
+- **Verifier:** `scripts/verify.sh` — the host-side
   behavioural-check workflow.
 - **Static introspection:** `mac-guest-agent --self-test-json`
   `freeze_dispatch` block — what the binary statically advertises about
