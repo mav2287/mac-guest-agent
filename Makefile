@@ -134,7 +134,13 @@ uninstall:
 	@sudo /usr/local/bin/$(PROGRAM_NAME) --uninstall 2>/dev/null || echo "Not installed"
 
 # Run all tests
-test: build test-unit test-proactive test-fuzz test-integration
+test: build test-unit test-proactive test-fuzz test-integration test-verify-transports
+
+# Shell-shim integration tests for scripts/verify.sh (PVE, libvirt,
+# UTM, qga-socket). Mocks the host CLIs and a local QGA socket; no
+# real hypervisor needed.
+test-verify-transports:
+	@bash tests/test_verify_transports.sh
 
 # Code coverage report (llvm-cov)
 test-coverage:
