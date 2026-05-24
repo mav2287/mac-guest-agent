@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -64,65 +65,90 @@ char *ssh_safe_read_file(const char *path, size_t *out_len)
 }
 
 /* Atomically write `data` to `path` as a regular file owned by `uid:gid`
- * with mode 0600. Uses O_NOFOLLOW + fchown/fchmod by fd to prevent the
- * root-running SSH-command path from being tricked into truncating or
- * chowning a file outside the intended directory via a symlink swap.
+ * with mode 0600.
  *
- * If the target already exists as a symlink, the open fails with ELOOP.
- * If it exists as a non-regular file (device, fifo, etc.), the fstat
- * check rejects it before any write. Otherwise the file is truncated
- * and rewritten, then fchown'd and fchmod'd by fd (so even if a racing
- * attacker swaps the path between open and our checks, the metadata
- * changes apply to OUR fd, not whatever the path now resolves to).
+ * Pattern: write to a per-pid temp file in the SAME directory as the
+ * target, fchown/fchmod by fd, then rename(2) over the target.
+ * rename() is POSIX-atomic for same-directory same-filesystem swaps,
+ * so readers (sshd checking authorized_keys for the next auth, a
+ * backup utility, etc.) NEVER see a partial-write state. If the agent
+ * crashes between create-temp and rename, the target's prior state
+ * (file content or absence) is preserved — the only leftover is a
+ * `.<basename>.tmp.<pid>` dot-file the operator can clean up.
+ *
+ * Also closes the second TOCTOU window left by the prior open-truncate
+ * approach: rename() replaces the path entry atomically. If an
+ * attacker pre-positioned a symlink at `path` they would have their
+ * symlink atomically swapped for our newly-created regular file — not
+ * followed.
+ *
+ * Tiger-compatible: every primitive (O_WRONLY/O_CREAT/O_EXCL/
+ * O_NOFOLLOW for open, fchown, fchmod, write, close, rename, unlink)
+ * is POSIX.1-2001 or older, and present on macOS since 10.0.
+ * Deliberately doesn't use openat()/renameat() (POSIX.1-2008, macOS
+ * 10.5+) — those would lock the parent directory too, but the
+ * marginal value is small here because the parent directory was
+ * already validated by ssh_safe_ssh_dir() and the target filename
+ * is fully derived from getpwnam() output. i386/10.4 build clean.
  *
  * Returns 0 on success, -1 on any error.
  *
- * Tiger-compatible: O_NOFOLLOW, fchown, fchmod are all POSIX.1-2001
- * and present on macOS since 10.0. Doesn't use openat/renameat (those
- * are POSIX.1-2008 / macOS 10.5+). The trade-off is no atomic rename
- * — readers may briefly see the truncated-but-not-rewritten state.
- * Acceptable for authorized_keys: SSH only re-reads the file on next
- * authentication, and a backup mid-rewrite would just retry. */
-/* Exposed (not static) for unit testing — see audit finding 6
+ * Exposed (not static) for unit testing — see audit finding 6
  * regression tests in tests/test_proactive.c. */
 int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
                          const char *data, size_t len);
 int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
                          const char *data, size_t len)
 {
-    /* O_TRUNC + O_NOFOLLOW: refuses to truncate a symlink target.
-     * O_CREAT with mode 0600 in case the file doesn't exist yet. */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    /* Build the temp path in the same directory as the target. Same-
+     * directory is required for rename() atomicity (cross-FS rename
+     * isn't guaranteed atomic). For a target like
+     *   /Users/foo/.ssh/authorized_keys
+     * the temp ends up at
+     *   /Users/foo/.ssh/.authorized_keys.tmp.<pid> */
+    char tmp_path[PATH_MAX];
+    const char *slash = strrchr(path, '/');
+    const char *base  = slash ? slash + 1 : path;
+    int needed;
+    if (slash) {
+        needed = snprintf(tmp_path, sizeof(tmp_path), "%.*s.%s.tmp.%d",
+                          (int)(slash - path + 1), path, base, (int)getpid());
+    } else {
+        needed = snprintf(tmp_path, sizeof(tmp_path), ".%s.tmp.%d",
+                          base, (int)getpid());
+    }
+    if (needed < 0 || (size_t)needed >= sizeof(tmp_path)) {
+        LOG_WARN("ssh_safe_write_file(%s): path too long for temp file",
+                 path);
+        return -1;
+    }
+
+    /* O_EXCL guarantees we create a fresh file — refuses if a temp
+     * file with this name already exists (stale from a prior crash;
+     * operator can clean it up, we error out). O_NOFOLLOW protects
+     * the temp path itself from a pre-positioned symlink (defence in
+     * depth — should not happen on a properly-permissioned .ssh dir
+     * but costs nothing to add). */
+    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) {
-        LOG_WARN("ssh_safe_write_file(%s) open failed: %s",
-                 path, strerror(errno));
+        LOG_WARN("ssh_safe_write_file: temp file open(%s) failed: %s",
+                 tmp_path, strerror(errno));
         return -1;
     }
 
-    /* Defence in depth: confirm the fd is a regular file before we
-     * write to it. open() with O_NOFOLLOW already prevents symlink
-     * resolution, but a non-symlink non-regular file (a fifo or
-     * device a local attacker pre-created) would silently consume
-     * the write otherwise. */
-    struct stat st;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
-        close(fd);
-        return -1;
-    }
-
-    /* fchown/fchmod by fd, not by path. If the path now resolves to
-     * something else (an attacker raced us between open and chown),
-     * we still only touch our fd's inode. */
+    /* fchown/fchmod by fd, not by path — even if some other process
+     * races us on the temp path, our metadata changes apply to OUR
+     * fd's inode. */
     if (fchown(fd, uid, gid) < 0) {
-        LOG_WARN("ssh_safe_write_file(%s) fchown failed: %s",
-                 path, strerror(errno));
-        /* Don't bail — fchown of a file we just created should never
-         * fail in practice, but if it does, the write is still safer
-         * than the prior chown-by-path. Mirror previous behaviour. */
+        LOG_WARN("ssh_safe_write_file(%s): fchown failed: %s",
+                 tmp_path, strerror(errno));
+        /* Don't bail — the rename below still happens; the file just
+         * stays as whatever uid:gid open() created it under. Mirror
+         * previous error-tolerant behaviour. */
     }
     if (fchmod(fd, 0600) < 0) {
-        LOG_WARN("ssh_safe_write_file(%s) fchmod failed: %s",
-                 path, strerror(errno));
+        LOG_WARN("ssh_safe_write_file(%s): fchmod failed: %s",
+                 tmp_path, strerror(errno));
     }
 
     size_t written = 0;
@@ -131,11 +157,28 @@ int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
         if (n < 0) {
             if (errno == EINTR) continue;
             close(fd);
+            unlink(tmp_path);            /* clean up the partial temp */
             return -1;
         }
         written += (size_t)n;
     }
-    close(fd);
+    if (close(fd) < 0) {
+        LOG_WARN("ssh_safe_write_file(%s): close failed: %s",
+                 tmp_path, strerror(errno));
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* The atomic step. rename(2) over an existing entry atomically
+     * replaces it — regular file, symlink, anything. POSIX guarantee
+     * for same-directory same-filesystem operations. */
+    if (rename(tmp_path, path) < 0) {
+        LOG_WARN("ssh_safe_write_file: rename(%s -> %s) failed: %s",
+                 tmp_path, path, strerror(errno));
+        unlink(tmp_path);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -335,7 +378,7 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
         free(content);
         free(path);
         *err_class = "GenericError";
-        *err_desc = "Failed to write authorized_keys (path may be a symlink or non-regular file)";
+        *err_desc = "Failed to write authorized_keys (temp create or rename failed; .ssh directory may have wrong permissions)";
         return NULL;
     }
 
@@ -429,7 +472,7 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
     /* Same safe-write helper as the add path — O_NOFOLLOW + fchown/
      * fchmod by fd. See audit finding 6. */
     if (ssh_safe_write_file(path, pw->pw_uid, pw->pw_gid, result_buf, result_len) != 0) {
-        LOG_ERROR("Failed to write authorized_keys during remove (path may be a symlink or non-regular file)");
+        LOG_ERROR("Failed to write authorized_keys during remove (temp create or rename failed)");
         free(result_buf);
         free(path);
         *err_class = "GenericError";

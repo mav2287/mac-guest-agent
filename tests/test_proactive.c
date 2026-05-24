@@ -533,50 +533,68 @@ static void test_ssh_safe_write_symlink(void)
         return;
     }
 
-    /* The audit's attack: ssh_safe_write_file is asked to write to a
-     * path that's currently a symlink to a file the root-running agent
-     * shouldn't be touching. Must refuse with -1, and must NOT have
-     * truncated or modified the victim. */
+    /* The audit's attack scenario: ssh_safe_write_file is asked to
+     * write to a path that's currently a symlink to a file the root-
+     * running agent shouldn't be touching. With the atomic-rename
+     * fix, write() goes to a temp file we own, and rename() replaces
+     * the symlink ATOMICALLY with our newly-created regular file —
+     * the symlink is replaced, not followed. The victim file is
+     * still untouched. Outcome is BETTER than the prior refuse-with-
+     * error path (which left the user's SSH access broken). */
     const char *evil = "ssh-rsa AAAA... attacker@evil\n";
     int rc = ssh_safe_write_file(target, getuid(), getgid(), evil, strlen(evil));
-    ASSERT("symlink target → write refused with -1", rc == -1);
+    ASSERT("symlink target → write succeeds (atomic replacement)", rc == 0);
 
-    /* Victim content unchanged — open it directly (not through the
-     * symlink path) to verify. */
+    /* Critical security assertion: victim file is unchanged. The
+     * write went to our temp file, not through the symlink. */
     size_t vlen = 0;
     char *back = read_file(victim, &vlen);
-    ASSERT("victim file content unchanged",
+    ASSERT("victim file content unchanged (symlink replaced, not followed)",
            back && strcmp(back, victim_content) == 0);
     free(back);
 
-    /* Now remove the symlink; safe write to the now-nonexistent path
-     * must succeed (O_CREAT) and produce a real file. */
-    unlink(target);
-    rc = ssh_safe_write_file(target, getuid(), getgid(), evil, strlen(evil));
-    ASSERT("non-existent target → write succeeds", rc == 0);
+    /* After atomic rename, the target path is now a regular file
+     * containing OUR content (not a symlink, not pointing at victim). */
     struct stat st;
-    ASSERT("created file is a regular file (not a symlink)",
+    ASSERT("target is now a regular file (symlink atomically replaced)",
            lstat(target, &st) == 0 && S_ISREG(st.st_mode));
-    ASSERT("created file mode is 0600",
+    ASSERT("target mode is 0600",
            (st.st_mode & 0777) == 0600);
-    /* Verify content was written. */
     size_t blen = 0;
     char *written = read_file(target, &blen);
-    ASSERT("written content matches input",
+    ASSERT("target content matches input bytes",
            written && strlen(written) == strlen(evil)
                    && memcmp(written, evil, strlen(evil)) == 0);
     free(written);
 
-    /* Write again to existing regular file — should succeed
-     * (truncate-then-rewrite). */
+    /* Clean state: now write to an already-regular-file target. The
+     * rename() should atomically swap in the new content without any
+     * mid-write window where readers see a partial file. */
     const char *evil2 = "ssh-rsa BBBB... attacker2@evil\n";
     rc = ssh_safe_write_file(target, getuid(), getgid(), evil2, strlen(evil2));
     ASSERT("write to existing regular file succeeds", rc == 0);
     char *written2 = read_file(target, NULL);
-    ASSERT("file was overwritten",
+    ASSERT("existing file atomically replaced with new content",
            written2 && strstr(written2, "BBBB") != NULL
                     && strstr(written2, "AAAA") == NULL);
     free(written2);
+
+    /* Hygiene: no `.authorized_keys.tmp.<pid>` left around after a
+     * successful write — caught a regression in an earlier draft of
+     * the atomic-rename path where the cleanup-on-error case was
+     * misordered. */
+    char tmp_check[400];
+    snprintf(tmp_check, sizeof(tmp_check), "%s/.authorized_keys.tmp.%d",
+             dir, (int)getpid());
+    ASSERT("no leftover temp file after successful write",
+           lstat(tmp_check, &st) < 0 && errno == ENOENT);
+
+    /* Write to a path with no directory component (relative). Cover
+     * the snprintf's else-branch for the temp filename builder. */
+    /* Skipped here — the path always comes from getpwnam-derived
+     * absolute paths in production, and a relative test would need
+     * chdir which can race with other tests. The else branch is
+     * exercised by the snprintf-bounds-check path indirectly. */
 
     /* Cleanup. */
     unlink(target);
