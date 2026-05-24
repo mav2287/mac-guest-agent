@@ -1355,7 +1355,15 @@ if [ -n "$IFCOUNT" ] && [ "$IFCOUNT" -gt 0 ] 2>/dev/null; then
     # wins" and would surface link-local fe80:: even when a real IPv4
     # was present, because getifaddrs() on macOS commonly returns the
     # link-local IPv6 before the IPv4 on the same interface.
-    IP=$(json_query "$NETINFO" '
+    #
+    # Direct perl invocation (not via json_query) — the multi-line
+    # picker expression broke on older system-perl when passed via
+    # json_query's `eval $ARGV[0]` indirection (CI macOS-14 runner
+    # caught it). Inline perl is the same logic without the indirection.
+    IP=$(printf '%s' "$NETINFO" | perl -MJSON::PP -e '
+        local $/;
+        my $d = eval { decode_json(scalar <STDIN>) };
+        exit if $@ || ref $d ne "ARRAY";
         my ($v4, $v6, $ll) = ("", "", "");
         for my $i (@$d) {
             next if ($i->{name} // "") eq "lo0";
@@ -1370,8 +1378,8 @@ if [ -n "$IFCOUNT" ] && [ "$IFCOUNT" -gt 0 ] 2>/dev/null; then
                 elsif ($type eq "ipv6")           { $v6 ||= $addr; }
             }
         }
-        $v4 || $v6 || $ll || "no IP";
-    ')
+        print $v4 || $v6 || $ll || "no IP";
+    ' 2>/dev/null)
     pass "network-get-interfaces — $IFCOUNT interface(s), IP $IP"
 else
     fail "network-get-interfaces — no valid response"
