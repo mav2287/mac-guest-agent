@@ -1506,17 +1506,23 @@ if [ "$IN_VM" -eq 1 ]; then
     if [ -n "$SAFETEST_RAW" ]; then
         SAFETEST_JSON=$(json_query "$SAFETEST_RAW" '$d->{"out-data"} // ""')
         if [ -n "$SAFETEST_JSON" ]; then
-            SA_PASS=$(json_query "$SAFETEST_JSON" '$d->{summary}->{passed} // $d->{passed} // ""')
-            SA_FAIL=$(json_query "$SAFETEST_JSON" '$d->{summary}->{failed} // $d->{failed} // ""')
-            SA_TOTAL=$(json_query "$SAFETEST_JSON" '$d->{summary}->{total}  // $d->{total}  // ""')
+            # The agent's --safe-test-json emits {agent_version, passes,
+            # failures, status, test} at the top level (verified against
+            # a real El Cap run, May 2026). Accept the synthetic
+            # `summary.passed/failed/total` shape as a fallback for any
+            # legacy fixture / shim that still emits the older form.
+            SA_PASS=$(json_query "$SAFETEST_JSON" '$d->{passes}   // $d->{summary}->{passed} // ""')
+            SA_FAIL=$(json_query "$SAFETEST_JSON" '$d->{failures} // $d->{summary}->{failed} // ""')
+            SA_STATUS=$(json_query "$SAFETEST_JSON" '$d->{status} // ""')
             if [ -n "$SA_PASS" ] && [ -n "$SA_FAIL" ]; then
+                SA_TOTAL=$((SA_PASS + SA_FAIL))
                 if [ "$SA_FAIL" -eq 0 ] 2>/dev/null; then
-                    pass "--safe-test-json — $SA_PASS/${SA_TOTAL:-?} read-only commands passed"
+                    pass "--safe-test-json — $SA_PASS/$SA_TOTAL read-only commands passed (status=$SA_STATUS)"
                 else
-                    fail "--safe-test-json — $SA_FAIL/${SA_TOTAL:-?} read-only commands failed"
+                    fail "--safe-test-json — $SA_FAIL/$SA_TOTAL read-only commands failed (status=$SA_STATUS)"
                 fi
             else
-                fail "--safe-test-json — could not parse pass/fail counts"
+                fail "--safe-test-json — could not parse pass/fail counts (got keys: $(json_query "$SAFETEST_JSON" 'join(",", sort keys %$d)'))"
             fi
         else
             fail "--safe-test-json — guest-exec returned no out-data"

@@ -220,7 +220,10 @@ case "$1" in
                 OUT='{"agent_version":"2.4.3","errors":0,"warnings":0,"passes":15,"status":"pass","system_info":{"os_version":"26.5"},"freeze_dispatch":{"per_fstypename":{"apfs":"tmutil_snapshot+f_fullfsync"},"cpustats_discriminator":"linux","zfs_cli_available":false}}'
                 ;;
             "/usr/local/bin/mac-guest-agent --safe-test-json")
-                OUT='{"summary":{"passed":21,"failed":0,"total":21}}'
+                # Match the agent's real shape (top-level passes /
+                # failures / status / agent_version, no nested summary)
+                # — verified against an El Cap v2.4.3 run, May 2026.
+                OUT='{"agent_version":"2.4.3","test":"safe-test","status":"pass","passes":21,"failures":0}'
                 ;;
             "/usr/bin/tail "*"-n "*)
                 OUT='[INFO] Filesystem frozen: 3 snapshotted, 0 zfs_snapshotted, 0 fullfsynced, 0 flushed_only (=3 total); skipped 0 (0 network, 0 special, 0 readonly)'
@@ -311,7 +314,7 @@ assert_eq "PVE: appendix is well-formed JSON" "2.0" "$(json_field "$APP" '$d->{s
 assert_eq "PVE: appendix transport=pve" "pve" "$(json_field "$APP" '$d->{transport}')"
 assert_eq "PVE: freeze_cycles default 3" "3" "$(json_field "$APP" '$d->{freeze_cycles}')"
 assert_eq "PVE: in_vm_selftest parsed as object" "pass" "$(json_field "$APP" '$d->{in_vm_selftest}->{status} // ""')"
-assert_eq "PVE: in_vm_safetest parsed as object" "21" "$(json_field "$APP" '$d->{in_vm_safetest}->{summary}->{passed} // ""')"
+assert_eq "PVE: in_vm_safetest parsed as object" "21" "$(json_field "$APP" '$d->{in_vm_safetest}->{passes} // ""')"
 assert_eq "PVE: host_environment has sw_vers" "macOS" "$(json_field "$APP" '$d->{host_environment}->{sw_vers}->{productname} // ""')"
 assert_eq "PVE: host_environment has hardware.hw_model" "Mac14,5" "$(json_field "$APP" '$d->{host_environment}->{hardware}->{hw_model} // ""')"
 # mount: the shim returns 4 lines; the autofs "map auto_home on ..."
@@ -475,7 +478,7 @@ sub respond_to {
         if    ($path eq "/usr/local/bin/mac-guest-agent" && @$args && $args->[0] eq "--self-test-json") {
             $out = '{"agent_version":"2.4.3","errors":0,"warnings":0,"passes":15,"status":"pass","system_info":{"os_version":"26.5"},"freeze_dispatch":{"per_fstypename":{"apfs":"tmutil_snapshot+f_fullfsync"},"cpustats_discriminator":"linux","zfs_cli_available":false}}';
         } elsif ($path eq "/usr/local/bin/mac-guest-agent" && @$args && $args->[0] eq "--safe-test-json") {
-            $out = '{"summary":{"passed":21,"failed":0,"total":21}}';
+            $out = '{"agent_version":"2.4.3","test":"safe-test","status":"pass","passes":21,"failures":0}';
         } elsif ($path eq "/usr/bin/sw_vers") {
             $out = "ProductName:\tmacOS\nProductVersion:\t26.5\nBuildVersion:\t25F00";
         } elsif ($path eq "/sbin/mount") {
