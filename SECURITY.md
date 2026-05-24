@@ -83,7 +83,11 @@ Hook scripts in `/etc/qemu/fsfreeze-hook.d/` execute as root during freeze and t
 - **30-second timeout** per script — scripts that hang are killed via SIGTERM then SIGKILL
 - **Execution order:** scripts run in alphabetical order on freeze, reverse order on thaw
 
-Scripts that fail validation are skipped with a warning logged. A hook script failure does not abort the freeze — the freeze still proceeds with a warning.
+Scripts that **fail validation** (wrong owner, world-writable, not executable) are skipped with a warning logged — these are configuration errors, not runtime failures, and the freeze proceeds without that hook.
+
+A **freeze hook that runs but exits non-zero aborts the freeze.** The agent returns a `GenericError` with description `Freeze hook script failed`; the freeze does not complete, and `guest-fsfreeze-status` will continue to report `thawed`. This is the safer default for backup consistency: a freeze hook's purpose is typically to flush in-flight writes (`FLUSH TABLES WITH READ LOCK`, `CHECKPOINT`, `BGSAVE`, etc.), and a failed flush means the resulting snapshot would be inconsistent for that workload — better to fail the backup loudly than to ship a bad one quietly. Hook scripts that want to be advisory (warnings rather than aborts) should `exit 0` after logging the warning themselves.
+
+Thaw hooks always run — a thaw hook returning non-zero only logs a warning, since refusing to thaw on hook failure would leave the VM filesystem indefinitely frozen.
 
 Run `--self-test` to validate your hook scripts:
 

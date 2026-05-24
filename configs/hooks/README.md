@@ -54,4 +54,9 @@ esac
 exit 0
 ```
 
-A non-zero exit code logs a warning but does NOT abort the freeze.
+**Exit-code contract:**
+
+- **Freeze hooks:** a non-zero exit aborts the freeze. The agent returns a `GenericError` with description `Freeze hook script failed`, and `guest-fsfreeze-status` continues to report `thawed`. This is the safer default for backup consistency — a freeze hook is typically flushing in-flight writes (`FLUSH TABLES WITH READ LOCK`, `CHECKPOINT`, `BGSAVE`, etc.) and a failed flush means the snapshot would be inconsistent. If your hook should warn but not block the backup, log the warning and `exit 0` yourself.
+- **Thaw hooks:** a non-zero exit only logs a warning; thaw still proceeds. Refusing to thaw on hook failure would leave the VM filesystem indefinitely frozen.
+
+This contract is enforced by `src/cmd-fs.c run_hooks()` — see `docs/design/FREEZE_SEMANTICS.md` for the full freeze flow.
