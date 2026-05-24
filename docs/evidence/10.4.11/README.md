@@ -1,5 +1,16 @@
-macOS 10.4 support
-##################
+# macOS 10.4.11 (Tiger) — evidence
+
+**Contributor:** [@vit9696](https://github.com/vit9696) via [PR #3](https://github.com/mav2287/mac-guest-agent/pull/3).
+**Captured against:** mac-guest-agent v2.4.2, legacy `scripts/pve-verify.sh` (now `scripts/verify.sh` in v2.4.3+).
+**Result:** 11 passed, 1 failed.
+
+> **The single FAIL** — `frozen state — agent answered get-osinfo while frozen (not genuinely frozen)` — was a **bug in the verifier script, not in the agent.** `pve-verify.sh` checked the `qm agent` process's exit code to decide whether the agent had genuinely rejected the freeze-gated command. PVE's `register_command` dispatcher wraps QGA error envelopes as `{result:{error:{...}}}` and exits 0 regardless, so the exit-code check could never distinguish honest rejection from a silently-served reply. The agent on this 10.4.11 setup was correctly rejecting `get-osinfo` during the freeze window (per `src/agent.c:73`) — the script was lying about what it saw.
+>
+> Vit9696's report of this FAIL is what drove the three-phase rewrite that became Phase 1–4 of `docs/PLAN.md` and v2.4.3. The fix landed in commit `d59f8fb` (audit finding 5): the new `scripts/verify.sh` inspects response content (`"pretty-name"` → FAIL, `"Command not allowed while filesystem is frozen"` → PASS) rather than exit code.
+>
+> Files in this directory use the legacy 3-file layout (`pve-verify.txt` + `selftest.json` + `safetest.json`) — still accepted per `docs/evidence/README.md`. A re-run against v2.4.3 + `scripts/verify.sh` would produce the schema-2.0 single-file `verify.txt` + `verify.json` layout and is welcome but not required; the bug this evidence helped uncover is already fixed.
+
+---
 
 ### Hardware config
 
