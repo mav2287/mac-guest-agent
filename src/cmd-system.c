@@ -214,10 +214,15 @@ static cJSON *handle_get_load(cJSON *args, const char **err_class, const char **
         return NULL;
     }
 
+    /* Field names match the QGA GuestLoadStats schema: load1m / load5m /
+     * load15m (the "m" suffix marks "minutes"). Prior to this change we
+     * emitted load1/load5/load15 — which strict QGA parsers reject and
+     * which lost the spec's "this is in minutes" hint. See audit.md
+     * finding 2a. */
     cJSON *result = cJSON_CreateObject();
-    cJSON_AddNumberToObject(result, "load1", loadavg[0]);
-    cJSON_AddNumberToObject(result, "load5", loadavg[1]);
-    cJSON_AddNumberToObject(result, "load15", loadavg[2]);
+    cJSON_AddNumberToObject(result, "load1m",  loadavg[0]);
+    cJSON_AddNumberToObject(result, "load5m",  loadavg[1]);
+    cJSON_AddNumberToObject(result, "load15m", loadavg[2]);
     return result;
 }
 

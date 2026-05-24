@@ -280,7 +280,7 @@ test_cmd "guest-get-users" \
 test_cmd "guest-get-load" \
     '{"execute":"guest-get-load"}' \
     "object" \
-    "load1" "load5" "load15"
+    "load1m" "load5m" "load15m"
 
 # =========================================================
 echo ""

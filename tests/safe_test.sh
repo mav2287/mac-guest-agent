@@ -156,9 +156,9 @@ echo "        Logged-in users: $USER_COUNT"
 
 test_cmd "guest-get-load" \
     '{"execute":"guest-get-load"}' \
-    "load1" "load5" "load15"
+    "load1m" "load5m" "load15m"
 
-echo "        $(show_value '{"execute":"guest-get-load"}' "r=d['return']; print('Load: %.2f %.2f %.2f' % (r['load1'], r['load5'], r['load15']))")"
+echo "        $(show_value '{"execute":"guest-get-load"}' "r=d['return']; print('Load: %.2f %.2f %.2f' % (r['load1m'], r['load5m'], r['load15m']))")"
 
 echo ""
 echo "--- 4. CPU ---"
