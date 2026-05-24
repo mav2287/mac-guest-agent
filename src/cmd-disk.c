@@ -227,8 +227,16 @@ static cJSON *handle_get_diskstats(cJSON *args, const char **err_class, const ch
 
     io_iterator_t iter = IO_OBJECT_NULL;
     /* IOServiceGetMatchingServices CONSUMES the matching dict — no
-     * separate CFRelease needed below regardless of the result. */
-    kern_return_t kr = IOServiceGetMatchingServices(kIOMasterPortDefault, match, &iter);
+     * separate CFRelease needed below regardless of the result.
+     *
+     * First arg: `kIOMasterPortDefault` (deprecated in macOS 12) and
+     * `kIOMainPortDefault` (the macOS 12+ rename) both #define to
+     * `MACH_PORT_NULL` (which is `0`). Using `0` directly works on
+     * every macOS version from 10.0 through 26.x without tripping
+     * the -Wdeprecated-declarations warning that fails the coverage
+     * build under -Werror. CI caught the kIOMasterPortDefault use
+     * after Phase 2 commit 5f04253. */
+    kern_return_t kr = IOServiceGetMatchingServices(0, match, &iter);
     if (kr != KERN_SUCCESS) {
         *err_class = "GenericError";
         *err_desc  = "IOServiceGetMatchingServices failed";
