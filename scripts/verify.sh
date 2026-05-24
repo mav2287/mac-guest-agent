@@ -44,6 +44,10 @@
 #   --no-appendix       Skip the JSON appendix at end of report.
 #   --no-in-vm          Skip the in-VM --self-test-json / --safe-test-json /
 #                       freeze-log fetches.
+#   --no-env-capture    Skip the Host Environment capture section
+#                       (sw_vers / sysctl / kextstat / ioreg / mount /
+#                       launchctl / log-file stat). Use when guest-exec
+#                       is slow or you only want host-driven checks.
 #   --help              Show this usage block and exit.
 #
 # Safety:
@@ -77,6 +81,7 @@ EXEC_TIMEOUT=30
 REDACT=1
 APPENDIX=1
 IN_VM=1
+ENV_CAPTURE=1
 
 usage() {
     # Print the header comment block (lines 2 through the blank line
@@ -100,6 +105,7 @@ while [ $# -gt 0 ]; do
         --no-redact)      REDACT=0;          shift ;;
         --no-appendix)    APPENDIX=0;        shift ;;
         --no-in-vm)       IN_VM=0;           shift ;;
+        --no-env-capture) ENV_CAPTURE=0;     shift ;;
         --help|-h)        usage 0 ;;
         --)               shift; break ;;
         -*)               echo "Unknown option: $1" >&2; usage 2 ;;
@@ -199,8 +205,9 @@ emit_appendix() {
     VMID_OUT="$VMID" AGENT_PATH_OUT="$AGENT_PATH" LOG_PATH_OUT="$LOG_PATH" \
     TRANSPORT_OUT="$TRANSPORT" \
     HOST_CHECKS="$HOST_CHECKS_JSON" \
+    HOST_ENVIRONMENT="$HOST_ENVIRONMENT_JSON" \
     SELFTEST="$SELFTEST_JSON" SAFETEST="$SAFETEST_JSON" \
-    FREEZE_LOG="$FREEZE_LOG_TAIL" SCRIPT_VERSION="2026-05-23-verify-v1" \
+    FREEZE_LOG="$FREEZE_LOG_TAIL" SCRIPT_VERSION="2026-05-23-verify-v2" \
     perl -MJSON::PP -e '
         sub maybe_decode {
             my $s = shift;
@@ -209,7 +216,7 @@ emit_appendix() {
             return $@ ? { _raw_unparseable => $s } : $d;
         }
         my $appendix = {
-            schema_version    => "1.0",
+            schema_version    => "2.0",
             script_version    => $ENV{SCRIPT_VERSION},
             generated_at      => scalar(gmtime) . " UTC",
             transport         => $ENV{TRANSPORT_OUT},
@@ -221,6 +228,7 @@ emit_appendix() {
                 failed => $ENV{FAIL_OUT} + 0,
             },
             host_checks       => maybe_decode($ENV{HOST_CHECKS}) // [],
+            host_environment  => maybe_decode($ENV{HOST_ENVIRONMENT}),
             in_vm_selftest    => maybe_decode($ENV{SELFTEST}),
             in_vm_safetest    => maybe_decode($ENV{SAFETEST}),
             freeze_log_tail   => $ENV{FREEZE_LOG} // "",
@@ -241,6 +249,185 @@ json_query() {
         exit 3 if $@;
         print $out if defined $out;
     ' -- "$2" 2>/dev/null
+}
+
+# --- guest-exec capture helper --------------------------------------------
+# gx_capture <path> [args...] — runs a guest binary via the bound
+# transport_guest_exec_json primitive, prints the binary's stdout
+# (`out-data` field), empty on failure. Used by capture_host_environment
+# below for each individual probe.
+gx_capture() {
+    local raw
+    raw=$("$transport_guest_exec_json" "$@")
+    [ -z "$raw" ] && return 1
+    json_query "$raw" '$d->{"out-data"} // ""'
+}
+
+# --- Host environment capture --------------------------------------------
+# Captures sw_vers + sysctl + kextstat (filtered) + ioreg (serial nodes
+# only) + mount (parsed) + launchctl + log-file stat, all via guest-exec
+# on the bound transport. Stores the assembled JSON in
+# HOST_ENVIRONMENT_JSON (consumed by emit_appendix at the bottom of the
+# script). Each individual probe surfaces as a PASS/INFO line in the
+# human-readable section for visibility.
+#
+# Runs BEFORE the freeze section so the captured mount table reflects
+# pre-freeze state and isn't blocked by the freeze command allowlist
+# (sw_vers etc. aren't allowlisted, so they'd error during freeze).
+HOST_ENVIRONMENT_JSON=""
+
+capture_host_environment() {
+    section "Host Environment"
+
+    local sw_vers_raw sysctl_raw kextstat_raw ioreg_raw mount_raw launchd_raw log_stat_raw
+
+    sw_vers_raw=$(gx_capture /usr/bin/sw_vers)
+    if [ -n "$sw_vers_raw" ]; then
+        pass "sw_vers captured ($(printf '%s' "$sw_vers_raw" | tr '\n' ' ' | head -c 80)...)"
+    else
+        info "sw_vers — guest-exec failed (binary missing or guest-exec disabled?)"
+    fi
+
+    sysctl_raw=$(gx_capture /usr/sbin/sysctl -n hw.model hw.ncpu hw.memsize machdep.cpu.brand_string)
+    if [ -n "$sysctl_raw" ]; then
+        pass "sysctl captured ($(printf '%s' "$sysctl_raw" | tr '\n' '|' | head -c 80))"
+    else
+        info "sysctl — guest-exec failed"
+    fi
+
+    # kextstat is large; filter inside the guest to the families we care
+    # about. /bin/sh -c is reliable on every macOS; awk's piping the
+    # output back would also work but adds a shim.
+    kextstat_raw=$(gx_capture /bin/sh -c "/usr/sbin/kextstat 2>/dev/null | /usr/bin/grep -iE 'Apple16X50|AppleVirtIO|IOSerialFamily' || true")
+    if [ -n "$kextstat_raw" ]; then
+        pass "kextstat captured ($(printf '%s' "$kextstat_raw" | wc -l | tr -d ' ') matching kext line(s))"
+    else
+        info "kextstat — no matching kexts found or guest-exec failed"
+    fi
+
+    # ioreg is very large; filter to lines mentioning serial / virtio
+    # IOClass matches plus the 5-line context after each match.
+    ioreg_raw=$(gx_capture /bin/sh -c "/usr/sbin/ioreg -l -w 0 2>/dev/null | /usr/bin/grep -i -A 5 -E 'IOClass.*Serial|IOClass.*VirtIO' | /usr/bin/head -c 8192 || true")
+    if [ -n "$ioreg_raw" ]; then
+        pass "ioreg serial nodes captured ($(printf '%s' "$ioreg_raw" | wc -c | tr -d ' ') bytes)"
+    else
+        info "ioreg — no matching nodes found or guest-exec failed"
+    fi
+
+    mount_raw=$(gx_capture /sbin/mount)
+    if [ -n "$mount_raw" ]; then
+        local mount_count
+        mount_count=$(printf '%s' "$mount_raw" | grep -c '^/dev\|^[[:graph:]]\+ on ' || true)
+        pass "mount table captured ($(printf '%s' "$mount_raw" | wc -l | tr -d ' ') mount lines)"
+    else
+        info "mount — guest-exec failed"
+    fi
+
+    launchd_raw=$(gx_capture /bin/launchctl list com.macos.guest-agent)
+    if [ -n "$launchd_raw" ]; then
+        pass "launchd job state captured"
+    else
+        info "launchctl — com.macos.guest-agent not loaded, or guest-exec failed"
+    fi
+
+    log_stat_raw=$(gx_capture /usr/bin/stat -f "size=%z mtime=%Sm name=%N" -t "%Y-%m-%dT%H:%M:%S" "$LOG_PATH")
+    if [ -n "$log_stat_raw" ]; then
+        pass "log-file stat: $(printf '%s' "$log_stat_raw" | tr -d '\n')"
+    else
+        info "log-file stat — '$LOG_PATH' not present, or guest-exec failed"
+    fi
+
+    # Assemble the captured pieces into a single JSON object. Parsing
+    # happens in Perl rather than bash because mount-line / sysctl-line
+    # parsing is fiddly and the JSON serialisation is one call.
+    HOST_ENVIRONMENT_JSON=$(
+        SW_VERS_RAW="$sw_vers_raw" \
+        SYSCTL_RAW="$sysctl_raw" \
+        KEXTSTAT_RAW="$kextstat_raw" \
+        IOREG_RAW="$ioreg_raw" \
+        MOUNT_RAW="$mount_raw" \
+        LAUNCHD_RAW="$launchd_raw" \
+        LOG_STAT_RAW="$log_stat_raw" \
+        LOG_PATH_VAR="$LOG_PATH" \
+        perl -MJSON::PP -e '
+            sub parse_sw_vers {
+                my %r;
+                for my $line (split /\n/, $ENV{SW_VERS_RAW} // "") {
+                    if ($line =~ /^([^:]+):\s*(.*)$/) {
+                        my ($k, $v) = ($1, $2);
+                        $k = lc $k; $k =~ s/\s+/_/g;
+                        $r{$k} = $v;
+                    }
+                }
+                return %r ? \%r : undef;
+            }
+            sub parse_sysctl {
+                # sysctl -n with multiple keys prints one value per line, in
+                # the order keys were given: hw.model, hw.ncpu, hw.memsize,
+                # machdep.cpu.brand_string. arm64 machines DO populate
+                # machdep.cpu.brand_string ("Apple M-series"); older Intel
+                # hosts populate it with the brand string. Either way the
+                # fourth line is the CPU brand if present.
+                my @lines = split /\n/, $ENV{SYSCTL_RAW} // "";
+                return undef unless @lines;
+                return {
+                    hw_model  => $lines[0] // "",
+                    ncpu      => (defined $lines[1] && $lines[1] =~ /^\d+$/) ? $lines[1] + 0 : undef,
+                    memsize   => (defined $lines[2] && $lines[2] =~ /^\d+$/) ? $lines[2] + 0 : undef,
+                    cpu_brand => $lines[3] // "",
+                };
+            }
+            sub parse_kextstat {
+                # kextstat format: index refs address size wired NAME (VERSION) UUID ...
+                # We want NAME + VERSION + index.
+                my @out;
+                for my $line (split /\n/, $ENV{KEXTSTAT_RAW} // "") {
+                    if ($line =~ /^\s*(\d+)\s+\d+\s+\S+\s+\S+\s+\S+\s+(\S+)\s+\(([^)]+)\)/) {
+                        push @out, { load_index => $1 + 0, name => $2, version => $3 };
+                    }
+                }
+                return @out ? \@out : [];
+            }
+            sub parse_mount {
+                # macOS mount lines:
+                #   /dev/disk3s1 on / (apfs, sealed, local, read-only, journaled)
+                # Network mounts:
+                #   //user@host/share on /Volumes/foo (smbfs, ...)
+                # ZFS pool/dataset mounts:
+                #   tank/data on /Volumes/tank (zfs, local)
+                my @out;
+                for my $line (split /\n/, $ENV{MOUNT_RAW} // "") {
+                    if ($line =~ /^(\S+)\s+on\s+(.+?)\s+\(([^,)]+)(?:,\s*(.+))?\)\s*$/) {
+                        push @out, {
+                            device      => $1,
+                            mount_point => $2,
+                            fstype      => $3,
+                            options     => ($4 // ""),
+                        };
+                    }
+                }
+                return @out ? \@out : [];
+            }
+            sub parse_log_stat {
+                my $s = $ENV{LOG_STAT_RAW} // "";
+                return undef unless length $s;
+                my %r = ( path => $ENV{LOG_PATH_VAR} );
+                $r{size_bytes} = $1 + 0 if $s =~ /size=(\d+)/;
+                $r{mtime}      = $1      if $s =~ /mtime=([\d\-T:]+)/;
+                return \%r;
+            }
+            my $env = {
+                sw_vers         => parse_sw_vers(),
+                hardware        => parse_sysctl(),
+                kexts           => parse_kextstat(),
+                serial_io_nodes => $ENV{IOREG_RAW},
+                mounts          => parse_mount(),
+                launchd_status  => $ENV{LAUNCHD_RAW},
+                log_file        => parse_log_stat(),
+            };
+            print JSON::PP->new->canonical->encode($env);
+        ' 2>/dev/null
+    )
 }
 
 # --- Transport: PVE -------------------------------------------------------
@@ -1057,6 +1244,15 @@ if [[ "$BLKSIZE" =~ ^[0-9]+$ ]] && [ "$BLKSIZE" -gt 0 ] && [ -n "$BLKCOUNTS" ]; 
     fi
 else
     fail "memory — agent did not return valid memory data"
+fi
+
+# --- Host Environment (in-VM probes, captured BEFORE freeze) --------------
+# Runs before Freeze/Thaw so the captured mount table reflects pre-freeze
+# state and isn't blocked by the freeze command allowlist. (sw_vers,
+# sysctl, kextstat, etc. aren't allowlisted commands, so issuing them
+# during a freeze window would error.)
+if [ "$IN_VM" -eq 1 ] && [ "$ENV_CAPTURE" -eq 1 ]; then
+    capture_host_environment
 fi
 
 # --- Freeze / thaw --------------------------------------------------------
