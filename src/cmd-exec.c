@@ -1,4 +1,5 @@
 #include "commands.h"
+#include "cmd-exec.h"
 #include "util.h"
 #include "log.h"
 #include <stdio.h>
@@ -11,40 +12,93 @@
 #include <signal.h>
 #include <time.h>
 
+/* Async guest-exec implementation matching the QGA spec contract:
+ *
+ *   guest-exec        - forks the child, returns {pid: N} immediately.
+ *   guest-exec-status - drains any new output, reaps the child via
+ *                       waitpid(WNOHANG), returns the current state.
+ *
+ * The agent main loop (src/agent.c) also calls cmd_exec_drain_all() on
+ * every wake-up tick (~1s) so an in-flight child whose caller hasn't
+ * polled guest-exec-status recently doesn't have its stdout/stderr pipe
+ * fill up (typical macOS pipe buffer is 64 KB — without periodic drain a
+ * verbose child blocks on write).
+ *
+ * This is the same async model as upstream Linux qemu-ga (GLib I/O
+ * callbacks off the main loop) and Windows qemu-ga (one reader thread
+ * per pipe), without the GLib/threading dependencies — built on POSIX
+ * primitives that have been on macOS since 10.0 (fork / pipe / fcntl
+ * F_SETFL O_NONBLOCK / waitpid WNOHANG). See finding 1 in audit.md and
+ * docs/research/UPSTREAM_NOTES.md for the prior sync implementation's
+ * deadlock + agent-blocking flaws.
+ */
+
 #define MAX_PROCESSES 64
 #define MAX_CAPTURE_SIZE (16 * 1024 * 1024)  /* 16MB, matches Linux qemu-ga */
+#define DRAIN_CHUNK 4096                     /* per-read buffer size */
 
 typedef struct {
     int     in_use;
-    int     pid;        /* internal PID (not OS PID) */
-    pid_t   real_pid;
+    int     pid;                /* internal PID returned to the caller */
+    pid_t   real_pid;           /* OS-level PID */
     int     exited;
     int     exit_code;
-    int     wait_status; /* raw wait status for WIFSIGNALED etc. */
-    char   *out_data;   /* base64 encoded */
-    char   *err_data;   /* base64 encoded */
+    int     wait_status;        /* raw wait status for WIFSIGNALED etc. */
+
+    /* Pipe read ends — set non-blocking once captured. -1 when closed
+     * (EOF on read, error, or capture-output was false from the start). */
+    int     out_fd;
+    int     err_fd;
+
+    /* Accumulated raw output. Grown on demand up to MAX_CAPTURE_SIZE. */
+    char   *out_buf;
+    size_t  out_len;
+    size_t  out_cap;
+    char   *err_buf;
+    size_t  err_len;
+    size_t  err_cap;
+
+    /* Set to 1 once we've hit MAX_CAPTURE_SIZE and started discarding
+     * additional bytes. Surfaces in guest-exec-status. */
+    int     out_truncated;
+    int     err_truncated;
+
     time_t  start_time;
 } exec_process_t;
 
 static exec_process_t process_table[MAX_PROCESSES];
 static int next_pid = 1;
 
+/* Release any resources owned by a slot and clear it back to defaults. */
+static void release_process(exec_process_t *p)
+{
+    if (p->out_fd >= 0) close(p->out_fd);
+    if (p->err_fd >= 0) close(p->err_fd);
+    free(p->out_buf);
+    free(p->err_buf);
+    memset(p, 0, sizeof(*p));
+    p->out_fd = -1;
+    p->err_fd = -1;
+}
+
 static exec_process_t *alloc_process(void)
 {
-    /* Clean up old entries (>30 min) */
+    /* Reap exited slots older than 30 minutes — caller never came back
+     * for the status. The cap-then-overwrite is more important than the
+     * 30-minute number; it just keeps zombies out of the table. */
     time_t now = time(NULL);
     for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (process_table[i].in_use && process_table[i].exited &&
-            now - process_table[i].start_time > 1800) {
-            free(process_table[i].out_data);
-            free(process_table[i].err_data);
-            memset(&process_table[i], 0, sizeof(exec_process_t));
+        exec_process_t *p = &process_table[i];
+        if (p->in_use && p->exited && now - p->start_time > 1800) {
+            release_process(p);
         }
     }
 
     for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!process_table[i].in_use)
+        if (!process_table[i].in_use) {
+            release_process(&process_table[i]);   /* set fds to -1 */
             return &process_table[i];
+        }
     }
     return NULL;
 }
@@ -56,6 +110,107 @@ static exec_process_t *find_process(int pid)
             return &process_table[i];
     }
     return NULL;
+}
+
+/* Drain one nonblocking pipe fd into the accumulating buffer.
+ *
+ * Reads in DRAIN_CHUNK-sized chunks until EAGAIN (no more data right
+ * now), EOF (closes the fd), or an unrecoverable error (also closes).
+ * When the buffer hits MAX_CAPTURE_SIZE, subsequent bytes are read from
+ * the pipe (to prevent the child from blocking on write) but discarded;
+ * `*truncated` is set so guest-exec-status can surface the flag.
+ *
+ * Returns silently — caller doesn't need to distinguish "drained some"
+ * from "no data right now". After return, *fd is either -1 (closed) or
+ * still valid (more data may arrive later).
+ */
+static void drain_one_fd(int *fd, char **buf, size_t *len, size_t *cap,
+                         int *truncated)
+{
+    if (*fd < 0) return;
+    char chunk[DRAIN_CHUNK];
+    for (;;) {
+        ssize_t n = read(*fd, chunk, sizeof(chunk));
+        if (n == 0) {
+            close(*fd);
+            *fd = -1;
+            return;
+        }
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            if (errno == EINTR) continue;
+            /* Real error (EBADF, EIO, etc.) — give up on this fd. */
+            close(*fd);
+            *fd = -1;
+            return;
+        }
+        /* n > 0 — accept up to MAX_CAPTURE_SIZE, discard the rest. */
+        size_t accept = (size_t)n;
+        if (*len + accept > MAX_CAPTURE_SIZE) {
+            accept = MAX_CAPTURE_SIZE - *len;
+            *truncated = 1;
+        }
+        if (accept > 0) {
+            /* Grow buffer geometrically; cap at MAX_CAPTURE_SIZE + 1
+             * (the +1 is for the trailing NUL the encoder writes). */
+            if (*len + accept + 1 > *cap) {
+                size_t new_cap = (*cap > 0) ? *cap : DRAIN_CHUNK;
+                while (new_cap < *len + accept + 1) new_cap *= 2;
+                if (new_cap > MAX_CAPTURE_SIZE + 1) new_cap = MAX_CAPTURE_SIZE + 1;
+                char *t = realloc(*buf, new_cap);
+                if (!t) {
+                    /* Can't grow — drop what we just read AND mark
+                     * truncated so the caller doesn't get a quiet hole. */
+                    *truncated = 1;
+                    continue;
+                }
+                *buf = t;
+                *cap = new_cap;
+            }
+            memcpy(*buf + *len, chunk, accept);
+            *len += accept;
+        }
+        /* If we discarded any bytes this iteration, keep draining so the
+         * child doesn't block on the next write — but cap is hit, no
+         * more memcpy. The next loop iteration will read the next chunk
+         * straight to the discard path. */
+    }
+}
+
+/* Drain a single process's pipes AND reap the child if it has exited.
+ * Call from both guest-exec-status (so a poll picks up final data) and
+ * cmd_exec_drain_all (so a quiet caller doesn't let pipes back up). */
+static void drain_one_process(exec_process_t *p)
+{
+    drain_one_fd(&p->out_fd, &p->out_buf, &p->out_len, &p->out_cap,
+                 &p->out_truncated);
+    drain_one_fd(&p->err_fd, &p->err_buf, &p->err_len, &p->err_cap,
+                 &p->err_truncated);
+    if (!p->exited) {
+        int status;
+        pid_t w = waitpid(p->real_pid, &status, WNOHANG);
+        if (w > 0) {
+            p->exited = 1;
+            p->wait_status = status;
+            p->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            /* Final drain after the child is gone — picks up any bytes
+             * that landed in the pipe between our last read and exit. */
+            drain_one_fd(&p->out_fd, &p->out_buf, &p->out_len, &p->out_cap,
+                         &p->out_truncated);
+            drain_one_fd(&p->err_fd, &p->err_buf, &p->err_len, &p->err_cap,
+                         &p->err_truncated);
+        }
+    }
+}
+
+/* Public: called from src/agent.c main loop on every tick. */
+void cmd_exec_drain_all(void)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].in_use) {
+            drain_one_process(&process_table[i]);
+        }
+    }
 }
 
 static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_desc)
@@ -174,77 +329,29 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     proc->real_pid = pid;
     proc->exited = 0;
     proc->exit_code = 0;
-    proc->out_data = NULL;
-    proc->err_data = NULL;
     proc->start_time = time(NULL);
 
     if (capture) {
         close(out_pipe[1]);
         close(err_pipe[1]);
+        proc->out_fd = out_pipe[0];
+        proc->err_fd = err_pipe[0];
 
-        /* Read stdout */
-        char *stdout_buf = NULL;
-        size_t stdout_len = 0;
-        {
-            size_t cap = 4096, len = 0;
-            char *buf = malloc(cap);
-            ssize_t n;
-            while (buf && len < MAX_CAPTURE_SIZE &&
-                   (n = read(out_pipe[0], buf + len, cap - len - 1)) > 0) {
-                len += (size_t)n;
-                if (len + 1 >= cap && cap < MAX_CAPTURE_SIZE) {
-                    cap *= 2;
-                    if (cap > MAX_CAPTURE_SIZE) cap = MAX_CAPTURE_SIZE;
-                    char *tmp = realloc(buf, cap);
-                    if (!tmp) { free(buf); buf = NULL; break; }
-                    buf = tmp;
-                }
-            }
-            close(out_pipe[0]);
-            if (buf) { buf[len] = '\0'; stdout_buf = buf; stdout_len = len; }
-        }
-
-        /* Read stderr */
-        char *stderr_buf = NULL;
-        size_t stderr_len = 0;
-        {
-            size_t cap = 4096, len = 0;
-            char *buf = malloc(cap);
-            ssize_t n;
-            while (buf && len < MAX_CAPTURE_SIZE &&
-                   (n = read(err_pipe[0], buf + len, cap - len - 1)) > 0) {
-                len += (size_t)n;
-                if (len + 1 >= cap && cap < MAX_CAPTURE_SIZE) {
-                    cap *= 2;
-                    if (cap > MAX_CAPTURE_SIZE) cap = MAX_CAPTURE_SIZE;
-                    char *tmp = realloc(buf, cap);
-                    if (!tmp) { free(buf); buf = NULL; break; }
-                    buf = tmp;
-                }
-            }
-            close(err_pipe[0]);
-            if (buf) { buf[len] = '\0'; stderr_buf = buf; stderr_len = len; }
-        }
-
-        /* Wait for child */
-        int status;
-        waitpid(pid, &status, 0);
-        proc->exited = 1;
-        proc->wait_status = status;
-        proc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-
-        if (stdout_buf && stdout_len > 0)
-            proc->out_data = base64_encode((unsigned char *)stdout_buf, stdout_len);
-        if (stderr_buf && stderr_len > 0)
-            proc->err_data = base64_encode((unsigned char *)stderr_buf, stderr_len);
-
-        free(stdout_buf);
-        free(stderr_buf);
+        /* Nonblocking — drains will return EAGAIN when no data is ready
+         * instead of blocking the agent main loop. */
+        int fl;
+        if ((fl = fcntl(proc->out_fd, F_GETFL, 0)) >= 0)
+            fcntl(proc->out_fd, F_SETFL, fl | O_NONBLOCK);
+        if ((fl = fcntl(proc->err_fd, F_GETFL, 0)) >= 0)
+            fcntl(proc->err_fd, F_SETFL, fl | O_NONBLOCK);
     }
 
-    LOG_INFO("Executed process: %s (internal pid=%d, real pid=%d)",
-             path_item->valuestring, proc->pid, (int)pid);
+    LOG_INFO("Spawned process: %s (internal pid=%d, real pid=%d, capture=%d)",
+             path_item->valuestring, proc->pid, (int)pid, capture);
 
+    /* Spec contract: return {pid: N} immediately. Output capture and
+     * exit-code reaping happen asynchronously via guest-exec-status +
+     * the main-loop drain. */
     cJSON *result = cJSON_CreateObject();
     cJSON_AddNumberToObject(result, "pid", proc->pid);
     return result;
@@ -267,27 +374,41 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
         return NULL;
     }
 
-    /* Check if process has exited (if we haven't captured yet) */
-    if (!proc->exited) {
-        int status;
-        pid_t w = waitpid(proc->real_pid, &status, WNOHANG);
-        if (w > 0) {
-            proc->exited = 1;
-            proc->wait_status = status;
-            proc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        }
-    }
+    /* Catch up: drain any newly-available output and reap if exited.
+     * cmd_exec_drain_all in the main loop also does this once per tick;
+     * doing it again here means callers that poll faster than the tick
+     * rate get fresh data, and callers that poll slower still see
+     * everything before exited:true flips. */
+    drain_one_process(proc);
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddBoolToObject(result, "exited", proc->exited);
     if (proc->exited) {
         cJSON_AddNumberToObject(result, "exitcode", proc->exit_code);
-        if (proc->out_data)
-            cJSON_AddStringToObject(result, "out-data", proc->out_data);
-        if (proc->err_data)
-            cJSON_AddStringToObject(result, "err-data", proc->err_data);
 
-        /* Use raw wait_status for signal detection, not the extracted exit_code */
+        /* Encode at status-return time rather than at capture time —
+         * accumulated buffers are raw bytes; one encode per status call
+         * is cheap and lets the truncation flags reflect everything up
+         * to and including the final drain. */
+        if (proc->out_buf && proc->out_len > 0) {
+            char *b64 = base64_encode((unsigned char *)proc->out_buf, proc->out_len);
+            if (b64) {
+                cJSON_AddStringToObject(result, "out-data", b64);
+                free(b64);
+            }
+        }
+        if (proc->err_buf && proc->err_len > 0) {
+            char *b64 = base64_encode((unsigned char *)proc->err_buf, proc->err_len);
+            if (b64) {
+                cJSON_AddStringToObject(result, "err-data", b64);
+                free(b64);
+            }
+        }
+        if (proc->out_truncated) cJSON_AddBoolToObject(result, "out-truncated", 1);
+        if (proc->err_truncated) cJSON_AddBoolToObject(result, "err-truncated", 1);
+
+        /* Raw wait_status for signal detection — exit_code is -1 for
+         * signaled exits but we want the signal number surfaced. */
         if (WIFSIGNALED(proc->wait_status))
             cJSON_AddNumberToObject(result, "signal", WTERMSIG(proc->wait_status));
     }
@@ -298,6 +419,10 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
 void cmd_exec_init(void)
 {
     memset(process_table, 0, sizeof(process_table));
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_table[i].out_fd = -1;
+        process_table[i].err_fd = -1;
+    }
     command_register("guest-exec", handle_exec, 1);
     command_register("guest-exec-status", handle_exec_status, 1);
 }

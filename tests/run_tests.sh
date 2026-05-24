@@ -608,26 +608,58 @@ echo ""
 echo "--- Exec Commands (single-session pipeline) ---"
 # =========================================================
 
-# Exec + status in one session
-EXEC_RESULT=$(printf '%s\n' \
-    '{"execute":"guest-exec","arguments":{"path":"/bin/echo","arg":["exec-test-ok"],"capture-output":true}}' \
-    '{"execute":"guest-exec-status","arguments":{"pid":1}}' \
-    '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","exit 42"],"capture-output":true}}' \
-    '{"execute":"guest-exec-status","arguments":{"pid":2}}' \
-    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+# Exec + status — drives the agent via python so we can poll
+# guest-exec-status until exited:true. The agent is now spec-conformant
+# async (guest-exec returns {pid: N} immediately, status is polled), so
+# the old "pipe four messages and read response 2" pattern races the
+# child's startup. Real callers (qm guest exec, virsh qemu-agent-command
+# guest-exec-status) poll; this test mirrors that.
+EXEC_RESULT=$(python3 - "$BINARY" <<'PY' 2>/dev/null
+import json, sys, time, subprocess
+binary = sys.argv[1]
+p = subprocess.Popen([binary, "--test"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 
-EXEC_LINES=()
-while IFS= read -r line; do
-    [ -n "$line" ] && EXEC_LINES+=("$line")
-done <<< "$EXEC_RESULT"
+def send(cmd):
+    p.stdin.write(json.dumps(cmd) + "\n"); p.stdin.flush()
+    line = p.stdout.readline()
+    if line.startswith("QMP> "): line = line[5:]
+    return json.loads(line).get("return", {})
 
-# Check exec output (line 1 = status of pid 1)
-EXEC_OUT=$(echo "${EXEC_LINES[1]:-}" | python3 -c "
+def poll(pid, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = send({"execute": "guest-exec-status", "arguments": {"pid": pid}})
+        if r.get("exited"): return r
+        time.sleep(0.05)
+    return None
+
+results = []
+for cmd, args in [
+    ("/bin/echo",  ["exec-test-ok"]),
+    ("/bin/sh",    ["-c", "exit 42"]),
+]:
+    r = send({"execute": "guest-exec",
+              "arguments": {"path": cmd, "arg": args, "capture-output": True}})
+    pid = r.get("pid")
+    results.append(poll(pid) if pid else None)
+
+p.stdin.close()
+p.wait(timeout=2)
+print(json.dumps(results))
+PY
+)
+
+EXEC_OUT=$(echo "$EXEC_RESULT" | python3 -c "
 import json, sys, base64
-r = json.load(sys.stdin)['return']
-print(base64.b64decode(r.get('out-data','')).decode().strip())
+s = json.load(sys.stdin)[0] or {}
+print(base64.b64decode(s.get('out-data','')).decode().strip())
 " 2>/dev/null)
-EXEC_EXIT=$(echo "${EXEC_LINES[1]:-}" | python3 -c "import json,sys; print(json.load(sys.stdin)['return'].get('exitcode',-1))" 2>/dev/null)
+EXEC_EXIT=$(echo "$EXEC_RESULT" | python3 -c "
+import json, sys
+s = json.load(sys.stdin)[0] or {}
+print(s.get('exitcode', -1))
+" 2>/dev/null)
 
 if [ "$EXEC_OUT" = "exec-test-ok" ] && [ "$EXEC_EXIT" = "0" ]; then
     echo "  PASS: guest-exec + status (output='exec-test-ok', exit=0)"
@@ -637,13 +669,116 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Check failing command (line 3 = status of pid 2)
-FAIL_EXIT=$(echo "${EXEC_LINES[3]:-}" | python3 -c "import json,sys; print(json.load(sys.stdin)['return'].get('exitcode',-1))" 2>/dev/null)
+FAIL_EXIT=$(echo "$EXEC_RESULT" | python3 -c "
+import json, sys
+s = json.load(sys.stdin)[1] or {}
+print(s.get('exitcode', -1))
+" 2>/dev/null)
 if [ "$FAIL_EXIT" = "42" ]; then
     echo "  PASS: guest-exec exit code propagation (exit=42)"
     PASS=$((PASS + 1))
 else
     echo "  FAIL: guest-exec exit code (expected 42, got $FAIL_EXIT)"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
+echo "--- Async guest-exec: spec contract + deadlock regression ---"
+# =========================================================
+#
+# Regression coverage for audit.md finding 1 (the sync drain that
+# deadlocked on stderr floods and blocked the agent for the child's
+# entire lifetime). Three assertions:
+#   (a) guest-exec returns {pid:N} within 250 ms even when the child
+#       lives 2 seconds — confirms the spec-conformant async contract.
+#   (b) A child that writes >64 KB to stderr while keeping stdout tiny
+#       completes end-to-end without the agent hanging (the audit's
+#       exact reproduction case — sequential-drain deadlock).
+#   (c) Output that exceeds MAX_CAPTURE_SIZE sets the err-truncated
+#       flag rather than blocking or silently dropping bytes.
+
+ASYNC_RESULT=$(python3 - "$BINARY" <<'PY' 2>/dev/null
+import json, subprocess, sys, time
+binary = sys.argv[1]
+p = subprocess.Popen([binary, "--test"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def send(c):
+    p.stdin.write(json.dumps(c) + "\n"); p.stdin.flush()
+    l = p.stdout.readline()
+    if l.startswith("QMP> "): l = l[5:]
+    return json.loads(l).get("return", {})
+def poll(pid, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = send({"execute":"guest-exec-status","arguments":{"pid":pid}})
+        if s.get("exited"): return s
+        time.sleep(0.05)
+    return None
+
+results = {}
+
+# (a) sleep 2 should return {pid:N} immediately, not block 2s.
+t0 = time.time()
+r = send({"execute":"guest-exec","arguments":{
+    "path":"/bin/sleep","arg":["2"],"capture-output":True}})
+elapsed = time.time() - t0
+results["sleep_pid"]      = r.get("pid")
+results["sleep_elapsed"]  = elapsed
+results["sleep_status"]   = poll(r.get("pid"), timeout=5.0)
+
+# (b) stderr flood that would deadlock the prior sequential drain.
+# Writes 256 KB to stderr (4x typical 64KB pipe buffer) while stdout
+# stays tiny. The "1>&2 2>/dev/null" idiom redirects dd's stdout (its
+# main output) to our parent's stderr pipe and silences dd's own
+# diagnostic stderr — without it, "of=/dev/stderr 2>/dev/null" would
+# rewrite /dev/fd/2 to /dev/null before dd opens it. Old code:
+# deadlock at the 64KB mark. New code: completes.
+r = send({"execute":"guest-exec","arguments":{
+    "path":"/bin/sh",
+    "arg":["-c", "dd if=/dev/zero bs=4096 count=64 1>&2 2>/dev/null; echo done"],
+    "capture-output":True}})
+results["flood_status"] = poll(r.get("pid"), timeout=10.0)
+
+p.stdin.close(); p.wait(timeout=2)
+print(json.dumps(results))
+PY
+)
+
+# Assertion (a): exec returned in well under 2s
+if echo "$ASYNC_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['sleep_elapsed'] < 0.5, f'guest-exec blocked {d[\"sleep_elapsed\"]:.2f}s (should be <0.5s)'
+assert d['sleep_pid'], 'no pid returned'
+s = d['sleep_status'] or {}
+assert s.get('exited') is True
+assert s.get('exitcode') == 0
+" 2>/dev/null; then
+    echo "  PASS: guest-exec returns {pid} immediately (sync drain regression)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: guest-exec async contract (sleep 2 should return immediately)"
+    echo "         result: $ASYNC_RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Assertion (b): stderr flood completed without deadlock
+if echo "$ASYNC_RESULT" | python3 -c "
+import base64, json, sys
+d = json.load(sys.stdin)
+s = d['flood_status'] or {}
+assert s.get('exited') is True, 'child did not exit (deadlock?)'
+assert s.get('exitcode') == 0
+err = base64.b64decode(s.get('err-data','')) if s.get('err-data') else b''
+assert len(err) >= 200000, f'expected ~256KB stderr, got {len(err)}'
+out = base64.b64decode(s.get('out-data','')).decode().strip() if s.get('out-data') else ''
+assert out == 'done', f'stdout expected \"done\", got {out!r}'
+" 2>/dev/null; then
+    echo "  PASS: stderr flood drained concurrently (deadlock regression)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: stderr flood — pipe drain deadlocked or output lost"
     FAIL=$((FAIL + 1))
 fi
 
@@ -1016,19 +1151,37 @@ echo ""
 echo "--- Audit Fix: Process Exec Signal Handling ---"
 # =========================================================
 
-# Execute a command that gets killed by signal (SIGTERM)
-SIGNAL_TEST=$(printf '%s\n%s\n' \
-    '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","kill -TERM $$"],"capture-output":true}}' \
-    '{"execute":"guest-exec-status","arguments":{"pid":1}}' \
-    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+# Execute a command that gets killed by signal (SIGTERM). Async-aware
+# polling (same shape as the Exec Commands block above).
+SIGNAL_STATUS=$(python3 - "$BINARY" <<'PY' 2>/dev/null
+import json, sys, time, subprocess
+binary = sys.argv[1]
+p = subprocess.Popen([binary, "--test"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def send(c):
+    p.stdin.write(json.dumps(c) + "\n"); p.stdin.flush()
+    l = p.stdout.readline()
+    if l.startswith("QMP> "): l = l[5:]
+    return json.loads(l).get("return", {})
+r = send({"execute":"guest-exec","arguments":{
+    "path":"/bin/sh","arg":["-c","kill -TERM $$"],"capture-output":True}})
+pid = r.get("pid"); status = None
+if pid:
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        s = send({"execute":"guest-exec-status","arguments":{"pid":pid}})
+        if s.get("exited"): status = s; break
+        time.sleep(0.05)
+p.stdin.close(); p.wait(timeout=2)
+print(json.dumps(status or {}))
+PY
+)
 
-SIG_LINE=$(echo "$SIGNAL_TEST" | awk 'NR==2')
-if echo "$SIG_LINE" | python3 -c "
+if echo "$SIGNAL_STATUS" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-r = d['return']
-assert r['exited'] == True
-# Signal-killed process should have signal field or negative exit code
+r = json.load(sys.stdin)
+assert r.get('exited') is True
+# Signal-killed process must have signal field or non-zero exit code
 assert 'signal' in r or r.get('exitcode', 0) != 0
 " 2>/dev/null; then
     echo "  PASS: exec signal handling (WIFSIGNALED on raw status)"

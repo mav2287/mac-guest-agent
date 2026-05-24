@@ -2,6 +2,7 @@
 #include "channel.h"
 #include "commands.h"
 #include "cmd-fs.h"
+#include "cmd-exec.h"
 #include "protocol.h"
 #include "log.h"
 #include <stdlib.h>
@@ -124,6 +125,12 @@ int agent_run(agent_t *ag, volatile sig_atomic_t *stop_flag)
         } else {
             channel_set_poll_timeout(ag->channel, 1000);
         }
+
+        /* Drain in-flight guest-exec processes on every tick so a
+         * verbose child's pipe doesn't back up while the caller is
+         * between guest-exec-status polls. Cheap when nothing is in
+         * flight (single nonblocking read returning EAGAIN per fd). */
+        cmd_exec_drain_all();
 
         char *msg = channel_read_message(ag->channel);
         if (!msg) {
