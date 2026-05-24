@@ -48,10 +48,7 @@ For a single end-to-end pass — environment capture, agent communication, freez
 
 ```bash
 # Pick a name shown in `utmctl list`
-curl -fsSL -o /tmp/verify.sh \
-  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
-chmod +x /tmp/verify.sh
-/tmp/verify.sh --transport utm "macOS Dev" | tee verify.txt
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh | bash -s -- --transport utm "macOS Dev" | tee verify.txt
 ```
 
 How the UTM transport works:

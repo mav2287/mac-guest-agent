@@ -71,10 +71,7 @@ Disk and network devices are separate from the agent transport — use VirtIO fo
 For a single host-driven verification pass — environment capture, agent communication, freeze/thaw cycles with a content-based behavioural check, and the in-VM `--self-test-json` / `--safe-test-json` diagnostics — use `scripts/verify.sh`:
 
 ```bash
-curl -fsSL -o /tmp/verify.sh \
-  https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh
-chmod +x /tmp/verify.sh
-/tmp/verify.sh --transport libvirt macos-vm | tee verify.txt
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh | bash -s -- --transport libvirt macos-vm | tee verify.txt
 ```
 
 How the libvirt transport works:
