@@ -74,6 +74,24 @@ jobs:
           echo "Size: $(du -h build/mac-guest-agent-universal | cut -f1)"
           lipo -info build/mac-guest-agent-universal
 
+      - name: Toolchain + slice diagnostic (debug for Xcode 16.4 LC_MAIN issue)
+        if: always()
+        run: |
+          echo "=== Xcode + clang + SDKs ==="
+          xcodebuild -version || true
+          clang --version | head -3 || true
+          xcrun --show-sdk-version || true
+          ls /Applications/ | grep -i xcode || true
+          echo
+          echo "=== Available Xcode versions on this runner ==="
+          ls -la /Applications/ | grep -i xcode || true
+          echo
+          echo "=== x86_64 slice load commands (key: LC_MAIN vs LC_UNIXTHREAD) ==="
+          otool -arch x86_64 -l build/mac-guest-agent-universal 2>&1 | grep -E 'cmd LC_|version |minos|sdk |platform' | head -40
+          echo
+          echo "=== i386 slice load commands ==="
+          otool -arch i386 -l build/mac-guest-agent-universal 2>&1 | grep -E 'cmd LC_|version |minos|sdk |platform' | head -40
+
       - name: Verify legacy slices (load commands, deps, symbol baselines)
         run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
 
