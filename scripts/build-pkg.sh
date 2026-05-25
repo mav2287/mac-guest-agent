@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build a macOS .pkg installer for the guest agent
 # Usage: ./scripts/build-pkg.sh [arch]
-#   arch: amd64, arm64, or universal (default: current arch)
+#   arch: universal (default), amd64, arm64, or i386 (single-slice builds for testing only)
 #
 # Produces: build/mac-guest-agent-<version>-<arch>.pkg
 #
@@ -21,7 +21,7 @@ if [ -z "$VERSION" ]; then
     echo "Error: could not determine VERSION (Makefile parse failed and no env override)" >&2
     exit 1
 fi
-ARCH="${1:-$(uname -m | sed 's/x86_64/amd64/;s/arm64/arm64/')}"
+ARCH="${1:-universal}"
 PKG_ID="com.github.mac-guest-agent"
 PKG_NAME="mac-guest-agent-${VERSION}-${ARCH}.pkg"
 
@@ -31,9 +31,10 @@ echo "Architecture: $ARCH"
 
 # Determine binary name
 case "$ARCH" in
+    universal) BINARY="build/mac-guest-agent-universal" ;;
     amd64)  BINARY="build/mac-guest-agent-x86_64" ;;
     arm64)  BINARY="build/mac-guest-agent-arm64" ;;
-    universal) BINARY="build/mac-guest-agent-universal" ;;
+    i386)   BINARY="build/mac-guest-agent-i386" ;;
     *) echo "Unknown arch: $ARCH"; exit 1 ;;
 esac
 

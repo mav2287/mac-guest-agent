@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.4.4 (unreleased)
+
+### Bug Fixes
+- **Fixed (compatibility):** `mac-guest-agent-darwin-amd64` v2.4.3 crashed at startup on Mac OS X 10.6 Snow Leopard and 10.7 Lion with `dyld: unknown required load command 0x80000028` (SIGTRAP). The amd64 binary advertised `LC_VERSION_MIN_MACOSX 10.6` but its entry-point load command was `LC_MAIN` (introduced 10.8). The v2.4.3 release pipeline was running on a GitHub Actions runner image carrying Xcode 15.5, which silently clamped the Makefile's `MACOSX_DEPLOYMENT_TARGET=10.6` env var and emitted `LC_MAIN` regardless. Reported by @vit9696 in #4. Fixed by building both legacy slices (i386 + x86_64) against the phracker `MacOSX10.13.sdk` with explicit `-mmacosx-version-min` flags (10.4 for i386, 10.6 for x86_64), so ld64's entry-point gate resolves to false and emits `LC_UNIXTHREAD`. Also added `scripts/verify-legacy-slices.sh` invoked by both build and release CI workflows, which fails the build on any disallowed load command, off-spec deployment target, unexpected dylib dependency, or symbol drift outside the checked-in per-slice baseline — making the invariant permanent regardless of future toolchain behaviour.
+
+### Tooling / Packaging
+- **Changed (release):** v2.4.4 publishes a **single binary**: `mac-guest-agent-darwin-universal`, a tri-fat Mach-O containing `i386 + x86_64 + arm64` slices. dyld picks the appropriate slice at load time: Tiger/Leopard pick i386; Snow Leopard through Catalina pick x86_64 (with the `LC_UNIXTHREAD` fix above); Big Sur and Apple Silicon pick arm64. **The thin per-arch binaries (`-i386`, `-amd64`, `-arm64`) are no longer published.** One download URL covers all supported macOS versions and architectures. If the universal doesn't start on a specific host, open an issue at https://github.com/mav2287/mac-guest-agent/issues/new — we work each report as a bug.
+- **Changed:** Install URL changed from `mac-guest-agent-darwin-amd64` to `mac-guest-agent-darwin-universal`. Scripts pinning the old URL must update.
+- **Added:** `scripts/verify-legacy-slices.sh` — CI-callable script that audits per-slice invariants (LC commands, deployment targets, dylib deps, undefined symbols) of the produced universal. Replaces the previous inline `clock_gettime` check; now runs against all three slices and covers more failure modes. Hard-fails the build on any disallowed `LC_REQ_DYLD` command, unknown numeric load command, missing per-slice symbol baseline, or symbol drift outside `tests/legacy_slice_symbols_<arch>.txt`.
+- **Added:** New `surrogate-32bit` CI job builds the portable subset (`protocol.c` + `cJSON.c`) under `gcc -m32` on `ubuntu-latest` via a standalone `tests/surrogate_32bit_main.c` driver and runs portable unit tests under 32-bit code. `selftest.c` and `log.c` are excluded because they drag macOS-specific dependencies (`compat_*`, `run_command_capture`, missing `<stdint.h>` respectively); `util.c` is excluded because it `#include`s `compat.h` and uses POSIX surface that needs `_POSIX_C_SOURCE=200809L` on Linux glibc. Catches int-width / struct-layout / endianness regressions in JSON marshaling without depending on access to old Intel Mac hardware.
+- **Added:** `#include <stdint.h>` to `src/util.c` (one line, no behavior change) — `SIZE_MAX` was previously visible only via transitive Apple SDK includes; explicit include eliminates that fragility.
+- **Changed:** `Makefile` `build-x86_64` now uses explicit `-mmacosx-version-min=10.6 -isysroot $(LEGACY_SDK)` instead of relying on `MACOSX_DEPLOYMENT_TARGET=10.6` env var (which is toolchain-version-dependent and was the underlying mechanism of the v2.4.3 bug). `build-i386` similarly gets explicit `-mmacosx-version-min=10.4`. `LEGACY_SDK` defaults to `/tmp/MacOSX10.13.sdk` (phracker tarball, SHA256 `1d2984ac…23a5a` pinned in CI); `I386_SDK` aliases it for backward compatibility.
+- **Changed:** `Makefile` `build-universal` now produces a **tri-fat** binary (i386 + x86_64 + arm64; previously x86_64 + arm64 only).
+- **Changed:** `Makefile` `dist` / `pkg` / `sign` / `dsym` / `help` targets all updated for universal-only distribution. `dist` clears `$(DIST_DIR)` before populating so stale per-arch artifacts from previous builds can't leak into the checksums.
+- **Changed:** `src/service.c` `--update` flag's instruction text now references `mac-guest-agent-darwin-universal`.
+- **Changed:** `scripts/install.sh` fetches the universal binary; `detect_arch()` removed (no per-arch asset to pick) but architecture validation preserved as `validate_arch()` so unsupported hosts (e.g., PowerPC) fail early with a clear message.
+- **Changed:** `scripts/build-pkg.sh` default arch is now `universal`; per-arch invocation kept for internal testing.
+- **Changed:** `scripts/verify-installer.sh` recommendation collapsed from per-arch (if/elif/elif on macOS version) to single universal-binary line.
+- **Added:** `--self-test-json` `system_info` block now includes a `selected_arch` field reporting which slice of the universal binary dyld actually picked. Useful for verify.sh evidence drops and post-incident forensics.
+
+### Documentation
+- **Updated:** `README.md`, `docs/PVE.md`, `docs/UTM.md`, `docs/COMPATIBILITY.md`, `docs/RELEASE_TEMPLATE.md` install snippets all reference the universal binary as the single download. README has a new "If the agent doesn't start" section that asks users to open a GitHub issue with diagnostic outputs (loader-safe `sw_vers` / `file` / `lipo -info` first; `--self-test-json` / `--version` / log tail only if the binary actually starts). Modern-machine TLS caveat preserved — Tiger / Leopard / older Snow Leopard guests usually need to download on a modern machine and transfer the file.
+
 ## Unreleased
 
 ### Highlights

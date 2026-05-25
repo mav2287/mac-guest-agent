@@ -67,7 +67,7 @@ Old macOS VMs can't reach GitHub due to TLS incompatibility. Transfer the binary
 ```bash
 # On a modern machine — download the binary
 curl -L -o mac-guest-agent \
-  https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
+  https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
 
 # Copy to the VM
 scp mac-guest-agent user@<vm-ip>:/tmp/

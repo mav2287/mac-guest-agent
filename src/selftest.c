@@ -512,6 +512,23 @@ static void emit_system_info(void)
     else
         printf("\"freeze_method\":\"sync_only\",");
 
+    /* Which slice of the universal binary dyld actually picked at load
+     * time. Compile-time constant — set per slice during the tri-fat build.
+     * On Rosetta-translated runs this differs from "arch" (which reports
+     * the host's uname -m); on native runs they match. */
+    const char *selected_arch =
+#if defined(__i386__)
+        "i386"
+#elif defined(__x86_64__)
+        "x86_64"
+#elif defined(__arm64__)
+        "arm64"
+#else
+        "unknown"
+#endif
+        ;
+    printf("\"selected_arch\":\"%s\",", selected_arch);
+
     /* Command count */
     printf("\"command_count\":%d", commands_count());
 

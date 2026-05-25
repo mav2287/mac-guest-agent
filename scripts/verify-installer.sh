@@ -531,21 +531,10 @@ check_architecture() {
         fi
     done
 
-    if [ -z "$VERSION" ] || [ "$VERSION" = "GM" ]; then
-        return
-    fi
-
-    local major minor
-    major=$(echo "$VERSION" | cut -d. -f1)
-    minor=$(echo "$VERSION" | cut -d. -f2)
-
-    if [ "$major" -gt 10 ]; then
-        info "Agent binary: arm64 (mac-guest-agent-darwin-arm64)"
-    elif [ "$major" -eq 10 ] && [ "$minor" -ge 6 ]; then
-        info "Agent binary: x86_64 (mac-guest-agent-darwin-amd64)"
-    elif [ "$major" -eq 10 ] && [ "$minor" -lt 6 ]; then
-        info "Agent binary: i386 (mac-guest-agent-i386, if available)"
-    fi
+    # v2.4.4+: universal-only release. Same recommendation regardless of host
+    # macOS version / arch — the universal binary contains i386 + x86_64 +
+    # arm64 slices; dyld picks at load time.
+    info "Recommended binary: mac-guest-agent-darwin-universal (covers all macOS versions and architectures, one slice loads at runtime)"
 }
 
 # Resolve codename from version

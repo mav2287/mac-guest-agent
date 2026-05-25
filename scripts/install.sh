@@ -20,12 +20,15 @@ check_root() {
     fi
 }
 
-detect_arch() {
+# v2.4.4+: universal-only release. No per-arch detection for asset selection
+# (the universal binary contains i386 + x86_64 + arm64 slices; dyld picks at
+# load time). We still validate the host arch is one we ship a slice for, so
+# unsupported architectures (e.g., PowerPC Tiger/Leopard) fail early with a
+# clear message instead of downloading a universal binary dyld cannot load.
+validate_arch() {
     case "$(uname -m)" in
-        x86_64)  echo "amd64" ;;
-        i386)    echo "amd64" ;;
-        arm64)   echo "arm64" ;;
-        *) err "Unsupported architecture: $(uname -m)"; exit 1 ;;
+        x86_64|i386|i486|i586|i686|arm64|arm64e) return 0 ;;
+        *) err "Unsupported architecture: $(uname -m). This project ships i386, x86_64, and arm64 slices only. PowerPC and other architectures are not supported."; exit 1 ;;
     esac
 }
 
@@ -49,8 +52,8 @@ main() {
     echo "=== macOS Guest Agent Installer ==="
     check_root
 
-    ARCH=$(detect_arch)
-    info "Architecture: $ARCH"
+    validate_arch
+    info "Installing universal binary (covers i386 / x86_64 / arm64 — dyld picks at load time on $(uname -m))"
     info "macOS: $(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
 
     if [ "$1" = "--local" ]; then
@@ -72,7 +75,7 @@ main() {
         TMPDIR=$(mktemp -d)
         trap "rm -rf $TMPDIR" EXIT
 
-        BINARY_FILE="${BINARY_NAME}-darwin-${ARCH}"
+        BINARY_FILE="${BINARY_NAME}-darwin-universal"
         URL="https://github.com/${REPO}/releases/latest/download/${BINARY_FILE}"
 
         if command -v curl >/dev/null 2>&1; then

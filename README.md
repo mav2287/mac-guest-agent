@@ -16,8 +16,12 @@ qm stop <vmid> && sleep 5 && qm start <vmid>
 
 **2. In the macOS VM:**
 ```bash
-# Download binary (from a modern machine if VM can't reach GitHub)
-curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
+# Download the universal binary — one slice (i386 / x86_64 / arm64) loads at runtime.
+# Covers macOS 10.4 Tiger through 26 Tahoe.
+# Note: on Tiger / Leopard / older Snow Leopard guests, the VM's TLS stack
+# usually cannot reach GitHub directly. Download on a modern machine and
+# transfer the file (scp / shared folder / USB).
+curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
 
 # Install
 sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
@@ -43,16 +47,29 @@ The agent communicates via an **ISA serial port** (16550 UART) using Apple's bui
 
 ## Compatibility
 
-| Binary | Arch | Min macOS |
-|---|---|---|
-| `mac-guest-agent-i386` | i386 | 10.4 Tiger |
-| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard |
-| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur |
-| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 |
+**Single download:** `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
 
 ISA serial driver (`Apple16X50Serial.kext`) verified present with identical PCI class match on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026). See the [compatibility matrix](docs/COMPATIBILITY.md) for per-version evidence.
 
 > **Tiger / Leopard (10.4 / 10.5):** `/usr/local/bin` is not in the default shell PATH. Invoke the binary by its absolute path (`sudo /usr/local/bin/mac-guest-agent ...`) or add it to PATH for the session: `export PATH=/usr/local/bin:$PATH`. The LaunchDaemon itself uses the absolute path and is unaffected.
+
+## If the agent doesn't start
+
+Open an issue at https://github.com/mav2287/mac-guest-agent/issues/new with as much of the following as you can collect. Items 1-3 work even when the binary won't launch (dyld rejection); items 4-6 require the binary to start successfully.
+
+**Loader-safe (no execution needed):**
+
+1. `sw_vers` — macOS version, build
+2. `file /usr/local/bin/mac-guest-agent` — confirms it's a Mach-O fat binary
+3. `lipo -info /usr/local/bin/mac-guest-agent` — shows the slice list
+
+**If the binary starts:**
+
+4. `mac-guest-agent --version`
+5. `mac-guest-agent --self-test-json` — pipe to a file or `grep selected_arch` directly (do NOT pipe through `python -m json.tool` on Tiger/Leopard — those versions lack a reliable stdlib `json` module)
+6. `tail -50 /var/log/mac-guest-agent.log`
+
+The universal binary is the supported install path; if it doesn't load on your specific host configuration we want to fix it, not work around it.
 
 ## Service Management
 

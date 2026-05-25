@@ -56,44 +56,26 @@ jobs:
           fi
           echo "Static analysis clean"
 
-      - name: Build all architectures
-        run: make build-all
-
-      - name: Download legacy SDK and build i386
+      - name: Download legacy SDK (used for i386 + x86_64 legacy builds)
         run: |
-          curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          # SDK choice per universal_upgrade.md Step 0 (10.6 SDK rejected; 10.13 used)
+          curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
+          actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
+          [ "$actual" = "$EXPECTED_SHA256" ] || { echo "::error::SDK checksum mismatch: $actual != $EXPECTED_SHA256"; exit 1; }
           tar xf /tmp/sdk.tar.xz -C /tmp
-          make build-i386 I386_SDK=/tmp/MacOSX10.13.sdk
 
-      - name: Check binaries
+      - name: Build tri-fat universal (i386 + x86_64 + arm64)
+        run: make build-all LEGACY_SDK=/tmp/MacOSX10.13.sdk
+
+      - name: Check binary metadata
         run: |
-          echo "=== i386 ==="
-          file build/mac-guest-agent-i386
-          echo "Size: $(du -h build/mac-guest-agent-i386 | cut -f1)"
-          echo ""
-          echo "=== x86_64 ==="
-          file build/mac-guest-agent-x86_64
-          otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
-          echo "Size: $(du -h build/mac-guest-agent-x86_64 | cut -f1)"
-          echo ""
-          echo "=== arm64 ==="
-          file build/mac-guest-agent-arm64
-          otool -l build/mac-guest-agent-arm64 | grep -A 3 "LC_BUILD_VERSION"
-          echo "Size: $(du -h build/mac-guest-agent-arm64 | cut -f1)"
-          echo ""
-          echo "=== universal ==="
           file build/mac-guest-agent-universal
           echo "Size: $(du -h build/mac-guest-agent-universal | cut -f1)"
+          lipo -info build/mac-guest-agent-universal
 
-      - name: Verify no clock_gettime (breaks pre-10.12)
-        run: |
-          for bin in build/mac-guest-agent-x86_64 build/mac-guest-agent-arm64; do
-            if nm -u "$bin" 2>/dev/null | grep -q clock_gettime; then
-              echo "FAIL: $bin contains clock_gettime"
-              exit 1
-            fi
-          done
-          echo "OK: No clock_gettime references"
+      - name: Verify legacy slices (load commands, deps, symbol baselines)
+        run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
 
       - name: Validate docs match binary
         run: |
@@ -204,3 +186,35 @@ jobs:
           # purpose of running it. Verified 75/0 passes locally under
           # -fsanitize=address,undefined on macOS 26.
           ./tests/run_tests.sh ./build/mac-guest-agent-asan
+
+  # 32-bit portable code surrogate (Linux -m32)
+  # Catches int-width / struct-layout / endianness regressions in portable
+  # code (protocol.c + cJSON.c) without requiring access to old Intel Mac
+  # hardware. Scope per universal_upgrade.md §4.5 / D16 / H04:
+  # - INCLUDED: protocol.c (pure portable, only stdlib + cJSON deps)
+  # - INCLUDED: third_party/cJSON.c (pure portable)
+  # - EXCLUDED: util.c (#include compat.h + POSIX needs _POSIX_C_SOURCE)
+  # - EXCLUDED: log.c (missing <stdint.h>; not in surrogate scope)
+  # - EXCLUDED: selftest.c (depends on compat_*, run_command_capture)
+  # - EXCLUDED: all cmd-*.c (macOS-specific: Mach, IOKit, launchd)
+  surrogate-32bit:
+    name: 32-bit portable code surrogate (Linux -m32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install 32-bit toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-multilib
+      - name: Build portable subset under -m32
+        run: |
+          gcc -m32 -Wall -Wextra -Werror -O2 -std=c99 \
+              -DVERSION='"surrogate-32"' \
+              -DMGA_SURROGATE_32BIT \
+              -Isrc -Isrc/third_party \
+              -o /tmp/mga-surrogate-32 \
+              tests/surrogate_32bit_main.c \
+              src/protocol.c \
+              src/third_party/cJSON.c
+      - name: Run portable unit tests under 32-bit code
+        run: /tmp/mga-surrogate-32

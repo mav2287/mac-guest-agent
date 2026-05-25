@@ -214,4 +214,4 @@ UTM on Apple Silicon uses Apple's Virtualization.framework for arm64 macOS guest
 - **Virtualization.framework VMs** (arm64 macOS on arm64 host) — uses `/dev/cu.virtio`
 - **QEMU-emulated VMs** (x86_64 macOS via emulation) — uses standard QEMU serial paths
 
-For arm64 VMs, use the `mac-guest-agent-darwin-arm64` binary. For emulated x86_64 VMs, use `mac-guest-agent-darwin-amd64`.
+Both kinds use the same `mac-guest-agent-darwin-universal` binary — dyld picks the appropriate slice (arm64 or x86_64) at load time.
