@@ -13,7 +13,10 @@ env:
 
 jobs:
   release:
-    runs-on: macos-latest
+    # Pinned to macos-13 — see .github/workflows/build.yml for the full
+    # rationale. Xcode 16.x ld64 hardcodes LC_MAIN for x86_64 regardless of
+    # -mmacosx-version-min flag; macos-13 has older Xcode that honors it.
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
