@@ -66,18 +66,27 @@ build-i386: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (i386, 10.4+)..."
 	@if [ ! -d "$(I386_SDK)" ]; then echo "Error: i386 SDK not found at $(I386_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
-	$(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" -mmacosx-version-min=10.4 \
+	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" -mmacosx-version-min=10.4 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch i386 -isysroot $(I386_SDK) \
+		-Wl,-platform_version,macos,10.4,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 
-# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version)
+# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version).
+# Three redundant signals to ld64 to force min=10.6 (and thus LC_UNIXTHREAD,
+# which is the pre-10.8 entry-point command 10.6/10.7 dyld understands):
+#   1. MACOSX_DEPLOYMENT_TARGET env var
+#   2. -mmacosx-version-min=10.6 driver flag
+#   3. -Wl,-platform_version,macos,10.6,10.13 explicit linker directive
+# Some Xcode versions (e.g., 16.4) silently clamp single-signal inputs to the
+# SDK's effective floor; the redundant signaling makes the floor explicit.
 build-x86_64: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+, LC_UNIXTHREAD via legacy SDK)..."
 	@if [ ! -d "$(LEGACY_SDK)" ]; then echo "Error: legacy SDK not found at $(LEGACY_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -mmacosx-version-min=10.6 \
+	MACOSX_DEPLOYMENT_TARGET=10.6 $(CC) $(CFLAGS) -mmacosx-version-min=10.6 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch x86_64 -isysroot $(LEGACY_SDK) \
+		-Wl,-platform_version,macos,10.6,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(SRCS) $(LDFLAGS)
 	@echo "x86_64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64"
 

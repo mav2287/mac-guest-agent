@@ -162,7 +162,11 @@ static void test_cjson_roundtrip(void)
     ASSERT("cJSON decode parses encoded output", decoded != NULL);
 
     cJSON *name = cJSON_GetObjectItemCaseSensitive(decoded, "name");
-    ASSERT_STR_EQ("round-trip string", name ? name->valuestring : NULL, "test");
+    /* Pre-extract with empty-string fallback so the ASSERT_STR_EQ macro's
+     * strcmp() never sees a potentially-NULL argument. gcc -Wnonnull -Werror
+     * can't prove the macro's runtime NULL guard prevents the call. */
+    const char *name_val = (name && name->valuestring) ? name->valuestring : "";
+    ASSERT_STR_EQ("round-trip string", name_val, "test");
 
     cJSON *value = cJSON_GetObjectItemCaseSensitive(decoded, "value");
     ASSERT("round-trip number", value && value->valueint == 42);
