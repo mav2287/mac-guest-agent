@@ -44,7 +44,7 @@ Before cutting a release:
 - [ ] Memory leak check clean (macOS `leaks` tool)
 - [ ] CHANGELOG.md updated with new version section
 - [ ] COMPATIBILITY.md updated with any new verification results
-- [ ] Version bumped in: `src/agent.h`, `Makefile`, `scripts/build-pkg.sh`
+- [ ] Version bumped in `Makefile` (`VERSION := X.Y.Z`) — single source of truth; `scripts/build-pkg.sh` reads it via env override and the release workflow stamps it onto the build artifacts via `make VERSION="$VERSION"`
 - [ ] All binaries build (`make build-all`)
 - [ ] .pkg installers build (`make pkg`)
 - [ ] Git tag created: `git tag vX.Y.Z`

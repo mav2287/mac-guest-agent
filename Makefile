@@ -62,6 +62,15 @@ docs/mac-guest-agent.8: docs/mac-guest-agent.8.in Makefile
 LEGACY_SDK ?= /tmp/MacOSX10.13.sdk
 I386_SDK ?= $(LEGACY_SDK)
 
+# i386 build links libclang_rt.osx.a's divdi3.S.o / udivdi3.S.o (64-bit
+# integer division helpers). Modern Xcode stamps those .o files with
+# `LC_VERSION_MIN_MACOSX 10.7`, so the linker prints a "newer macOS version
+# than being linked" warning. They are pure integer-arithmetic assembly with
+# no runtime OS dependency and are statically linked into our binary (verified:
+# `nm` shows them as local text symbols `t`). vit9696 ran v2.4.2 (same helpers)
+# on Tiger 10.4.11 successfully, confirming runtime compatibility. Warning is
+# cosmetic; suppression would require either eliminating 64-bit division on
+# i386 (intrusive) or linking against an older compiler-rt (build complexity).
 build-i386: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (i386, 10.4+)..."
 	@if [ ! -d "$(I386_SDK)" ]; then echo "Error: i386 SDK not found at $(I386_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi

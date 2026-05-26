@@ -36,8 +36,18 @@ slice_min_macosx() {
     | awk '/cmd LC_VERSION_MIN_MACOSX/{flag=1; next} flag && /version/{print $2; exit}'
 }
 
+# Parse LC_BUILD_VERSION minos (used by arm64 instead of LC_VERSION_MIN_MACOSX).
+# Format: "    minos 11.0"
+slice_build_version_minos() {
+  otool -arch "$1" -l "$BIN" \
+    | awk '/cmd LC_BUILD_VERSION/{flag=1; next} flag && /minos/{print $2; exit}'
+}
+
 slice_deps() { otool -arch "$1" -L "$BIN" | tail -n +2 | awk '{print $1}'; }
 slice_undefs() { nm -arch "$1" -u "$BIN" 2>/dev/null | awk '{print $NF}' | sort; }
+# nm -m gives full undefined-symbol metadata including weak/strong status.
+# Used by gate 3h below to assert host_statistics64 stays weak-imported.
+slice_undefs_full() { nm -m -arch "$1" -u "$BIN" 2>/dev/null; }
 
 # Numeric cmd value parser. Returns 0 (true) if a command has LC_REQ_DYLD bit set.
 # Input format: "?(0xHEXVALUE)" — quoted via case glob below.
@@ -161,10 +171,18 @@ check_slice() {
       || fail "$arch slice missing LC_MAIN (unexpected for modern arm64)"
   fi
 
-  # 3e. Min version
+  # 3e. Min version — handles both LC_VERSION_MIN_MACOSX (legacy slices)
+  # and LC_BUILD_VERSION minos (arm64). When expected_min is set, the slice
+  # must declare exactly that floor via whichever load command it uses.
   if [ -n "$expected_min" ]; then
-    [ "$min" = "$expected_min" ] \
-      || fail "$arch slice min=$min, expected $expected_min"
+    local actual_min=""
+    if [ -n "$min" ]; then
+      actual_min="$min"
+    else
+      actual_min=$(slice_build_version_minos "$arch")
+    fi
+    [ "$actual_min" = "$expected_min" ] \
+      || fail "$arch slice min=$actual_min, expected $expected_min"
   fi
 
   # 3f. Dependency allowlist
@@ -201,13 +219,28 @@ check_slice() {
     esac
   fi
 
-  pass "$arch slice: LCs allowlisted, min=${min:-<arm64-build_version>}, deps OK, symbols match baseline"
+  # 3h. Weak-import assertion for host_statistics64.
+  # The plain baseline (gate 3g) only records symbol NAMES via `nm -u`, not the
+  # weak/strong attribute. cmd-hardware.c uses `__attribute__((weak_import))`
+  # so dyld resolves the symbol to NULL on Tiger (which lacks it) and the
+  # `vm_stat` text fallback runs. If a future edit drops `weak_import`, dyld on
+  # Tiger would refuse to load the i386 slice ("Symbol not found"). The plain
+  # baseline diff would NOT catch this — the symbol name is unchanged.
+  # Gate 3h closes that gap by inspecting `nm -m` (full attribute info).
+  local nm_full
+  nm_full=$(slice_undefs_full "$arch")
+  if echo "$nm_full" | grep -q '_host_statistics64'; then
+    echo "$nm_full" | grep '_host_statistics64' | grep -q 'weak external' \
+      || fail "$arch slice: _host_statistics64 must be 'weak external' for Tiger compatibility (cmd-hardware.c __attribute__((weak_import))). Current nm -m: $(echo "$nm_full" | grep _host_statistics64 | head -1)"
+  fi
+
+  pass "$arch slice: LCs allowlisted, min=${expected_min:-<no-min-set>}, deps OK, symbols match baseline, weak-imports preserved"
 }
 
 # --- 4. Run per-slice checks --------------------------------------------
 check_slice i386   10.4 no
 check_slice x86_64 10.6 no
-check_slice arm64  ""    yes
+check_slice arm64  11.0 yes
 
 echo ""
 echo "All legacy-slice invariants verified for $BIN."

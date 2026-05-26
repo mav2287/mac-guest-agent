@@ -215,6 +215,39 @@ jobs:
           # -fsanitize=address,undefined on macOS 26.
           ./tests/run_tests.sh ./build/mac-guest-agent-asan
 
+  # Canary: same build on macos-latest (informational, non-blocking).
+  # Surfaces drift on the unpinned runner image before the pinned `build`
+  # job is forced off macos-14. Two specific risks this catches:
+  #   (1) Apple removes `-Wl,-ld_classic` (deprecated; warned in current
+  #       Xcode 26.5). When that happens, the build job's recipe will start
+  #       failing on whatever runner has the new Xcode.
+  #   (2) GitHub retires the macos-14 image. The release path would break
+  #       silently until someone tries a release.
+  # If this canary stays green, we know macos-latest can take over when
+  # needed. If it fails, the failure mode is visible early.
+  canary-build-on-macos-latest:
+    name: Canary build on macos-latest (informational; failure here is OK)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download legacy SDK
+        run: |
+          curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
+          actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
+          [ "$actual" = "$EXPECTED_SHA256" ] || { echo "::error::SDK checksum mismatch"; exit 1; }
+          tar xf /tmp/sdk.tar.xz -C /tmp
+      - name: Build tri-fat universal
+        run: make build-all LEGACY_SDK=/tmp/MacOSX10.13.sdk
+      - name: Verify legacy slices
+        run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
+      - name: Report toolchain (forensic — useful when this canary starts failing)
+        if: always()
+        run: |
+          xcodebuild -version || true
+          clang --version | head -3 || true
+
   # 32-bit portable code surrogate (Linux -m32)
   # Catches int-width / struct-layout / endianness regressions in portable
   # code (protocol.c + cJSON.c) without requiring access to old Intel Mac

@@ -123,12 +123,15 @@ The ISA serial driver has been present since Mac OS X 10.4 Tiger (2005). The PCI
 
 ### Binary Evidence
 
-| Binary | Deployment Target | Load Command | Frameworks | Symbols Required |
-|---|---|---|---|---|
-| x86_64 | 10.6 (Snow Leopard) | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 121 |
-| arm64 | 11.0 (Big Sur) | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | 122 |
+As of v2.4.4 the release ships a single tri-fat universal binary; the table below describes each slice within it.
 
-Both binaries link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. All 20 critical symbols verified present in every installer-verified macOS version.
+| Slice | Deployment Target | Entry Point | Load Command | Frameworks | Undef Symbols |
+|---|---|---|---|---|---|
+| i386 | 10.4 (Tiger) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
+| x86_64 | 10.6 (Snow Leopard) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
+| arm64 | 11.0 (Big Sur) | LC_MAIN | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | varies (modern) |
+
+All three slices link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. Legacy slices (i386, x86_64) use `LC_UNIXTHREAD` via `-Wl,-ld_classic` + `-mmacosx-version-min=N.N` + legacy 10.13 SDK so 10.4-10.7 dyld can load them (10.8+ introduced `LC_MAIN` which older dyld rejects — see issue #4 / CHANGELOG v2.4.4). Per-slice symbol baselines live at `tests/legacy_slice_symbols_<arch>.txt` and are diffed by `scripts/verify-legacy-slices.sh` on every CI build.
 
 ## Architectural Transitions Covered
 
