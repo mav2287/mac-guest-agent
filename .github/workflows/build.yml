@@ -12,15 +12,17 @@ env:
 jobs:
   # Build binaries and run static analysis on the latest runner
   build:
-    # Pinned to macos-13 (Xcode 14.x era) because Xcode 16.x ld64 hardcodes
-    # LC_MAIN for x86_64 regardless of -mmacosx-version-min=10.6 or
-    # -Wl,-platform_version,macos,10.6,10.13. Verified empirically: CI run
-    # 26422269830 showed Xcode 16.4 emits LC_VERSION_MIN_MACOSX version=10.6
-    # (correct) AND LC_MAIN (wrong) on the same binary. Only Xcode 16.x is
-    # available on macos-latest. When macos-latest eventually carries an Xcode
-    # that honors the entry-point gate (likely Xcode 26+ per local dev box
-    # behavior), revisit this pin.
-    runs-on: macos-13
+    # Pinned to macos-14 because Xcode 16.x (on macos-latest/macos-15) ld64
+    # hardcodes LC_MAIN for x86_64 regardless of -mmacosx-version-min=10.6
+    # or -Wl,-platform_version,macos,10.6,10.13. Verified empirically: CI
+    # run 26422269830 showed Xcode 16.4 emits LC_VERSION_MIN_MACOSX
+    # version=10.6 (correct) AND LC_MAIN (wrong) on the same binary.
+    # macos-14 typically ships with Xcode 15.x which honors the min-flag
+    # for entry-point selection. Tried macos-13 first; GHA capacity for
+    # macos-13 is now severely limited (queued 8+ minutes without
+    # allocation). When macos-latest eventually carries Xcode 26+ (which
+    # also honors the gate per local dev box), revisit this pin.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
