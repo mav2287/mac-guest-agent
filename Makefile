@@ -68,25 +68,23 @@ build-i386: plist-header
 	@mkdir -p $(BUILD_DIR)
 	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" -mmacosx-version-min=10.4 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch i386 -isysroot $(I386_SDK) \
-		-Wl,-platform_version,macos,10.4,10.13 \
+		-Wl,-ld_classic -Wl,-platform_version,macos,10.4,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 
-# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version).
-# Three redundant signals to ld64 to force min=10.6 (and thus LC_UNIXTHREAD,
-# which is the pre-10.8 entry-point command 10.6/10.7 dyld understands):
-#   1. MACOSX_DEPLOYMENT_TARGET env var
-#   2. -mmacosx-version-min=10.6 driver flag
-#   3. -Wl,-platform_version,macos,10.6,10.13 explicit linker directive
-# Some Xcode versions (e.g., 16.4) silently clamp single-signal inputs to the
-# SDK's effective floor; the redundant signaling makes the floor explicit.
+# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version
+# + ld-classic linker). Xcode 15-16's new ld-prime linker hardcodes LC_MAIN
+# for x86_64 regardless of -mmacosx-version-min; Apple kept the older
+# ld-classic as a fallback that DOES honor the min-flag for entry-point
+# selection. `-Wl,-ld_classic` invokes it. Layered signals (env var + flag
+# + explicit platform_version directive + ld-classic) for belt-and-suspenders.
 build-x86_64: plist-header
-	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+, LC_UNIXTHREAD via legacy SDK)..."
+	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+, LC_UNIXTHREAD via ld-classic + legacy SDK)..."
 	@if [ ! -d "$(LEGACY_SDK)" ]; then echo "Error: legacy SDK not found at $(LEGACY_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
 	MACOSX_DEPLOYMENT_TARGET=10.6 $(CC) $(CFLAGS) -mmacosx-version-min=10.6 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch x86_64 -isysroot $(LEGACY_SDK) \
-		-Wl,-platform_version,macos,10.6,10.13 \
+		-Wl,-ld_classic -Wl,-platform_version,macos,10.6,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(SRCS) $(LDFLAGS)
 	@echo "x86_64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64"
 
