@@ -57,16 +57,34 @@ main() {
     info "macOS: $(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
 
     if [ "$1" = "--local" ]; then
-        if [ -f "build/${BINARY_NAME}" ]; then
+        # Optional explicit path: `--local /path/to/binary` skips the search
+        # entirely. Use this when the file was transferred to a non-standard
+        # location or renamed.
+        if [ -n "$2" ]; then
+            if [ ! -f "$2" ]; then
+                err "Local binary not found at: $2"
+                exit 1
+            fi
+            BINARY="$2"
+        # Search order: release asset name first (what users actually transfer
+        # from a modern machine), then in-tree build outputs, then legacy
+        # generic names kept for pre-v2.4.4 recovery flows.
+        elif [ -f "./${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="./${BINARY_NAME}-darwin-universal"
+        elif [ -f "/tmp/${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="/tmp/${BINARY_NAME}-darwin-universal"
+        elif [ -f "build/${BINARY_NAME}-universal" ]; then
+            BINARY="build/${BINARY_NAME}-universal"
+        elif [ -f "build/${BINARY_NAME}" ]; then
             BINARY="build/${BINARY_NAME}"
         elif [ -f "./${BINARY_NAME}" ]; then
             BINARY="./${BINARY_NAME}"
-        elif [ -f "/tmp/${BINARY_NAME}-x86_64" ]; then
-            BINARY="/tmp/${BINARY_NAME}-x86_64"
         elif [ -f "/tmp/${BINARY_NAME}" ]; then
             BINARY="/tmp/${BINARY_NAME}"
         else
             err "No local binary found."
+            err "Searched: ./${BINARY_NAME}-darwin-universal, /tmp/${BINARY_NAME}-darwin-universal, build/${BINARY_NAME}-universal, build/${BINARY_NAME}, ./${BINARY_NAME}, /tmp/${BINARY_NAME}"
+            err "Pass an explicit path: sudo $0 --local /path/to/${BINARY_NAME}-darwin-universal"
             exit 1
         fi
         info "Using local binary: $BINARY"
@@ -127,10 +145,14 @@ main() {
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "macOS Guest Agent Installer"
     echo ""
-    echo "Usage: sudo $0 [--local]"
+    echo "Usage: sudo $0 [--local [PATH]]"
     echo ""
-    echo "  --local   Install from a local binary (for VMs that can't reach GitHub)"
-    echo "  (default) Download latest release from GitHub"
+    echo "  --local         Install from a local binary (for VMs that can't reach GitHub)."
+    echo "                  Searches ./mac-guest-agent-darwin-universal, /tmp/mac-guest-agent-darwin-universal,"
+    echo "                  build/mac-guest-agent-universal, build/mac-guest-agent, ./mac-guest-agent,"
+    echo "                  /tmp/mac-guest-agent (in that order)."
+    echo "  --local PATH    Install from an explicit binary path (skips the search)."
+    echo "  (default)       Download latest release from GitHub"
     echo ""
     echo "Prerequisites:"
     echo "  On the Proxmox VE host, set ISA serial mode:"

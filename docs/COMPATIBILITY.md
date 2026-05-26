@@ -139,10 +139,10 @@ All three slices link only against system frameworks (CoreFoundation, IOKit) and
 |---|---|---|---|
 | HFS+ → APFS | 10.13 High Sierra | Freeze mechanism changes | Runtime detection, APFS snapshot on 10.13+, sync-only fallback |
 | No SIP → SIP | 10.11 El Capitan | Kext loading restricted | Not applicable (ISA serial uses built-in kext) |
-| Intel → Apple Silicon | 11.0 Big Sur | Architecture change | Separate arm64 binary, universal fat binary |
+| Intel → Apple Silicon | 11.0 Big Sur | Architecture change | arm64 slice inside the tri-fat universal binary; dyld selects at load time |
 | No VirtIO → Native VirtIO | 11.0 Big Sur | Apple's `AppleQEMUGuestAgent` launches on VZ-backed hosts only — see [ISA Serial Transport — Why](#isa-serial-transport--why) | ISA serial primary on all host classes for symmetry; VirtIO devices in `src/channel.c` covered as a fallback for hosts where ISA isn't presented (UTM with the QEMU backend, custom QEMU configs without `-device isa-serial`) |
-| PPC → Intel | 10.4.4 Tiger | Architecture change | i386 Makefile target for 10.4–10.5, x86_64 from 10.6 |
-| 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 target from 10.6, i386 Makefile target for older |
+| PPC → Intel | 10.4.4 Tiger | Architecture change | i386 slice inside the universal binary for 10.4–10.5; x86_64 slice from 10.6 |
+| 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 slice from 10.6; i386 slice for older — both inside the universal binary |
 | Monolithic libc → split sub-libs | 10.7 Lion | Library layout | Symbol check adapts: libc.dylib → libSystem.B → sub-libraries |
 | Split sub-libs → dyld shared cache | 11.0 Big Sur | Library layout | Symbols not inspectable via nm but resolve at runtime |
 | bash → zsh default | 10.15 Catalina | Shell for guest-exec | Uses /bin/sh (always available), not login shell |
@@ -151,7 +151,7 @@ All three slices link only against system frameworks (CoreFoundation, IOKit) and
 
 | macOS | Priority | Why |
 |---|---|---|
-| 10.4 Tiger | High | Oldest supported, kext v1.9, i386 binary, validates floor |
+| 10.4 Tiger | High | Oldest supported, kext v1.9, i386 slice of the universal binary, validates floor |
 | 10.13 High Sierra | High | APFS transition — validates freeze snapshot path via tmutil |
 | 11.0 Big Sur | High | VirtIO + modern stack — validates both transports |
 | 15.x Sequoia | High | Current stable release — validates nothing has regressed |

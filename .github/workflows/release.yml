@@ -13,9 +13,14 @@ env:
 
 jobs:
   release:
-    # Pinned to macos-14 — see .github/workflows/build.yml for the full
-    # rationale. Xcode 16.x ld64 hardcodes LC_MAIN for x86_64 regardless of
-    # -mmacosx-version-min flag; macos-14 ships Xcode 15.x which honors it.
+    # Pinned to macos-14. The real load-bearing dependency is
+    # `-Wl,-ld_classic` in the Makefile (see build.yml for the full
+    # rationale): ld-classic honors -mmacosx-version-min and emits
+    # LC_UNIXTHREAD on the i386 + x86_64 slices, where ld-prime hardcodes
+    # LC_MAIN and breaks 10.6/10.7 dyld. macos-14 ships Xcode 15.x; the
+    # canary in build.yml exercises the same recipe on macos-latest. If
+    # Apple removes ld-classic or macos-14 is retired, repin per the
+    # fallback chain documented in build.yml.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

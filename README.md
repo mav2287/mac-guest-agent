@@ -84,12 +84,31 @@ sudo mac-guest-agent --uninstall              # Remove
 ## Building from Source
 
 ```bash
-make build              # Current architecture
-make build-x86_64      # Intel (10.6+)
-make build-arm64       # Apple Silicon (11.0+)
-make build-universal   # Fat binary
-make test              # Run all tests
+make build              # Current architecture (no SDK needed)
+make build-arm64        # Apple Silicon (11.0+, no SDK needed)
+make test               # Run all tests
 ```
+
+The legacy slices (i386 for 10.4+, x86_64 for 10.6+) require the macOS 10.13
+SDK because modern Xcode SDKs no longer expose pre-10.7 deployment targets.
+Download it once, then pass it to `make`:
+
+```bash
+curl -fL -o /tmp/sdk.tar.xz \
+  https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+# SHA256 1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a
+tar xf /tmp/sdk.tar.xz -C /tmp
+
+make build-i386       LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.4+ (32-bit)
+make build-x86_64     LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.6+ (64-bit)
+make build-universal  LEGACY_SDK=/tmp/MacOSX10.13.sdk   # tri-fat (release shape)
+```
+
+The legacy slices also depend on Apple's `ld-classic` linker (`-Wl,-ld_classic`
+in the Makefile) to honor `-mmacosx-version-min` for entry-point selection;
+the default `ld-prime` hardcodes `LC_MAIN` on x86_64 and produces binaries
+that 10.6/10.7 dyld cannot load (issue #4). See `.github/workflows/build.yml`
+for the full toolchain story.
 
 ## Documentation
 

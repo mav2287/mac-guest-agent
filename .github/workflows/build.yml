@@ -12,16 +12,31 @@ env:
 jobs:
   # Build binaries and run static analysis on the latest runner
   build:
-    # Pinned to macos-14 because Xcode 16.x (on macos-latest/macos-15) ld64
-    # hardcodes LC_MAIN for x86_64 regardless of -mmacosx-version-min=10.6
-    # or -Wl,-platform_version,macos,10.6,10.13. Verified empirically: CI
-    # run 26422269830 showed Xcode 16.4 emits LC_VERSION_MIN_MACOSX
-    # version=10.6 (correct) AND LC_MAIN (wrong) on the same binary.
-    # macos-14 typically ships with Xcode 15.x which honors the min-flag
-    # for entry-point selection. Tried macos-13 first; GHA capacity for
-    # macos-13 is now severely limited (queued 8+ minutes without
-    # allocation). When macos-latest eventually carries Xcode 26+ (which
-    # also honors the gate per local dev box), revisit this pin.
+    # The load-bearing workaround for the LC_MAIN-on-legacy-slice problem is
+    # `-Wl,-ld_classic` in Makefile build-i386 and build-x86_64. ld-classic
+    # honors -mmacosx-version-min for entry-point selection (emits
+    # LC_UNIXTHREAD on the i386 + x86_64 slices) where the default ld-prime
+    # (Xcode 15+) hardcodes LC_MAIN for x86_64 regardless of the min-flag.
+    # macOS 10.6/10.7 dyld treats LC_MAIN as an unknown required load
+    # command and aborts with SIGTRAP — this was issue #4 (v2.4.3).
+    #
+    # macos-14 ships Xcode 15.x; macos-latest currently ships Xcode 16.x and
+    # also accepts `-Wl,-ld_classic` (validated by the canary job below).
+    # We keep the build job on macos-14 for a known toolchain. The canary
+    # exercises macos-latest with the same recipe; do not promote it to
+    # required without at least two consecutive successful runs.
+    #
+    # Fragility: Apple has deprecated ld-classic and warns it will be
+    # removed in a future release. When the canary starts failing, the
+    # fallback chain is: (1) confirm macos-latest still accepts the flag
+    # via the canary's toolchain report, (2) if not, retry with a Homebrew
+    # cctools `ld`, (3) if no Apple-side linker honors the min-flag,
+    # produce the legacy slices in a container with a frozen older Xcode
+    # CLT. Do not block a release on macos-14 disappearing — repin to
+    # macos-latest first and rely on the canary's prior green history.
+    #
+    # macos-13 was tried first; GHA capacity for macos-13 is now severely
+    # limited (queued 8+ minutes without allocation).
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
