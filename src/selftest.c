@@ -514,8 +514,13 @@ static void emit_system_info(void)
 
     /* Which slice of the universal binary dyld actually picked at load
      * time. Compile-time constant — set per slice during the tri-fat build.
-     * On Rosetta-translated runs this differs from "arch" (which reports
-     * the host's uname -m); on native runs they match. */
+     * Both "arch" (uname(2) uts.machine) and "selected_arch" report the
+     * running process slice, not the host hardware: under Rosetta, uname()
+     * inside an x86_64 process on arm64 hardware returns "x86_64", so the
+     * two fields agree. selected_arch is kept as the compile-time-derived
+     * source of truth (arch can drift if a host's uname is virtualized or
+     * unavailable), and gives evidence-drop readers an unambiguous "which
+     * slice ran" without having to parse `arch` semantics per platform. */
     const char *selected_arch =
 #if defined(__i386__)
         "i386"

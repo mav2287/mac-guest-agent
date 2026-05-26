@@ -270,7 +270,8 @@ jobs:
   # - INCLUDED: protocol.c (pure portable, only stdlib + cJSON deps)
   # - INCLUDED: third_party/cJSON.c (pure portable)
   # - EXCLUDED: util.c (#include compat.h + POSIX needs _POSIX_C_SOURCE)
-  # - EXCLUDED: log.c (missing <stdint.h>; not in surrogate scope)
+  # - EXCLUDED: log.c (loads os_log via dlfcn — macOS-specific runtime,
+  #             no equivalent on Linux glibc)
   # - EXCLUDED: selftest.c (depends on compat_*, run_command_capture)
   # - EXCLUDED: all cmd-*.c (macOS-specific: Mach, IOKit, launchd)
   surrogate-32bit:

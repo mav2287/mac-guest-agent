@@ -116,8 +116,11 @@ build-universal: build-i386 build-x86_64 build-arm64
 		-output $(BUILD_DIR)/$(PROGRAM_NAME)-universal
 	@echo "Tri-fat universal binary: $(BUILD_DIR)/$(PROGRAM_NAME)-universal"
 
-# All architectures
-build-all: build-x86_64 build-arm64 build-universal
+# All architectures (i386 + x86_64 + arm64 thin slices + tri-fat universal).
+# build-universal already depends on all three thin slices, so listing them
+# here is redundant in terms of the make DAG — but the explicit list makes
+# the intent visible to readers and keeps `make help` honest.
+build-all: build-i386 build-x86_64 build-arm64 build-universal
 	@echo "All builds complete"
 	@ls -la $(BUILD_DIR)/$(PROGRAM_NAME)-*
 

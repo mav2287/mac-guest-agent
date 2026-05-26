@@ -8,6 +8,13 @@
 # The .pkg can be installed by:
 #   - Double-clicking in Finder
 #   - sudo installer -pkg mac-guest-agent-*.pkg -target /
+#
+# Prereq: the named slice must already exist under build/. The documented
+# release flow is `make pkg`, which depends on `make build-all` and produces
+# the universal slice. `make build-all` requires the legacy 10.13 SDK
+# (see README "Building from Source" for LEGACY_SDK setup). Single-slice
+# invocations for i386 and x86_64 require the same SDK; only `arm64` builds
+# with the host Xcode SDK alone.
 
 set -e
 
