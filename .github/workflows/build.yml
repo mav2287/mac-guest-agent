@@ -120,6 +120,14 @@ jobs:
       - name: Verify legacy slices (load commands, deps, symbol baselines)
         run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
 
+      - name: Sabotage tests — prove the verifier actually rejects bad slices
+        # Without this, the verifier's PASS on happy-path builds doesn't
+        # prove it would catch a regression. Each sabotage forces a
+        # different rejection path (LC_MAIN on legacy, wrong min,
+        # missing slice, symbol drift) and asserts the verifier exits
+        # non-zero with the expected error pattern.
+        run: LEGACY_SDK=/tmp/MacOSX10.13.sdk ./tests/test_legacy_slice_gate.sh
+
       - name: Validate docs match binary
         run: |
           make build

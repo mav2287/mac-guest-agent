@@ -173,10 +173,18 @@ uninstall:
 test: build test-unit test-proactive test-fuzz test-integration test-verify-transports
 
 # Shell-shim integration tests for scripts/verify.sh (PVE, libvirt,
-# UTM, qga-socket). Mocks the host CLIs and a local QGA socket; no
+# UTM, qga-serial). Mocks the host CLIs and a local QGA socket; no
 # real hypervisor needed.
 test-verify-transports:
 	@bash tests/test_verify_transports.sh
+
+# Sabotage tests for scripts/verify-legacy-slices.sh — deliberately
+# produce broken universal binaries and assert the verifier rejects
+# them. Without this, the verifier's happy-path "PASS" doesn't prove
+# it would catch a regression. Requires `make build-all LEGACY_SDK=...`
+# to have produced the good i386 + x86_64 + arm64 thin slices first.
+test-legacy-slice-gate: build-all
+	@bash tests/test_legacy_slice_gate.sh
 
 # Code coverage report (llvm-cov)
 test-coverage:
