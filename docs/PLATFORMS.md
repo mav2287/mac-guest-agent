@@ -71,7 +71,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 
 | Capability | Apple VirtIO Agent | mac-guest-agent |
 |---|---|---|
-| Transport | VirtIO serial (default) | ISA serial (`type=isa`) |
+| Transport | VirtIO serial (default — Apple's daemon owns the channel) | ISA serial — required as of v2.5.0; VirtIO transport removed |
 | Total commands | 18 | 45 |
 | Filesystem freeze/thaw | **No** | Yes (APFS snapshot + sync + hooks) |
 | Memory reporting | **No** | Yes (real usage via Mach VM stats) |

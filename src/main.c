@@ -16,13 +16,12 @@
 /*
  * CLI flags mirror the Linux qemu-ga where applicable:
  *   -d, --daemonize         Run as daemon
- *   -m, --method METHOD     Transport: auto (default — ISA-first auto-detect,
- *                             VirtIO fallback); accepts isa-serial /
- *                             virtio-serial / auto for compatibility, but the
- *                             channel selection logic in src/channel.c
- *                             walks known_devices[] regardless of this value.
- *                             The field is informational; behavior is
- *                             ISA-first universally.
+ *   -m, --method METHOD     Transport (v2.5.0+): ISA serial only. Accepts
+ *                             `auto` (default) or `isa-serial`; channel
+ *                             selection in src/channel.c walks an ISA-only
+ *                             known_devices[] regardless. `virtio-serial`
+ *                             is rejected at parse time with an explanation
+ *                             pointing at the v2.5.0 BREAKING entry.
  *   -p, --path PATH         Device path
  *   -l, --logfile PATH      Log file (default: stderr, daemon: /var/log/mac-guest-agent.log)
  *   -f, --pidfile PATH      PID file
@@ -39,12 +38,12 @@
  */
 
 #define DEFAULT_CONFIG_PATH "/etc/qemu/qemu-ga.conf"
-/* DEFAULT_METHOD is informational only — see header comment above and
- * src/channel.c known_devices[]. Channel selection walks the ISA-first list
- * regardless of this value; the field exists for parity with the Linux
- * qemu-ga config schema and for users who want to record their intent in
- * the config file. Existing configs with `method = virtio-serial` or
- * `method = isa-serial` still load cleanly. */
+/* DEFAULT_METHOD: ISA serial is the only supported transport (v2.5.0+).
+ * The value here is what --dump-conf prints when no config sets it; channel
+ * selection walks the ISA-only list in src/channel.c known_devices[]
+ * regardless. `method = virtio-serial` is rejected at config-parse time
+ * (and at -m parse time) with a clear migration message — see CHANGELOG
+ * v2.5.0 BREAKING section. */
 #define DEFAULT_METHOD      "auto"
 #define DEFAULT_PIDFILE     "/var/run/qemu-ga.pid"
 
@@ -135,8 +134,25 @@ static void parse_config_file(const char *path, config_t *cfg)
             cfg->daemonize = (strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
         else if (strcmp(key, "verbose") == 0)
             cfg->verbose = (strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
-        else if (strcmp(key, "method") == 0)
+        else if (strcmp(key, "method") == 0) {
+            /* v2.5.0: VirtIO transport removed. Reject the value loudly at
+             * config-parse time so users with leftover Linux-qemu-ga-style
+             * configs (`method = virtio-serial`) get a clear message rather
+             * than a silent "we're ignoring this setting" — which would
+             * have been correct for v2.4.x (the field was informational)
+             * but is misleading now that VirtIO is unsupported. */
+            if (strcmp(val, "virtio-serial") == 0) {
+                fprintf(stderr,
+                    "config error: method = virtio-serial is no longer "
+                    "supported (v2.5.0+). VirtIO transport was removed; this "
+                    "agent requires ISA serial. Change to method = auto or "
+                    "method = isa-serial, or remove the line entirely "
+                    "(auto-detect picks the right ISA device). See "
+                    "CHANGELOG v2.5.0 BREAKING section.\n");
+                exit(1);
+            }
             cfg->method = safe_strdup(val);
+        }
         else if (strcmp(key, "path") == 0)
             cfg->path = safe_strdup(val);
         else if (strcmp(key, "logfile") == 0)
@@ -184,9 +200,9 @@ static void print_usage(const char *prog)
     printf("Usage: %s [options]\n\n", prog);
     printf("Options (compatible with Linux qemu-ga):\n");
     printf("  -d, --daemonize        Daemonize (log to file; launchd handles backgrounding)\n");
-    printf("  -m, --method METHOD    Transport method [default: auto — ISA-first auto-detect,\n"
-           "                          VirtIO fallback]. Informational; behavior is hard-coded\n"
-           "                          ISA-first in src/channel.c known_devices[].\n");
+    printf("  -m, --method METHOD    Transport method [default: auto — ISA serial only].\n"
+           "                          Accepts: auto, isa-serial. virtio-serial is rejected\n"
+           "                          at parse time (removed in v2.5.0 — see CHANGELOG).\n");
     printf("  -p, --path PATH        Device/socket path [default: auto-detect]\n");
     printf("  -l, --logfile PATH     Log file path [default: stderr]\n");
     printf("  -f, --pidfile PATH     PID file path\n");
@@ -261,7 +277,21 @@ int main(int argc, char *argv[])
     while ((opt = getopt_long(argc, argv, "dm:p:l:f:vVb:a:c:Dth", long_options, NULL)) != -1) {
         switch (opt) {
         case 'd': cfg.daemonize = 1; break;
-        case 'm': cfg.method = optarg; break;
+        case 'm':
+            /* See config-parser comment above on method-handling. Same
+             * v2.5.0 BREAKING rejection applies here for parity between
+             * config-file and CLI surfaces. */
+            if (optarg && strcmp(optarg, "virtio-serial") == 0) {
+                fprintf(stderr,
+                    "error: -m virtio-serial is no longer supported "
+                    "(v2.5.0+). VirtIO transport was removed; this agent "
+                    "requires ISA serial. Use -m auto or -m isa-serial, "
+                    "or omit -m entirely (auto-detect picks the right "
+                    "ISA device). See CHANGELOG v2.5.0 BREAKING section.\n");
+                return 1;
+            }
+            cfg.method = optarg;
+            break;
         case 'p': cfg.path = optarg; break;
         case 'l': cfg.logfile = optarg; break;
         case 'f': cfg.pidfile = optarg; break;

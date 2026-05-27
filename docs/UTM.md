@@ -14,7 +14,7 @@ The guest agent turns a UTM VM from a "window with a desktop" into a **managed v
 
 ## Setup
 
-> **Transport choice.** The agent is **ISA-serial-first** across every host class — Proxmox VE, libvirt, raw QEMU, and UTM (QEMU backend). VirtIO serial is a documented fallback only, narrowly useful for QEMU configs that don't or can't present an ISA UART. The default ISA path gives one transport that works identically across hypervisors and avoids the VZ-backed conflict described in [Apple Silicon Notes](#apple-silicon-notes) below.
+> **Transport choice.** As of v2.5.0 the agent supports **ISA serial only** across every host class (Proxmox VE, libvirt, raw QEMU, UTM Emulate backend). VirtIO transport was removed — see the [v2.5.0 BREAKING entry in CHANGELOG.md](../CHANGELOG.md) for the migration path from v2.4.x. The ISA-only contract avoids the VZ-backed conflict described in [Apple Silicon Notes](#apple-silicon-notes) below, gives one install/launchd config everywhere, and survives moving a disk image between host classes without reinstall.
 
 ### 1. Add a Serial Device in UTM (QEMU backend)
 
@@ -25,7 +25,7 @@ The guest agent turns a UTM VM from a "window with a desktop" into a **managed v
    - For a manually managed socket, leave the Interface as a generic serial and set **Mode: Unix socket** with a known path
 4. The VM will get `/dev/cu.serial1` (or similar `/dev/cu.serial*`)
 
-> Older UTM guidance suggested adding a VirtIO interface and using `/dev/cu.virtio`. That still works on UTM's QEMU backend if the channel is free, but it's not the supported default path — and on Virtualization.framework-backed macOS guests the VirtIO console is claimed by Apple's own 18-command agent (see [Apple Silicon Notes](#apple-silicon-notes)). Use ISA serial unless you have a specific reason not to.
+> Older UTM guidance (and v2.4.x of this agent) suggested adding a VirtIO interface and using `/dev/cu.virtio`. **That path was removed in v2.5.0.** If you upgraded from v2.4.x and previously had VirtIO Serial configured, the agent will refuse to start with a "No ISA serial device found" message pointing here; reconfigure the VM with a Serial device whose Interface is **QemuGuestAgent** (ISA-backed) and restart. On Virtualization.framework-backed macOS guests the VirtIO console is claimed by Apple's own 18-command agent regardless ([Apple Silicon Notes](#apple-silicon-notes)), so the v2.5.0 ISA-only contract also closes that quiet-failure mode.
 
 ### 2. Install the Agent
 
@@ -48,7 +48,7 @@ The self-test should show:
   PASS  ISA serial device: /dev/cu.serial1 (r=yes w=yes)
 ```
 
-If your VM was set up with a VirtIO serial instead (older UTM guidance), the self-test will report `/dev/cu.virtio` instead. Both are recognized by the agent's channel auto-detect, but ISA is the supported default.
+If your VM was set up with a VirtIO Serial Interface (older UTM guidance, or any v2.4.x install that worked via the VirtIO fallback), the agent will refuse to start in v2.5.0 with a "Found VirtIO serial device but VirtIO transport was removed" message — reconfigure the Serial device's Interface to **QemuGuestAgent** (ISA-backed) and fully stop/start the VM. See [CHANGELOG v2.5.0 BREAKING](../CHANGELOG.md) for the migration steps.
 
 ### 4. Verify end-to-end from the host (`scripts/verify.sh`)
 
@@ -188,7 +188,9 @@ For most use cases, SSH is simpler than raw serial access. The serial channel is
 ### Agent not finding the serial device
 
 ```bash
-# Check what serial devices exist (ISA first, VirtIO fallback)
+# Check what serial devices exist. v2.5.0+ only uses ISA paths;
+# if a VirtIO device shows here, the agent will refuse to start
+# and tell you to reconfigure (see CHANGELOG v2.5.0 BREAKING).
 ls -la /dev/cu.serial* /dev/tty.serial* 2>/dev/null
 ls -la /dev/cu.virtio* /dev/tty.virtio* 2>/dev/null
 
