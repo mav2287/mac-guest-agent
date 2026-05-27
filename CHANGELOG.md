@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.5.0 (unreleased)
+## v2.5.0 — 2026-05-27
 
 ### ⚠️ BREAKING CHANGE — release asset filename
 The release ships a **single** binary: `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64 in one tri-fat Mach-O; dyld picks the right slice at load time). The previous per-architecture assets are gone:
