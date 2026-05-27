@@ -27,6 +27,9 @@
  *   -t, --test              Test mode (stdin/stdout, no device needed)
  *       --install            Install as LaunchDaemon
  *       --uninstall          Uninstall LaunchDaemon
+ *       --dry-run            With --install/--uninstall/--update: print
+ *                              actions without touching filesystem/launchctl
+ *                              (v2.5.1+; root check also skipped).
  *   -D, --dump-conf         Print effective configuration
  *   -h, --help              Show help
  */
@@ -46,6 +49,7 @@ typedef struct {
     int         safetest_json;
     int         dump_conf;
     const char *update_path;
+    int         dry_run;
     const char *path;
     const char *logfile;
     const char *pidfile;
@@ -204,6 +208,10 @@ static void print_usage(const char *prog)
     printf("      --self-test-json   Same as --self-test but output JSON\n");
     printf("      --safe-test        Validate read-only commands work correctly\n");
     printf("      --safe-test-json   Same as --safe-test but output JSON\n");
+    printf("      --dry-run          Combined with --install / --uninstall / --update:\n");
+    printf("                         print every action the operation would take without\n");
+    printf("                         touching the filesystem or calling launchctl. Root\n");
+    printf("                         is also skipped (no privileged ops execute).\n");
     printf("\nConfig file format (%s):\n", DEFAULT_CONFIG_PATH);
     printf("  [general]\n");
     printf("  path = /dev/cu.serial1\n");
@@ -231,6 +239,9 @@ static struct option long_options[] = {
     {"self-test-json", no_argument,  NULL, 'J'},
     {"safe-test",  no_argument,       NULL, 'T'},
     {"safe-test-json", no_argument,  NULL, 'K'},
+    /* Long-form only; no short alias. Gates side-effects in
+     * service_install / _uninstall / _update (v2.5.1+). */
+    {"dry-run",    no_argument,       NULL, 'n'},
     /* Legacy long-form aliases */
     {"daemon",     no_argument,       NULL, 'd'},
     {"device",     required_argument, NULL, 'p'},
@@ -276,6 +287,7 @@ int main(int argc, char *argv[])
         case 'J': cfg.do_selftest = 1; cfg.selftest_json = 1; break;
         case 'T': cfg.do_safetest = 1; break;
         case 'K': cfg.do_safetest = 1; cfg.safetest_json = 1; break;
+        case 'n': cfg.dry_run = 1; break;  /* --dry-run, gates service.c side-effects */
         default:  print_usage(argv[0]); return 1;
         }
     }
@@ -283,9 +295,9 @@ int main(int argc, char *argv[])
     if (cfg.dump_conf) { dump_config(&cfg); return 0; }
     if (cfg.do_selftest) return selftest_run(cfg.selftest_json);
     if (cfg.do_safetest) return safetest_run(cfg.safetest_json);
-    if (cfg.update_path) return service_update(cfg.update_path);
-    if (cfg.do_install) return service_install();
-    if (cfg.do_uninstall) return service_uninstall();
+    if (cfg.update_path) return service_update(cfg.update_path, cfg.dry_run);
+    if (cfg.do_install) return service_install(cfg.dry_run);
+    if (cfg.do_uninstall) return service_uninstall(cfg.dry_run);
 
     /* Initialize logging */
     const char *logfile = cfg.logfile;

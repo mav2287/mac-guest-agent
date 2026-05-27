@@ -2,6 +2,9 @@
 
 ## v2.5.1 (unreleased)
 
+### Added
+- **`--dry-run` flag for `--install` / `--uninstall` / `--update`.** Plumbed through `src/service.c` so the three handlers gate every side-effect (filesystem writes, file copies, `unlink`, `rename`, `launchctl` calls) on the flag and print "DRY RUN: would ..." lines instead. Root check is also skipped in dry-run because no privileged operations execute. Non-destructive validation (binary path existence, executable bit) still runs — so a `--update /no/such/file --dry-run` invocation fails fast with the right error, exactly as the real `--update` would. Pairs with `scripts/install.sh --dry-run` (added in v2.5.0): the script side covers download / path resolution / cp + chmod planning, the binary side covers the LaunchDaemon plist write, log rotation config, and launchctl load/start. Together they give end-to-end smoke-testability of the install flow without root or a clean VM. Help text + manpage + `docs/CLI.md` updated.
+
 ### Removed
 - **`cfg.method` config field and `-m` / `--method` CLI flag.** The field was already vestigial in v2.5.0 — VirtIO transport was removed, leaving `auto` and `isa-serial` as functionally identical synonyms with no behavior to gate (channel selection in `src/channel.c known_devices[]` is ISA-only regardless). v2.5.1 removes the field from `struct config`, removes `DEFAULT_METHOD`, drops the `-m`/`--method` flag (getopt returns "unknown option"), drops the `method =` line from `--dump-conf` output, and updates help text + `configs/qemu-ga.conf` accordingly. Use `-p PATH` / `path = /dev/cu.serial1` (which already exists) for explicit device-path override.
 

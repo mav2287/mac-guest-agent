@@ -25,8 +25,9 @@ custom kernel extensions or SIP modifications are required.
 Run as a daemon. Log output goes to the log file instead of stderr.
 .TP
 .BR \-p ", " \-\-path " " \fIPATH\fR
-Specify the serial device path. Default: auto-detect from known paths
-including /dev/cu.serial1 (ISA) and /dev/cu.org.qemu.guest_agent.0 (VirtIO).
+Specify the serial device path. Default: auto-detect from known ISA paths
+(/dev/cu.serial1, /dev/cu.serial2, /dev/cu.serial and tty equivalents).
+VirtIO transport was removed in v2.5.0 \(em see CHANGELOG.
 .TP
 .BR \-l ", " \-\-logfile " " \fIPATH\fR
 Log file path. Default: /var/log/mac-guest-agent.log when daemonized.
@@ -66,6 +67,14 @@ Install as a macOS LaunchDaemon system service.
 .TP
 .B \-\-uninstall
 Remove the LaunchDaemon service and binary.
+.TP
+.B \-\-dry\-run
+When combined with \fB\-\-install\fR, \fB\-\-uninstall\fR, or \fB\-\-update\fR,
+print every action the operation would take without touching the filesystem
+or calling launchctl. Root is also skipped (no privileged operations
+execute). Available v2.5.1+. Used by
+.B scripts/install.sh \-\-dry\-run
+for end-to-end smoke testing the install flow without affecting the host.
 .TP
 .B \-\-self\-test
 Run environment diagnostics and report readiness. Checks macOS version,

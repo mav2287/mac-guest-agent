@@ -7,10 +7,18 @@
 #define LOG_PATH        "/var/log/mac-guest-agent.log"
 #define SHARE_PATH      "/usr/local/share/mac-guest-agent"
 
-int service_install(void);
-int service_uninstall(void);
+/* All three handlers accept a `dry_run` flag (added in v2.5.1). When set,
+ * the function performs every non-destructive check (path validation,
+ * permission inspection, etc.) and prints the actions it WOULD take —
+ * but does not touch the filesystem or call launchctl. Root is also
+ * skipped in dry-run mode because no privileged operations execute.
+ * Used by scripts/install.sh --dry-run for end-to-end smoke testing
+ * the install flow without affecting the host. */
+int service_install(int dry_run);
+int service_uninstall(int dry_run);
 
-/* Update from a local binary file. Stops service, replaces binary, restarts. */
-int service_update(const char *new_binary_path);
+/* Update from a local binary file. Stops service, replaces binary, restarts.
+ * dry_run flag: see comment above. */
+int service_update(const char *new_binary_path, int dry_run);
 
 #endif

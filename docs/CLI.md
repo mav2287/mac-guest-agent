@@ -22,6 +22,10 @@ Compatible with the Linux `qemu-ga`:
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
       --update PATH      Update binary from local file
+      --dry-run          Combined with --install/--uninstall/--update: print
+                         every action without touching the filesystem or
+                         calling launchctl. Root check is also skipped
+                         (no privileged operations execute). v2.5.1+.
 ```
 
 ## Configuration File
