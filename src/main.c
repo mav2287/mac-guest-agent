@@ -121,11 +121,11 @@ static void parse_config_file(const char *path, config_t *cfg)
         else if (strcmp(key, "verbose") == 0)
             cfg->verbose = (strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
         else if (strcmp(key, "method") == 0) {
-            /* v2.6.0: the `method` config key is no longer used. The field
+            /* v2.5.1: the `method` config key is no longer used. The field
              * existed in v2.4.x to express ISA-vs-VirtIO transport intent;
              * v2.5.0 removed VirtIO transport entirely, leaving the field
              * with no behavior to gate (auto / isa-serial were synonyms).
-             * The field is removed from the agent in v2.6.0 — see CHANGELOG.
+             * The field is removed from the agent in v2.5.1 — see CHANGELOG.
              *
              * To avoid breaking existing /etc/qemu/qemu-ga.conf files that
              * still carry `method = auto` or similar from earlier releases,
@@ -133,7 +133,7 @@ static void parse_config_file(const char *path, config_t *cfg)
              * notice on stderr. Removing the line entirely is the cleanest
              * fix on the operator side; this branch is the migration ramp. */
             fprintf(stderr,
-                "notice: the `method` config key was removed in v2.6.0 and "
+                "notice: the `method` config key was removed in v2.5.1 and "
                 "is ignored. This agent uses ISA serial only (v2.5.0+); "
                 "transport selection has no other knobs to set. Remove the "
                 "`method = %s` line from %s to silence this notice.\n",
