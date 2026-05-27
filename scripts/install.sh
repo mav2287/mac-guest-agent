@@ -20,7 +20,7 @@ check_root() {
     fi
 }
 
-# v2.4.4+: universal-only release. No per-arch detection for asset selection
+# v2.5.0+: universal-only release. No per-arch detection for asset selection
 # (the universal binary contains i386 + x86_64 + arm64 slices; dyld picks at
 # load time). We still validate the host arch is one we ship a slice for, so
 # unsupported architectures (e.g., PowerPC Tiger/Leopard) fail early with a
@@ -68,7 +68,7 @@ main() {
             BINARY="$2"
         # Search order: release asset name first (what users actually transfer
         # from a modern machine), then in-tree build outputs, then legacy
-        # generic names kept for pre-v2.4.4 recovery flows.
+        # generic names kept for pre-v2.5.0 recovery flows.
         elif [ -f "./${BINARY_NAME}-darwin-universal" ]; then
             BINARY="./${BINARY_NAME}-darwin-universal"
         elif [ -f "/tmp/${BINARY_NAME}-darwin-universal" ]; then

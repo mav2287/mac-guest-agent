@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.4.4
+VERSION := 2.5.0
 BUILD_DIR := build
 DIST_DIR := dist
 
@@ -105,7 +105,7 @@ build-arm64: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 $(SRCS) $(LDFLAGS)
 	@echo "arm64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-arm64"
 
-# Tri-fat universal binary (i386 + x86_64 + arm64) — the v2.4.4+ canonical artifact.
+# Tri-fat universal binary (i386 + x86_64 + arm64) — the v2.5.0+ canonical artifact.
 # dyld picks the right slice at load time across macOS 10.4 Tiger → 26 Tahoe.
 build-universal: build-i386 build-x86_64 build-arm64
 	@echo "Creating tri-fat universal binary (i386 + x86_64 + arm64)..."
@@ -148,7 +148,7 @@ install: build
 	sudo cp docs/mac-guest-agent.8 /usr/local/share/man/man8/
 	@echo "Man page installed (try: man mac-guest-agent)"
 
-# Build .pkg installer (double-click or sudo installer -pkg) — universal only (v2.4.4+)
+# Build .pkg installer (double-click or sudo installer -pkg) — universal only (v2.5.0+)
 pkg: build-all
 	@./scripts/build-pkg.sh universal
 
@@ -273,7 +273,7 @@ check: build
 
 # Create release distribution
 dist: build-all
-	@echo "Creating distribution (universal-only, v2.4.4+)..."
+	@echo "Creating distribution (universal-only, v2.5.0+)..."
 	@rm -rf $(DIST_DIR) && mkdir -p $(DIST_DIR)
 	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-universal $(DIST_DIR)/$(PROGRAM_NAME)-darwin-universal
 	@cd $(DIST_DIR) && shasum -a 256 * > checksums.sha256
@@ -298,7 +298,7 @@ help:
 	@echo "  build-i386      Build i386 (10.4+)"
 	@echo "  build-x86_64    Build x86_64 (10.6+)"
 	@echo "  build-arm64     Build arm64 (11.0+)"
-	@echo "  build-universal Build tri-fat (i386+x86_64+arm64) — the v2.4.4+ canonical artifact"
+	@echo "  build-universal Build tri-fat (i386+x86_64+arm64) — the v2.5.0+ canonical artifact"
 	@echo "  build-all       Build all architectures"
 	@echo ""
 	@echo "Other targets:"

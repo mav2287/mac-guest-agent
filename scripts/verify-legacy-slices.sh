@@ -6,7 +6,7 @@
 # Defaults: build/mac-guest-agent-universal, tests
 # Exit code: 0 if all invariants hold; non-zero (with ::error::) on first failure.
 #
-# Invariants are the contract that the v2.4.4 universal binary must satisfy
+# Invariants are the contract that the v2.5.0 universal binary must satisfy
 # to be safe for macOS 10.4 through current. Derived from universal_upgrade.md
 # §3.3 / §6.2 + Apple's mach-o/loader.h LC_REQ_DYLD semantics.
 
