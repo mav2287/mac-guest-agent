@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.6.0 (unreleased)
+
+### Removed
+- **`cfg.method` config field and `-m` / `--method` CLI flag.** The field was already vestigial in v2.5.0 — VirtIO transport was removed, leaving `auto` and `isa-serial` as functionally identical synonyms with no behavior to gate (channel selection in `src/channel.c known_devices[]` is ISA-only regardless). v2.6.0 removes the field from `struct config`, removes `DEFAULT_METHOD`, drops the `-m`/`--method` flag (getopt returns "unknown option"), drops the `method =` line from `--dump-conf` output, and updates help text + `configs/qemu-ga.conf` accordingly. Use `-p PATH` / `path = /dev/cu.serial1` (which already exists) for explicit device-path override.
+
+  **Migration:** existing `/etc/qemu/qemu-ga.conf` files that still contain `method = auto`, `method = isa-serial`, or `method = virtio-serial` lines will continue to parse — the parser accepts the key and emits a one-time notice on stderr ("the `method` config key was removed in v2.6.0 and is ignored …") pointing the user at removing the line. No exit, no error. The v2.5.0 hard-rejection of `method = virtio-serial` softens to the same deprecation notice because the field no longer has any behavior to misconfigure.
+
+  **Why now:** the ISA-only transport decision in v2.5.0 collapsed the field's value space from three distinguishable options (`auto` / `isa-serial` / `virtio-serial`) to one (any value → ignored), making the surface honest about there being no choice. Keeping the field cost ~15 lines of code spread across `src/main.c` plus a doc paragraph explaining why it existed but did nothing.
+
 ## v2.5.0 — 2026-05-27
 
 ### ⚠️ BREAKING CHANGE — release asset filename

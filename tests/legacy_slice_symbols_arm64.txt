@@ -36,7 +36,6 @@ _endutxent
 _execl
 _execv
 _execvp
-_exit
 _fchmod
 _fchown
 _fclose
