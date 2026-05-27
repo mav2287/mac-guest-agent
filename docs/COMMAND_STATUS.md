@@ -51,7 +51,7 @@ All 45 registered commands with their actual status, Linux parity, and requireme
 | `guest-get-fsinfo` | disk | stable | full | no | Via getmntinfo + statfs |
 | `guest-get-diskstats` | disk | stable | partial | no | IOKit `IOBlockStorageDriver` Statistics → 6 spec fields (read/write sectors/ios/ticks); 9 Linux-only fields (merges, discard*, in-flight, io-ticks, time-in-queue) zero-valued; major/minor=0 (no macOS equivalent) |
 | `guest-fsfreeze-freeze` | fs | caveated | partial | yes | sync + F_FULLFSYNC + continuous sync. APFS snapshot on 10.13+. Not kernel-level FIFREEZE. |
-| `guest-fsfreeze-freeze-list` | fs | caveated | partial | yes | Same handler as freeze (mountpoint list not yet filtered) |
+| `guest-fsfreeze-freeze-list` | fs | caveated | partial | yes | Subset freeze: filters by supplied `mountpoints` array (freezes only listed paths). Empty/absent list behaves like `guest-fsfreeze-freeze` (all). Subset freezes skip the container-level APFS snapshot. See `docs/BACKUP.md` and `src/cmd-fs.c handle_fsfreeze_freeze_list()`. |
 | `guest-fsfreeze-thaw` | fs | caveated | partial | yes | Cleans up APFS snapshot, runs thaw hooks |
 | `guest-fsfreeze-status` | fs | stable | full | no | Reflects actual freeze state |
 | `guest-fstrim` | fs | no-op | divergent | — | macOS handles TRIM natively via discard=on + ssd=1. See README. |

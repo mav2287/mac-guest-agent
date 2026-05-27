@@ -93,8 +93,9 @@ Notes:
 Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 - **Apple16X50Serial.kext** presence, bundle version, and IOPCIClassMatch (must be `0x07000000&0xFFFF0000` = PCI class 0x0700 Serial Controller, which matches QEMU ISA serial)
-- **19 required C library symbols** in system sub-libraries: `getifaddrs`, `freeifaddrs`, `getutxent`, `endutxent`, `getloadavg`, `getmntinfo`, `getpwnam`, `sysctlbyname`, `gettimeofday`, `settimeofday`, `host_statistics`, `poll`, `strtok_r`, `fcntl`, `sync`, `tcgetattr`, `tcsetattr`, `tcflush`, `tcdrain`
-- **1 optional symbol** (weak-imported): `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent falls back to `vm_stat` text parsing when unavailable.
+- **All required libc symbols** as defined by the agent's checked-in undefined-symbol baseline (`tests/legacy_slice_symbols_x86_64.txt` and `…_i386.txt`, ~133 libc symbols after framework and weak imports are separated out). Versioning suffixes (`$INODE64`, `$1050`, etc.) are stripped during the check because nm reports the unversioned name. The installer verifier derives the required-symbol list directly from this baseline rather than hand-curating it — the baseline IS the source of truth for what the agent links against, and an installer that lacks any of those symbols will fail to host the agent.
+- **1 weak-imported symbol**: `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent's i386 and x86_64 slices weak-import this via `__attribute__((weak_import))` in `src/cmd-hardware.c` so dyld resolves it to NULL on Tiger instead of refusing to load; the agent falls back to `vm_stat` text parsing when the symbol is absent. The verifier reports present/absent without failing.
+- **14 framework symbols** in the baseline (`_CF*`, `_kCF*`, `_IO*`) — checked at the framework-directory level (CoreFoundation.framework, IOKit.framework presence) rather than per-symbol, since the framework binaries are stable Apple-managed surfaces.
 - **CoreFoundation.framework** and **IOKit.framework** presence
 - Required tools: `sw_vers`, `diskutil`, `sysctl`, `shutdown`, `launchctl`
 - APFS support: `diskutil` APFS references, `tmutil localsnapshot` availability
@@ -129,9 +130,9 @@ As of v2.5.0 the release ships a single tri-fat universal binary; the table belo
 |---|---|---|---|---|---|
 | i386 | 10.4 (Tiger) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
 | x86_64 | 10.6 (Snow Leopard) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
-| arm64 | 11.0 (Big Sur) | LC_MAIN | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | varies (modern) |
+| arm64 | 11.0 (Big Sur) | LC_MAIN | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | 148 |
 
-All three slices link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. Legacy slices (i386, x86_64) use `LC_UNIXTHREAD` via `-Wl,-ld_classic` + `-mmacosx-version-min=N.N` + legacy 10.13 SDK so 10.4-10.7 dyld can load them (10.8+ introduced `LC_MAIN` which older dyld rejects — see issue #4 / CHANGELOG v2.5.0). Per-slice symbol baselines live at `tests/legacy_slice_symbols_<arch>.txt` and are diffed by `scripts/verify-legacy-slices.sh` on every CI build.
+All three slices link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. Legacy slices (i386, x86_64) use `LC_UNIXTHREAD` via `-Wl,-ld_classic` + `-mmacosx-version-min=N.N` + legacy 10.13 SDK so 10.4-10.7 dyld can load them (10.8+ introduced `LC_MAIN` which older dyld rejects — see issue #4 / CHANGELOG v2.5.0). Per-slice symbol baselines live at `tests/legacy_slice_symbols_<arch>.txt` (i386 + x86_64 + arm64, all required) and are diffed by `scripts/verify-legacy-slices.sh` on every CI build. The arm64 baseline (added in audit wave 5 / MED-1) guards the Big Sur API floor — a future direct import of a macOS 12+ symbol would slip the `minos 11.0` declaration without triggering a load-command-level error, so the symbol-set diff is the actual gate.
 
 ## Architectural Transitions Covered
 

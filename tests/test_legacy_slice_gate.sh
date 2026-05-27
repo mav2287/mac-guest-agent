@@ -169,10 +169,30 @@ cp "$TESTS_DIR/legacy_slice_symbols_i386.txt"   "$TMPDIR/sab-baselines/"
     echo "_fake_sabotage_symbol_only_in_baseline"
     cat "$TESTS_DIR/legacy_slice_symbols_x86_64.txt"
 } | sort > "$TMPDIR/sab-baselines/legacy_slice_symbols_x86_64.txt"
-assert_rejects "symbol baseline drift" \
+assert_rejects "symbol baseline drift (x86_64)" \
     "x86_64 slice (undefined-symbol set drifted|symbol drift)" \
     "$BUILD_DIR/$PROGRAM-universal" \
     "$TMPDIR/sab-baselines"
+
+# --- sabotage E: arm64 symbol baseline drift --------------------------------
+
+echo "=== Sabotage E: arm64 symbol baseline drift (Big Sur API floor guard) ==="
+# Audit wave 5 MED-1: arm64 had no baseline before, so a future direct
+# import of a macOS 12+ symbol would slip past CI even though minos=11.0
+# was still declared. Now that tests/legacy_slice_symbols_arm64.txt exists
+# and is required-if-present, drift in arm64 imports must be caught the
+# same way it is for legacy slices.
+mkdir -p "$TMPDIR/sab-baselines-arm64"
+cp "$TESTS_DIR/legacy_slice_symbols_i386.txt"   "$TMPDIR/sab-baselines-arm64/"
+cp "$TESTS_DIR/legacy_slice_symbols_x86_64.txt" "$TMPDIR/sab-baselines-arm64/"
+{
+    echo "_fake_arm64_macos12_symbol"
+    cat "$TESTS_DIR/legacy_slice_symbols_arm64.txt"
+} | sort > "$TMPDIR/sab-baselines-arm64/legacy_slice_symbols_arm64.txt"
+assert_rejects "symbol baseline drift (arm64)" \
+    "arm64 slice (undefined-symbol set drifted|symbol drift)" \
+    "$BUILD_DIR/$PROGRAM-universal" \
+    "$TMPDIR/sab-baselines-arm64"
 
 # --- summary ----------------------------------------------------------------
 

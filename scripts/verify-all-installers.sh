@@ -160,23 +160,37 @@ analyze_installer() {
         done
         echo "VIRTIO_KEXT=$virtio_found"
 
-        # Critical symbols check
+        # Critical symbols check — derived from the agent's checked-in
+        # baseline (audit wave 5 MED-2). Previous hand-curated 19-symbol
+        # list went stale: checked _poll / _host_statistics which the
+        # current code uses neither, and missed real imports like _select /
+        # _getopt_long that the current binary actually links against.
         local syslib_dir="$sys_vol/usr/lib/system"
-        if [ -d "$syslib_dir" ]; then
+        local baseline_file="$SCRIPT_DIR/../tests/legacy_slice_symbols_x86_64.txt"
+        if [ ! -f "$baseline_file" ]; then
+            baseline_file="$SCRIPT_DIR/../tests/legacy_slice_symbols_i386.txt"
+        fi
+        if [ -d "$syslib_dir" ] && [ -f "$baseline_file" ]; then
             local symfile
             symfile=$(mktemp)
             nm -g "$syslib_dir"/*.dylib 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
             local sym_missing=0
-            for sym in _getifaddrs _freeifaddrs _getutxent _endutxent _getloadavg \
-                       _getmntinfo _getpwnam _sysctlbyname _gettimeofday _settimeofday \
-                       _host_statistics _poll _strtok_r _fcntl \
-                       _sync _tcgetattr _tcsetattr _tcflush _tcdrain; do
+            local raw_sym sym
+            while IFS= read -r raw_sym; do
+                [ -z "$raw_sym" ] && continue
+                # Strip versioning suffix (_select$1050 -> _select).
+                sym="${raw_sym%%\$*}"
+                # Skip framework symbols (verified via framework-directory presence
+                # check below) and the weak-imported _host_statistics64 (reported
+                # separately).
+                case "$sym" in
+                    _CF*|_kCF*|_CG*|_CGS*|_IO*|_kIO*|_host_statistics64) continue ;;
+                esac
                 if ! grep -qx "$sym" "$symfile" 2>/dev/null; then
                     sym_missing=$((sym_missing + 1))
                 fi
-            done
+            done < "$baseline_file"
             # host_statistics64 is weak-imported by the agent (10.6+ only).
-            # Reported separately, does not count as missing.
             if grep -qx _host_statistics64 "$symfile" 2>/dev/null; then
                 echo "HOST_STATISTICS64=present"
             else
