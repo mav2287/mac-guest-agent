@@ -148,7 +148,12 @@ install: build
 	sudo cp docs/mac-guest-agent.8 /usr/local/share/man/man8/
 	@echo "Man page installed (try: man mac-guest-agent)"
 
-# Build .pkg installer (double-click or sudo installer -pkg) — universal only (v2.5.0+)
+# Build .pkg installer — universal only (v2.5.0+).
+# The produced pkg is unsigned by default; supported install path is
+# `sudo installer -pkg build/mac-guest-agent-<ver>-universal.pkg -target /`.
+# For Finder-double-click distribution, set PRODUCTSIGN_IDENTITY to a
+# Developer ID Installer identity before invoking — see scripts/build-pkg.sh
+# header for the full sign / notarize flow.
 pkg: build-all
 	@./scripts/build-pkg.sh universal
 

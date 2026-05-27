@@ -5,9 +5,19 @@
 #
 # Produces: build/mac-guest-agent-<version>-<arch>.pkg
 #
-# The .pkg can be installed by:
-#   - Double-clicking in Finder
-#   - sudo installer -pkg mac-guest-agent-*.pkg -target /
+# Install (terminal — supported for both unsigned and signed packages):
+#   sudo installer -pkg build/mac-guest-agent-<version>-universal.pkg -target /
+#
+# Install (Finder double-click): only viable for SIGNED packages. Modern
+# macOS Gatekeeper rejects unsigned packages from Finder with a
+# "[pkg name] can't be opened because it is from an unidentified developer"
+# dialog. If you want a double-click-installable pkg, set the env var
+# PRODUCTSIGN_IDENTITY to a Developer ID Installer identity:
+#   PRODUCTSIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
+#       ./scripts/build-pkg.sh universal
+# The script will sign the produced pkg with productsign after pkgbuild.
+# Notarization is a separate step (xcrun notarytool submit / staple) not
+# automated here.
 #
 # Prereq: the named slice must already exist under build/. The documented
 # release flow is `make pkg`, which depends on `make build-all` and produces
@@ -67,6 +77,18 @@ chmod 755 "$STAGE/root/usr/local/bin/mac-guest-agent"
 cp docs/mac-guest-agent.8 "$STAGE/root/usr/local/share/man/man8/"
 cp configs/qemu-ga.conf "$STAGE/root/etc/qemu/qemu-ga.conf.default"
 
+# Note on `._*` entries in the BOM: pkgutil --payload-files and lsbom
+# will list one `._*` sibling per real file AND per directory (e.g.
+# `./usr/local/bin/._mac-guest-agent`, `./usr/local/._bin`). These are
+# NOT real files in the payload — `pkgutil --expand-full` shows zero
+# `._*` files in Payload/. They're pkgbuild's encoding of per-entry
+# extended-attribute / ACL metadata in the xar BOM. Suppressing them
+# would require bypassing pkgbuild entirely (custom xar packing) which
+# isn't worth the cost. They have no install-time side effect.
+# Defensive cleanup of any actual `._*` files that `cp` from HFS+
+# sources might have left behind in the staging tree:
+find "$STAGE/root" -name '._*' -delete 2>/dev/null || true
+
 # Post-install script: register the LaunchDaemon and start the service
 cat > "$STAGE/scripts/postinstall" << 'POSTEOF'
 #!/bin/bash
@@ -104,9 +126,32 @@ pkgbuild \
 echo ""
 echo "=== Package built: build/$PKG_NAME ==="
 echo ""
-echo "Install via terminal:"
+
+# Optional signing for Finder-double-click distribution.
+if [ -n "${PRODUCTSIGN_IDENTITY:-}" ]; then
+    SIGNED_PKG="build/${PKG_NAME%.pkg}-signed.pkg"
+    echo "Signing with: $PRODUCTSIGN_IDENTITY"
+    if productsign --sign "$PRODUCTSIGN_IDENTITY" "build/$PKG_NAME" "$SIGNED_PKG"; then
+        echo "  Signed package: $SIGNED_PKG"
+        echo "  (Notarization is a separate step — see xcrun notarytool / stapler.)"
+        echo ""
+    else
+        echo "  productsign FAILED — unsigned package at build/$PKG_NAME is still usable via terminal." >&2
+    fi
+fi
+
+echo "Install via terminal (works for both signed and unsigned packages):"
 echo "  sudo installer -pkg build/$PKG_NAME -target /"
-echo ""
-echo "Install via UI:"
-echo "  Double-click build/$PKG_NAME in Finder"
+
+if pkgutil --check-signature "build/$PKG_NAME" 2>/dev/null | grep -q 'Status: signed'; then
+    echo ""
+    echo "Install via UI (signed package — Finder double-click):"
+    echo "  open build/$PKG_NAME"
+else
+    echo ""
+    echo "NOTE: this package is UNSIGNED. Gatekeeper will reject a Finder"
+    echo "double-click on modern macOS. Use the terminal install above, or"
+    echo "rebuild with PRODUCTSIGN_IDENTITY set to a Developer ID Installer"
+    echo "identity (see the script header for details)."
+fi
 ls -lh "build/$PKG_NAME"

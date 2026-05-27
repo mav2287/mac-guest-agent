@@ -64,18 +64,24 @@ jobs:
       - name: Static analysis (clang --analyze)
         run: |
           echo "Running static analyzer on all source files..."
-          SRCS=$(ls src/*.c | grep -v third_party)
+          # Use a shell glob instead of `ls | grep -v` — glob expansion is
+          # safer for unusual filenames (shellcheck SC2010 / actionlint).
+          # The third_party/cJSON.c is deliberately excluded (vendored).
           FAILED=0
-          for f in $SRCS; do
+          SDK_PATH="$(xcrun --show-sdk-path)"
+          for f in src/*.c; do
+            case "$f" in
+              *third_party*) continue ;;
+            esac
             echo "  Analyzing $f..."
             clang --analyze -Isrc -Isrc/third_party \
-              -isysroot $(xcrun --show-sdk-path) \
-              -DVERSION=\"test\" $f 2>&1 | tee /tmp/analyze.out
+              -isysroot "$SDK_PATH" \
+              -DVERSION=\"test\" "$f" 2>&1 | tee /tmp/analyze.out
             if grep -q "warning:" /tmp/analyze.out; then
               FAILED=1
             fi
           done
-          if [ $FAILED -eq 1 ]; then
+          if [ "$FAILED" -eq 1 ]; then
             echo "Static analysis found issues"
             exit 1
           fi
@@ -106,10 +112,17 @@ jobs:
           xcodebuild -version || true
           clang --version | head -3 || true
           xcrun --show-sdk-version || true
-          ls /Applications/ | grep -i xcode || true
+          # `ls | grep` is a deliberate human-readable diagnostic here,
+          # not a shell programming pattern. Suppressed actionlint
+          # SC2010 by routing through a one-shot for-glob.
+          for d in /Applications/*; do
+            case "$d" in *[Xx]code*) echo "  $d" ;; esac
+          done
           echo
           echo "=== Available Xcode versions on this runner ==="
-          ls -la /Applications/ | grep -i xcode || true
+          for d in /Applications/*; do
+            case "$d" in *[Xx]code*) ls -ld "$d" ;; esac
+          done || true
           echo
           echo "=== x86_64 slice load commands (key: LC_MAIN vs LC_UNIXTHREAD) ==="
           otool -arch x86_64 -l build/mac-guest-agent-universal 2>&1 | grep -E 'cmd LC_|version |minos|sdk |platform' | head -40
