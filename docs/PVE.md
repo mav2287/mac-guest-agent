@@ -67,7 +67,7 @@ Old macOS VMs can't reach GitHub due to TLS incompatibility. Transfer the binary
 ```bash
 # On a modern machine — download the binary
 curl -L -o mac-guest-agent \
-  https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
+  https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
 
 # Copy to the VM
 scp mac-guest-agent user@<vm-ip>:/tmp/
@@ -367,7 +367,7 @@ The network adapter type (vmxnet3, e1000, virtio) does not affect the guest agen
 This PVE UI message appears when the agent hasn't responded to a ping within the timeout. Common causes:
 
 - Agent not installed (`sudo mac-guest-agent --install`)
-- Wrong agent type (`type=isa` required for pre-Big Sur)
+- Wrong agent type (`type=isa` required on every macOS version, including Big Sur+ where Apple's own agent claims the VirtIO channel — see line ~313 above for the full rationale)
 - VM needs full stop/start after changing agent config (reboot is not enough)
 - Serial device not created (check `ls /dev/cu.serial*` in the VM)
 

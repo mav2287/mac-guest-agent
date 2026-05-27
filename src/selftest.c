@@ -97,6 +97,11 @@ static void check_serial_device(void)
     const char *isa_devices[] = {
         "/dev/cu.serial1", "/dev/cu.serial2", "/dev/cu.serial", NULL
     };
+    /* VirtIO list retained ONLY to detect the v2.4.x → v2.5.0 misconfiguration
+     * mode: VM has VirtIO instead of ISA. The agent no longer uses VirtIO as
+     * a transport (see CHANGELOG v2.5.0 BREAKING), but a self-test on a
+     * VirtIO-configured VM should report what's wrong, not silently say
+     * "no serial device." */
     const char *virtio_devices[] = {
         "/dev/cu.org.qemu.guest_agent.0", "/dev/tty.org.qemu.guest_agent.0",
         "/dev/cu.virtio-console.0", "/dev/cu.virtio-serial",
@@ -123,16 +128,17 @@ static void check_serial_device(void)
 
     for (int i = 0; virtio_devices[i]; i++) {
         if (file_exists(virtio_devices[i])) {
-            add_result(ST_INFO, "serial", "VirtIO serial device", virtio_devices[i]);
             found_virtio = 1;
             break;
         }
     }
 
-    if (!found_isa && !found_virtio)
-        add_result(ST_WARN, "serial", "serial device", "no ISA or VirtIO serial device found (expected in VM with agent enabled)");
-    else if (!found_isa && found_virtio)
-        add_result(ST_INFO, "serial", "transport", "VirtIO only (type=isa recommended for broader compatibility)");
+    if (!found_isa && !found_virtio) {
+        add_result(ST_WARN, "serial", "serial device", "no ISA serial device found (v2.5.0+ requires ISA; configure type=isa on PVE, isa-serial on libvirt, QemuGuestAgent interface on UTM, -device isa-serial on raw QEMU)");
+    } else if (!found_isa && found_virtio) {
+        /* The v2.4.x → v2.5.0 footgun. Loud about it. */
+        add_result(ST_FAIL, "serial", "VirtIO-only configuration", "v2.5.0 removed VirtIO transport — reconfigure VM for ISA serial (see CHANGELOG v2.5.0 BREAKING)");
+    }
 }
 
 static void check_config(void)
@@ -511,6 +517,28 @@ static void emit_system_info(void)
         printf("\"freeze_method\":\"sync_fullfsync\",");
     else
         printf("\"freeze_method\":\"sync_only\",");
+
+    /* Which slice of the universal binary dyld actually picked at load
+     * time. Compile-time constant — set per slice during the tri-fat build.
+     * Both "arch" (uname(2) uts.machine) and "selected_arch" report the
+     * running process slice, not the host hardware: under Rosetta, uname()
+     * inside an x86_64 process on arm64 hardware returns "x86_64", so the
+     * two fields agree. selected_arch is kept as the compile-time-derived
+     * source of truth (arch can drift if a host's uname is virtualized or
+     * unavailable), and gives evidence-drop readers an unambiguous "which
+     * slice ran" without having to parse `arch` semantics per platform. */
+    const char *selected_arch =
+#if defined(__i386__)
+        "i386"
+#elif defined(__x86_64__)
+        "x86_64"
+#elif defined(__arm64__)
+        "arm64"
+#else
+        "unknown"
+#endif
+        ;
+    printf("\"selected_arch\":\"%s\",", selected_arch);
 
     /* Command count */
     printf("\"command_count\":%d", commands_count());

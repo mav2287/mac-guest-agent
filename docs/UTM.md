@@ -14,18 +14,24 @@ The guest agent turns a UTM VM from a "window with a desktop" into a **managed v
 
 ## Setup
 
-### 1. Add a Serial Device in UTM
+> **Transport choice.** As of v2.5.0 the agent supports **ISA serial only** across every host class (Proxmox VE, libvirt, raw QEMU, UTM Emulate backend). VirtIO transport was removed — see the [v2.5.0 BREAKING entry in CHANGELOG.md](../CHANGELOG.md) for the migration path from v2.4.x. The ISA-only contract avoids the VZ-backed conflict described in [Apple Silicon Notes](#apple-silicon-notes) below, gives one install/launchd config everywhere, and survives moving a disk image between host classes without reinstall.
+
+### 1. Add a Serial Device in UTM (QEMU backend)
 
 1. Open the VM settings in UTM
 2. Go to **Devices** (or **Serial** section depending on UTM version)
-3. Add a **Serial** device with **VirtIO** type
-4. The VM will get `/dev/cu.virtio` and `/dev/tty.virtio`
+3. Add a **Serial** device:
+   - **Interface:** *QemuGuestAgent* (UTM provisions a host-side Unix socket the agent can be reached on — same mechanism `utmctl exec` uses internally and what `scripts/verify.sh --transport utm` talks to)
+   - For a manually managed socket, leave the Interface as a generic serial and set **Mode: Unix socket** with a known path
+4. The VM will get `/dev/cu.serial1` (or similar `/dev/cu.serial*`)
+
+> Older UTM guidance (and v2.4.x of this agent) suggested adding a VirtIO interface and using `/dev/cu.virtio`. **That path was removed in v2.5.0.** If you upgraded from v2.4.x and previously had VirtIO Serial configured, the agent will refuse to start with a "No ISA serial device found" message pointing here; reconfigure the VM with a Serial device whose Interface is **QemuGuestAgent** (ISA-backed) and restart. On Virtualization.framework-backed macOS guests the VirtIO console is claimed by Apple's own 18-command agent regardless ([Apple Silicon Notes](#apple-silicon-notes)), so the v2.5.0 ISA-only contract also closes that quiet-failure mode.
 
 ### 2. Install the Agent
 
 ```bash
 # Inside the macOS VM
-sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
+sudo cp mac-guest-agent-darwin-universal /usr/local/bin/mac-guest-agent
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
@@ -39,8 +45,10 @@ sudo mac-guest-agent --self-test
 
 The self-test should show:
 ```
-  PASS  VirtIO serial device: /dev/cu.virtio
+  PASS  ISA serial device: /dev/cu.serial1 (r=yes w=yes)
 ```
+
+If your VM was set up with a VirtIO Serial Interface (older UTM guidance, or any v2.4.x install that worked via the VirtIO fallback), the agent will refuse to start in v2.5.0 with a "Found VirtIO serial device but VirtIO transport was removed" message — reconfigure the Serial device's Interface to **QemuGuestAgent** (ISA-backed) and fully stop/start the VM. See [CHANGELOG v2.5.0 BREAKING](../CHANGELOG.md) for the migration steps.
 
 ### 4. Verify end-to-end from the host (`scripts/verify.sh`)
 
@@ -180,18 +188,21 @@ For most use cases, SSH is simpler than raw serial access. The serial channel is
 ### Agent not finding the serial device
 
 ```bash
-# Check what serial devices exist
-ls -la /dev/cu.virtio* /dev/tty.virtio* 2>/dev/null
+# Check what serial devices exist. v2.5.0+ only uses ISA paths;
+# if a VirtIO device shows here, the agent will refuse to start
+# and tell you to reconfigure (see CHANGELOG v2.5.0 BREAKING).
 ls -la /dev/cu.serial* /dev/tty.serial* 2>/dev/null
+ls -la /dev/cu.virtio* /dev/tty.virtio* 2>/dev/null
 
 # Run self-test to see what's detected
 sudo mac-guest-agent --self-test
 ```
 
-If no VirtIO device appears:
-1. Verify the Serial device is added in UTM's VM settings
-2. Verify it's set to **VirtIO** type (not Legacy)
-3. Restart the VM after adding the device
+If no serial device appears:
+1. Verify a Serial device is added in UTM's VM settings (Devices → Serial)
+2. For the supported path, set **Interface: QemuGuestAgent** (gives an ISA-backed `/dev/cu.serial*` plus a host-side socket UTM manages)
+3. Fully stop and start the VM after adding the device — a reboot inside the guest is not enough; QEMU needs to recreate the device on launch
+4. If you're on UTM's Virtualization.framework backend (arm64 macOS guest on an Apple Silicon host), see [Apple Silicon Notes](#apple-silicon-notes) — VirtIO console is claimed by Apple's own agent on VZ-backed VMs, and the recommended fix is switching the VM to UTM's QEMU backend
 
 ### utmctl not finding the VM
 
@@ -209,9 +220,22 @@ open -a UTM
 
 ## Apple Silicon Notes
 
-UTM on Apple Silicon uses Apple's Virtualization.framework for arm64 macOS guests. The guest agent works with both:
+UTM on Apple Silicon supports two backends for macOS guests, and the transport story is different for each:
 
-- **Virtualization.framework VMs** (arm64 macOS on arm64 host) — uses `/dev/cu.virtio`
-- **QEMU-emulated VMs** (x86_64 macOS via emulation) — uses standard QEMU serial paths
+### QEMU backend (recommended)
 
-For arm64 VMs, use the `mac-guest-agent-darwin-arm64` binary. For emulated x86_64 VMs, use `mac-guest-agent-darwin-amd64`.
+Works the same way as on Intel hosts: ISA serial via the **QemuGuestAgent** interface (or any other Mode that surfaces an ISA UART to the guest). The agent loads its arm64 slice on arm64 guests and its x86_64 slice on x86_64-emulated guests — same `mac-guest-agent-darwin-universal` binary, dyld picks the slice at load time.
+
+This is the supported path.
+
+### Apple Virtualization.framework backend (VZ)
+
+UTM's "Virtualize" mode for arm64 macOS guests uses Apple's `Virtualization.framework` directly rather than QEMU. The VZ runtime provisions a virtio-console channel automatically and **Apple's own `AppleQEMUGuestAgent` claims that channel** as part of the guest OS bootstrap (matched via `AppleVirtIOAgentDevice` / `applevirtio.console`). That agent ships ~18 basic commands and does not implement freeze. Adding `mac-guest-agent` to the same VirtIO channel either fails to open it or conflicts with Apple's daemon, depending on launch order.
+
+Workarounds, in order of preference:
+
+1. **Switch the VM to UTM's QEMU backend.** Slower (no Virtualization.framework acceleration on arm64 macOS guests, so guest performance drops noticeably) but gets you ISA serial, the supported transport, and the full 45-command surface including freeze. This is the recommended fix if you need this agent's full feature set.
+2. **Live with Apple's 18-command agent.** If you only need ping / get-osinfo / network / shutdown and don't need freeze or guest-exec, Apple's built-in agent is fine — just don't install this one.
+3. **Custom advanced configuration.** Disabling Apple's daemon manually or convincing VZ to expose an additional serial channel is possible but undocumented by Apple and likely to break across macOS updates. Not supported.
+
+This conflict only affects arm64 macOS guests on Apple Silicon hosts using UTM's Virtualize backend. Intel macOS guests on any host, and arm64 macOS guests under UTM's QEMU backend, are unaffected.

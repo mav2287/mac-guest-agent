@@ -91,4 +91,38 @@ if [ -n "$README_CLAIM" ] && [ "$README_CLAIM" != "$BINARY_COUNT" ]; then
     ERRORS=1
 fi
 
+# Check manpage template command count (LOW-4 in audit wave 5).
+# The template line we're checking is "The agent registers N QGA commands".
+# Counts get re-stamped into docs/mac-guest-agent.8 via make, so the
+# template is the source of truth.
+MANPAGE_TEMPLATE="docs/mac-guest-agent.8.in"
+if [ -f "$MANPAGE_TEMPLATE" ]; then
+    MANPAGE_CLAIM=$(grep -oE 'registers [0-9]+ QGA commands' "$MANPAGE_TEMPLATE" | grep -oE '[0-9]+' | head -1)
+    if [ -n "$MANPAGE_CLAIM" ] && [ "$MANPAGE_CLAIM" != "$BINARY_COUNT" ]; then
+        echo "ERROR: $MANPAGE_TEMPLATE claims $MANPAGE_CLAIM commands but binary has $BINARY_COUNT"
+        echo "       Fix the template and run 'make docs/mac-guest-agent.8' to regenerate."
+        ERRORS=1
+    fi
+fi
+
+# Check ARCHITECTURE.md command count
+ARCH_DOC="docs/ARCHITECTURE.md"
+if [ -f "$ARCH_DOC" ]; then
+    ARCH_CLAIM=$(grep -oE 'registry \([0-9]+ commands\)' "$ARCH_DOC" | grep -oE '[0-9]+' | head -1)
+    if [ -n "$ARCH_CLAIM" ] && [ "$ARCH_CLAIM" != "$BINARY_COUNT" ]; then
+        echo "ERROR: $ARCH_DOC claims $ARCH_CLAIM commands but binary has $BINARY_COUNT"
+        ERRORS=1
+    fi
+fi
+
+# Check that the freeze-list claim in COMMAND_STATUS.md hasn't reverted
+# to the pre-implementation wording. The actual handler
+# (src/cmd-fs.c handle_fsfreeze_freeze_list) filters by mountpoints;
+# the prior doc said "mountpoint list not yet filtered" which is wrong.
+if grep -q 'guest-fsfreeze-freeze-list.*mountpoint list not yet filtered' "$DOC_FILE"; then
+    echo "ERROR: $DOC_FILE still claims guest-fsfreeze-freeze-list doesn't filter mountpoints,"
+    echo "       but src/cmd-fs.c handle_fsfreeze_freeze_list() does filter. Update the row."
+    ERRORS=1
+fi
+
 exit $ERRORS

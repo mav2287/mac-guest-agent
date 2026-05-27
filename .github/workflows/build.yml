@@ -12,7 +12,32 @@ env:
 jobs:
   # Build binaries and run static analysis on the latest runner
   build:
-    runs-on: macos-latest
+    # The load-bearing workaround for the LC_MAIN-on-legacy-slice problem is
+    # `-Wl,-ld_classic` in Makefile build-i386 and build-x86_64. ld-classic
+    # honors -mmacosx-version-min for entry-point selection (emits
+    # LC_UNIXTHREAD on the i386 + x86_64 slices) where the default ld-prime
+    # (Xcode 15+) hardcodes LC_MAIN for x86_64 regardless of the min-flag.
+    # macOS 10.6/10.7 dyld treats LC_MAIN as an unknown required load
+    # command and aborts with SIGTRAP — this was issue #4 (v2.4.3).
+    #
+    # macos-14 ships Xcode 15.x; macos-latest currently ships Xcode 16.x and
+    # also accepts `-Wl,-ld_classic` (validated by the canary job below).
+    # We keep the build job on macos-14 for a known toolchain. The canary
+    # exercises macos-latest with the same recipe; do not promote it to
+    # required without at least two consecutive successful runs.
+    #
+    # Fragility: Apple has deprecated ld-classic and warns it will be
+    # removed in a future release. When the canary starts failing, the
+    # fallback chain is: (1) confirm macos-latest still accepts the flag
+    # via the canary's toolchain report, (2) if not, retry with a Homebrew
+    # cctools `ld`, (3) if no Apple-side linker honors the min-flag,
+    # produce the legacy slices in a container with a frozen older Xcode
+    # CLT. Do not block a release on macos-14 disappearing — repin to
+    # macos-latest first and rely on the canary's prior green history.
+    #
+    # macos-13 was tried first; GHA capacity for macos-13 is now severely
+    # limited (queued 8+ minutes without allocation).
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -39,61 +64,82 @@ jobs:
       - name: Static analysis (clang --analyze)
         run: |
           echo "Running static analyzer on all source files..."
-          SRCS=$(ls src/*.c | grep -v third_party)
+          # Use a shell glob instead of `ls | grep -v` — glob expansion is
+          # safer for unusual filenames (shellcheck SC2010 / actionlint).
+          # The third_party/cJSON.c is deliberately excluded (vendored).
           FAILED=0
-          for f in $SRCS; do
+          SDK_PATH="$(xcrun --show-sdk-path)"
+          for f in src/*.c; do
+            case "$f" in
+              *third_party*) continue ;;
+            esac
             echo "  Analyzing $f..."
             clang --analyze -Isrc -Isrc/third_party \
-              -isysroot $(xcrun --show-sdk-path) \
-              -DVERSION=\"test\" $f 2>&1 | tee /tmp/analyze.out
+              -isysroot "$SDK_PATH" \
+              -DVERSION=\"test\" "$f" 2>&1 | tee /tmp/analyze.out
             if grep -q "warning:" /tmp/analyze.out; then
               FAILED=1
             fi
           done
-          if [ $FAILED -eq 1 ]; then
+          if [ "$FAILED" -eq 1 ]; then
             echo "Static analysis found issues"
             exit 1
           fi
           echo "Static analysis clean"
 
-      - name: Build all architectures
-        run: make build-all
-
-      - name: Download legacy SDK and build i386
+      - name: Download legacy SDK (used for i386 + x86_64 legacy builds)
         run: |
-          curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          # SDK choice per universal_upgrade.md Step 0 (10.6 SDK rejected; 10.13 used)
+          curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
+          actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
+          [ "$actual" = "$EXPECTED_SHA256" ] || { echo "::error::SDK checksum mismatch: $actual != $EXPECTED_SHA256"; exit 1; }
           tar xf /tmp/sdk.tar.xz -C /tmp
-          make build-i386 I386_SDK=/tmp/MacOSX10.13.sdk
 
-      - name: Check binaries
+      - name: Build tri-fat universal (i386 + x86_64 + arm64)
+        run: make build-all LEGACY_SDK=/tmp/MacOSX10.13.sdk
+
+      - name: Check binary metadata
         run: |
-          echo "=== i386 ==="
-          file build/mac-guest-agent-i386
-          echo "Size: $(du -h build/mac-guest-agent-i386 | cut -f1)"
-          echo ""
-          echo "=== x86_64 ==="
-          file build/mac-guest-agent-x86_64
-          otool -l build/mac-guest-agent-x86_64 | grep -A 3 "LC_VERSION_MIN"
-          echo "Size: $(du -h build/mac-guest-agent-x86_64 | cut -f1)"
-          echo ""
-          echo "=== arm64 ==="
-          file build/mac-guest-agent-arm64
-          otool -l build/mac-guest-agent-arm64 | grep -A 3 "LC_BUILD_VERSION"
-          echo "Size: $(du -h build/mac-guest-agent-arm64 | cut -f1)"
-          echo ""
-          echo "=== universal ==="
           file build/mac-guest-agent-universal
           echo "Size: $(du -h build/mac-guest-agent-universal | cut -f1)"
+          lipo -info build/mac-guest-agent-universal
 
-      - name: Verify no clock_gettime (breaks pre-10.12)
+      - name: Toolchain + slice diagnostic (debug for Xcode 16.4 LC_MAIN issue)
+        if: always()
         run: |
-          for bin in build/mac-guest-agent-x86_64 build/mac-guest-agent-arm64; do
-            if nm -u "$bin" 2>/dev/null | grep -q clock_gettime; then
-              echo "FAIL: $bin contains clock_gettime"
-              exit 1
-            fi
+          echo "=== Xcode + clang + SDKs ==="
+          xcodebuild -version || true
+          clang --version | head -3 || true
+          xcrun --show-sdk-version || true
+          # `ls | grep` is a deliberate human-readable diagnostic here,
+          # not a shell programming pattern. Suppressed actionlint
+          # SC2010 by routing through a one-shot for-glob.
+          for d in /Applications/*; do
+            case "$d" in *[Xx]code*) echo "  $d" ;; esac
           done
-          echo "OK: No clock_gettime references"
+          echo
+          echo "=== Available Xcode versions on this runner ==="
+          for d in /Applications/*; do
+            case "$d" in *[Xx]code*) ls -ld "$d" ;; esac
+          done || true
+          echo
+          echo "=== x86_64 slice load commands (key: LC_MAIN vs LC_UNIXTHREAD) ==="
+          otool -arch x86_64 -l build/mac-guest-agent-universal 2>&1 | grep -E 'cmd LC_|version |minos|sdk |platform' | head -40
+          echo
+          echo "=== i386 slice load commands ==="
+          otool -arch i386 -l build/mac-guest-agent-universal 2>&1 | grep -E 'cmd LC_|version |minos|sdk |platform' | head -40
+
+      - name: Verify legacy slices (load commands, deps, symbol baselines)
+        run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
+
+      - name: Sabotage tests — prove the verifier actually rejects bad slices
+        # Without this, the verifier's PASS on happy-path builds doesn't
+        # prove it would catch a regression. Each sabotage forces a
+        # different rejection path (LC_MAIN on legacy, wrong min,
+        # missing slice, symbol drift) and asserts the verifier exits
+        # non-zero with the expected error pattern.
+        run: LEGACY_SDK=/tmp/MacOSX10.13.sdk ./tests/test_legacy_slice_gate.sh
 
       - name: Validate docs match binary
         run: |
@@ -204,3 +250,73 @@ jobs:
           # purpose of running it. Verified 75/0 passes locally under
           # -fsanitize=address,undefined on macOS 26.
           ./tests/run_tests.sh ./build/mac-guest-agent-asan
+
+  # Canary: same build on macos-latest. PROMOTED FROM INFORMATIONAL TO
+  # REQUIRED in audit wave 5 follow-up after 10 consecutive green runs.
+  # Two specific risks this catches:
+  #   (1) Apple removes `-Wl,-ld_classic` (deprecated; warned in current
+  #       Xcode 26.5). When that happens, the build job's recipe will start
+  #       failing on whatever runner has the new Xcode.
+  #   (2) GitHub retires the macos-14 image. The release path would break
+  #       silently until someone tries a release.
+  # As a required check, a canary failure now BLOCKS PR merges. That's
+  # the desired behavior — a real linker drift on macos-latest is a real
+  # release-quality signal and should not silently go green elsewhere.
+  # If the canary breaks legitimately (Apple change, not our bug), the
+  # fallback chain documented in the `build` job header is the path to
+  # unblock: verify canary toolchain report, try Homebrew cctools, or
+  # build legacy slices in a container with a frozen older Xcode CLT.
+  canary-build-on-macos-latest:
+    name: Canary build on macos-latest (required)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download legacy SDK
+        run: |
+          curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+          EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
+          actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
+          [ "$actual" = "$EXPECTED_SHA256" ] || { echo "::error::SDK checksum mismatch"; exit 1; }
+          tar xf /tmp/sdk.tar.xz -C /tmp
+      - name: Build tri-fat universal
+        run: make build-all LEGACY_SDK=/tmp/MacOSX10.13.sdk
+      - name: Verify legacy slices
+        run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
+      - name: Report toolchain (forensic — useful when this canary starts failing)
+        if: always()
+        run: |
+          xcodebuild -version || true
+          clang --version | head -3 || true
+
+  # 32-bit portable code surrogate (Linux -m32)
+  # Catches int-width / struct-layout / endianness regressions in portable
+  # code (protocol.c + cJSON.c) without requiring access to old Intel Mac
+  # hardware. Scope per universal_upgrade.md §4.5 / D16 / H04:
+  # - INCLUDED: protocol.c (pure portable, only stdlib + cJSON deps)
+  # - INCLUDED: third_party/cJSON.c (pure portable)
+  # - EXCLUDED: util.c (#include compat.h + POSIX needs _POSIX_C_SOURCE)
+  # - EXCLUDED: log.c (loads os_log via dlfcn — macOS-specific runtime,
+  #             no equivalent on Linux glibc)
+  # - EXCLUDED: selftest.c (depends on compat_*, run_command_capture)
+  # - EXCLUDED: all cmd-*.c (macOS-specific: Mach, IOKit, launchd)
+  surrogate-32bit:
+    name: 32-bit portable code surrogate (Linux -m32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install 32-bit toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-multilib
+      - name: Build portable subset under -m32
+        run: |
+          gcc -m32 -Wall -Wextra -Werror -O2 -std=c99 \
+              -DVERSION='"surrogate-32"' \
+              -DMGA_SURROGATE_32BIT \
+              -Isrc -Isrc/third_party \
+              -o /tmp/mga-surrogate-32 \
+              tests/surrogate_32bit_main.c \
+              src/protocol.c \
+              src/third_party/cJSON.c
+      - name: Run portable unit tests under 32-bit code
+        run: /tmp/mga-surrogate-32

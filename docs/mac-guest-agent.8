@@ -4,7 +4,7 @@
 .\" Makefile. CI fails if a Makefile bump lands without regenerating.
 .\" Edit the .in for content changes; bumping just VERSION needs only
 .\" the make target.
-.TH MAC-GUEST-AGENT 8 "May 2026" "mac-guest-agent 2.4.3" "System Administration"
+.TH MAC-GUEST-AGENT 8 "May 2026" "mac-guest-agent 2.5.0" "System Administration"
 .SH NAME
 mac-guest-agent \- QEMU Guest Agent for macOS
 .SH SYNOPSIS
@@ -94,12 +94,15 @@ On Proxmox VE, set the guest agent to ISA serial mode:
 .RE
 .PP
 Then stop and start the VM (QEMU args change requires a full restart).
-On macOS 11.0 (Big Sur) and later, the default virtio-serial mode also
-works via Apple's built-in VirtIO driver.
+ISA serial is the supported default transport on every macOS version
+this agent targets (10.4 Tiger through current). On macOS 11.0 (Big
+Sur) and later the VirtIO console channel is claimed by Apple's own
+\fBAppleQEMUGuestAgent\fR on Virtualization.framework\-backed guests,
+so \fItype=isa\fR (or the QEMU equivalent for non\-PVE hypervisors)
+keeps this agent on a dedicated channel.
 .SH SUPPORTED COMMANDS
-The agent registers 44 QGA commands including aliases, macOS-specific
-approximations, and documented deviations from Linux qemu-ga. Of these,
-33 are stable, 5 caveated, 1 no-op, 2 return errors, and 3 are aliases.
+The agent registers 45 QGA commands including aliases, macOS-specific
+approximations, and documented deviations from Linux qemu-ga.
 See docs/COMMAND_STATUS.md for per-command details.
 .PP
 See

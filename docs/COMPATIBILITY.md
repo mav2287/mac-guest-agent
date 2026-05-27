@@ -28,25 +28,26 @@ macOS can be a guest in two distinct virtualisation environments, and they treat
 | **Apple Virtualization.framework** | UTM (VZ backend), `vz_run`, anything backed by `VZVirtualMachine` | IOKit-launched on-demand once the `AppleVirtIOAgentDevice` property is matched by the `applevirtio.console` driver | Claimed by Apple's agent |
 | **Plain QEMU/KVM** | Proxmox VE, libvirt, raw QEMU (typically with OpenCore for macOS guests) | Never launches — the `applevirtio.console` driver does not load on QEMU, so `AppleVirtIOAgentDevice` is never set and the IOKit match never fires | Technically free |
 
-The historical "use ISA because Apple claims VirtIO" framing is correct for the first row and oversimplified for the second. On Proxmox/QEMU/OpenCore guests, Apple's agent isn't running and the VirtIO console channel would in fact be available. We still default to ISA universally for two reasons:
+The historical "use ISA because Apple claims VirtIO" framing is correct for the first row and oversimplified for the second. On Proxmox/QEMU/OpenCore guests, Apple's agent isn't running and the VirtIO console channel would in fact be available. v2.4.x kept VirtIO entries in the channel auto-detect list as a fallback for this case (UTM Emulate backend defaults, custom QEMU command lines without `-device isa-serial`). **As of v2.5.0, the agent supports ISA serial only — the VirtIO fallback was removed.** Three reasons:
 
 1. **One transport across both host classes.** Detecting which environment we're in at runtime would require IOKit introspection and would diverge the launchd plist between VZ and QEMU installs. Using ISA everywhere keeps the install, the launchd config, and the channel-detection list (`src/channel.c`) identical on every macOS guest.
-2. **No conflict with Apple's agent on VZ.** If a user moves a disk image from QEMU to UTM (or vice versa), an ISA-based install keeps working without reinstall. A VirtIO-based install would silently conflict with `AppleQEMUGuestAgent` the moment the same image boots under Virtualization.framework.
+2. **No silent failure on VZ if a disk image moves.** A VirtIO-based install on a QEMU host that gets migrated to UTM Virtualize (or vice versa) would, in the old fallback model, silently route to Apple's 18-command agent the moment Apple's daemon claimed the VirtIO console. The operator might not notice until a backup-time freeze failed. ISA-only eliminates the failure mode entirely.
+3. **Loud over silent.** When VirtIO IS the only thing present (legacy UTM Emulate Serial, ported v2.4.x setup), v2.5.0 logs a clear error pointing at the migration path rather than picking VirtIO and hoping for the best. See `src/channel.c log_virtio_diagnostic_if_present()`.
 
-The cost is using a slightly older transport. `Apple16X50Serial.kext` has been present on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026) with an identical PCI class match — see [Kext Version Timeline](#kext-version-timeline) below — so this cost is essentially zero in practice. Apple's own `AppleQEMUGuestAgent`, where it does launch, also speaks the QGA protocol but ships only 18 commands and no filesystem freeze (per local inspection on macOS 26.5; see `docs/research/UPSTREAM_NOTES.md` Target 6 for the symbol survey). That feature gap, not the transport question, is the primary reason this project exists.
+The cost is requiring users to present an ISA UART to the guest. `Apple16X50Serial.kext` has been present on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026) with an identical PCI class match — see [Kext Version Timeline](#kext-version-timeline) below — so this cost is essentially zero on the kernel side; the operator just needs to configure the hypervisor to expose ISA (`type=isa` on PVE, isa-serial device on libvirt, QemuGuestAgent interface on UTM, `-device isa-serial` on raw QEMU). Apple's own `AppleQEMUGuestAgent`, where it does launch, also speaks the QGA protocol but ships only 18 commands and no filesystem freeze (per local inspection on macOS 26.5; see `docs/research/UPSTREAM_NOTES.md` Target 6 for the symbol survey). That feature gap, not the transport question, is the primary reason this project exists.
 
 ## macOS Version Matrix
 
 | macOS | Tier | Binary | Launches | Self-test | PVE Integration | ISA Serial | Freeze | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| **10.4 Tiger** | **1** | **i386** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. i386 binary required. `host_statistics64` absent — weak-imported, `vm_stat` text fallback (v2.4.1+). Serial transport `poll()`→`select()` in v2.4.2 — macOS `poll()` is kqueue-backed and the serial BSD client on 10.4 doesn't support the kqueue readiness path, so `poll()` returned `POLLNVAL` for `/dev/cu.serial1`. v2.4.1 `--safe-test` 21/21 PASS on 10.4.11; v2.4.2 confirmed serving over PVE — ping, get-osinfo, network, memory display, reboot/shutdown — on 10.4.11 by @vit9696 (issue #2). Freeze not yet exercised.** |
-| **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. i386 binary required.** |
-| **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target.** |
-| **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
+| **10.4 Tiger** | **1** | **i386** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v1.9** | Untested | **Intel DVD: kext v1.7 (i386+ppc). Combo update: v1.9. Same PCI class match. dyld picks the i386 slice from the universal binary. `host_statistics64` absent — weak-imported, `vm_stat` text fallback (v2.4.1+). Serial transport `poll()`→`select()` in v2.4.2 — macOS `poll()` is kqueue-backed and the serial BSD client on 10.4 doesn't support the kqueue readiness path, so `poll()` returned `POLLNVAL` for `/dev/cu.serial1`. v2.4.1 `--safe-test` 21/21 PASS on 10.4.11; v2.4.2 confirmed serving over PVE — ping, get-osinfo, network, memory display, reboot/shutdown — on 10.4.11 by @vit9696 (issue #2). Freeze not yet exercised.** |
+| **10.5 Leopard** | **2** | **i386 only** | Untested | Untested | Untested | **Kext v1.9** | Untested | **Deep verify 4/4: kext + symbols (in libc.dylib) + frameworks + PCI 0x0700. dyld picks the i386 slice from the universal binary. v2.5.0 universal binary passes static legacy-slice validation; runtime verification pending.** |
+| **10.6 Snow Leopard** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + symbols (in libSystem.B) + frameworks + PCI 0x0700. Deployment target for the x86_64 slice (the slice broken in v2.4.3 / issue #4, refixed under the LC_UNIXTHREAD recipe in v2.5.0). v2.5.0 universal binary passes static legacy-slice validation; runtime verification pending.** |
+| **10.7 Lion** | **2** | **x86_64 + i386** | Untested | Untested | Untested | **Kext v3.0** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700. v2.5.0 universal binary passes static legacy-slice validation; runtime verification pending.** |
 | **10.8 Mountain Lion** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.1** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.9 Mavericks** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.10 Yosemite** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
-| **10.11 El Capitan** | **1** | **x86_64** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v3.2** | **Yes (HFS+)** | **v2.4.3 verifier 38/0 on real Xserve3,1 metal — see [`evidence/10.11.6/`](evidence/10.11.6/). 3 freeze cycles all clean (sync + F_FULLFSYNC on HFS+ root, 4 special FS skipped). 290/290 stress, mount-verified snapshot. Deep verify 4/4** |
+| **10.11 El Capitan** | **1** | **x86_64** | **Yes** | **Yes** | **Yes (PVE)** | **Kext v3.2** | **Yes (HFS+)** | **v2.5.0 verifier 38/0 on real Xserve3,1 metal — first real-hardware confirmation of the universal binary's x86_64 slice (the same slice rebuilt under the LC_UNIXTHREAD recipe added for issue #4). See [`evidence/10.11.6/`](evidence/10.11.6/). 3 freeze cycles all clean (sync + F_FULLFSYNC on HFS+ root, 4 special FS skipped). 290/290 stress, mount-verified snapshot. Deep verify 4/4** |
 | **10.12 Sierra** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + frameworks + PCI 0x0700** |
 | **10.13 High Sierra** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + APFS + diskutil APFS** |
 | **10.14 Mojave** | **2** | **x86_64** | Untested | Untested | Untested | **Kext v3.2** | Untested | **Deep verify 4/4: kext + 20/20 symbols + APFS + diskutil APFS** |
@@ -93,8 +94,9 @@ Notes:
 Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 - **Apple16X50Serial.kext** presence, bundle version, and IOPCIClassMatch (must be `0x07000000&0xFFFF0000` = PCI class 0x0700 Serial Controller, which matches QEMU ISA serial)
-- **19 required C library symbols** in system sub-libraries: `getifaddrs`, `freeifaddrs`, `getutxent`, `endutxent`, `getloadavg`, `getmntinfo`, `getpwnam`, `sysctlbyname`, `gettimeofday`, `settimeofday`, `host_statistics`, `poll`, `strtok_r`, `fcntl`, `sync`, `tcgetattr`, `tcsetattr`, `tcflush`, `tcdrain`
-- **1 optional symbol** (weak-imported): `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent falls back to `vm_stat` text parsing when unavailable.
+- **All required libc symbols** as defined by the agent's checked-in undefined-symbol baseline (`tests/legacy_slice_symbols_x86_64.txt` and `…_i386.txt`, ~133 libc symbols after framework and weak imports are separated out). Versioning suffixes (`$INODE64`, `$1050`, etc.) are stripped during the check because nm reports the unversioned name. The installer verifier derives the required-symbol list directly from this baseline rather than hand-curating it — the baseline IS the source of truth for what the agent links against, and an installer that lacks any of those symbols will fail to host the agent.
+- **1 weak-imported symbol**: `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent's i386 and x86_64 slices weak-import this via `__attribute__((weak_import))` in `src/cmd-hardware.c` so dyld resolves it to NULL on Tiger instead of refusing to load; the agent falls back to `vm_stat` text parsing when the symbol is absent. The verifier reports present/absent without failing.
+- **14 framework symbols** in the baseline (`_CF*`, `_kCF*`, `_IO*`) — checked at the framework-directory level (CoreFoundation.framework, IOKit.framework presence) rather than per-symbol, since the framework binaries are stable Apple-managed surfaces.
 - **CoreFoundation.framework** and **IOKit.framework** presence
 - Required tools: `sw_vers`, `diskutil`, `sysctl`, `shutdown`, `launchctl`
 - APFS support: `diskutil` APFS references, `tmutil localsnapshot` availability
@@ -123,12 +125,15 @@ The ISA serial driver has been present since Mac OS X 10.4 Tiger (2005). The PCI
 
 ### Binary Evidence
 
-| Binary | Deployment Target | Load Command | Frameworks | Symbols Required |
-|---|---|---|---|---|
-| x86_64 | 10.6 (Snow Leopard) | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 121 |
-| arm64 | 11.0 (Big Sur) | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | 122 |
+As of v2.5.0 the release ships a single tri-fat universal binary; the table below describes each slice within it.
 
-Both binaries link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. All 20 critical symbols verified present in every installer-verified macOS version.
+| Slice | Deployment Target | Entry Point | Load Command | Frameworks | Undef Symbols |
+|---|---|---|---|---|---|
+| i386 | 10.4 (Tiger) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
+| x86_64 | 10.6 (Snow Leopard) | LC_UNIXTHREAD | LC_VERSION_MIN_MACOSX | CoreFoundation, IOKit, libSystem.B | 147 |
+| arm64 | 11.0 (Big Sur) | LC_MAIN | LC_BUILD_VERSION | CoreFoundation, IOKit, libSystem.B | 148 |
+
+All three slices link only against system frameworks (CoreFoundation, IOKit) and libSystem.B.dylib. No third-party dependencies. Legacy slices (i386, x86_64) use `LC_UNIXTHREAD` via `-Wl,-ld_classic` + `-mmacosx-version-min=N.N` + legacy 10.13 SDK so 10.4-10.7 dyld can load them (10.8+ introduced `LC_MAIN` which older dyld rejects — see issue #4 / CHANGELOG v2.5.0). Per-slice symbol baselines live at `tests/legacy_slice_symbols_<arch>.txt` (i386 + x86_64 + arm64, all required) and are diffed by `scripts/verify-legacy-slices.sh` on every CI build. The arm64 baseline (added in audit wave 5 / MED-1) guards the Big Sur API floor — a future direct import of a macOS 12+ symbol would slip the `minos 11.0` declaration without triggering a load-command-level error, so the symbol-set diff is the actual gate.
 
 ## Architectural Transitions Covered
 
@@ -136,10 +141,10 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 |---|---|---|---|
 | HFS+ → APFS | 10.13 High Sierra | Freeze mechanism changes | Runtime detection, APFS snapshot on 10.13+, sync-only fallback |
 | No SIP → SIP | 10.11 El Capitan | Kext loading restricted | Not applicable (ISA serial uses built-in kext) |
-| Intel → Apple Silicon | 11.0 Big Sur | Architecture change | Separate arm64 binary, universal fat binary |
-| No VirtIO → Native VirtIO | 11.0 Big Sur | Apple's `AppleQEMUGuestAgent` launches on VZ-backed hosts only — see [ISA Serial Transport — Why](#isa-serial-transport--why) | ISA serial primary on all host classes for symmetry; VirtIO devices in `src/channel.c` covered as a fallback for hosts where ISA isn't presented (UTM with the QEMU backend, custom QEMU configs without `-device isa-serial`) |
-| PPC → Intel | 10.4.4 Tiger | Architecture change | i386 Makefile target for 10.4–10.5, x86_64 from 10.6 |
-| 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 target from 10.6, i386 Makefile target for older |
+| Intel → Apple Silicon | 11.0 Big Sur | Architecture change | arm64 slice inside the tri-fat universal binary; dyld selects at load time |
+| No VirtIO → Native VirtIO | 11.0 Big Sur | Apple's `AppleQEMUGuestAgent` launches on VZ-backed hosts only — see [ISA Serial Transport — Why](#isa-serial-transport--why) | ISA serial only as of v2.5.0; v2.4.x fallback VirtIO entries removed from `src/channel.c known_devices[]`. Operators on configurations that previously relied on the fallback (UTM Emulate default, custom QEMU without `-device isa-serial`) must reconfigure the hypervisor to present an ISA UART — see CHANGELOG v2.5.0 BREAKING |
+| PPC → Intel | 10.4.4 Tiger | Architecture change | i386 slice inside the universal binary for 10.4–10.5; x86_64 slice from 10.6 |
+| 32-bit → 64-bit only | 10.6 Snow Leopard | Binary architecture | x86_64 slice from 10.6; i386 slice for older — both inside the universal binary |
 | Monolithic libc → split sub-libs | 10.7 Lion | Library layout | Symbol check adapts: libc.dylib → libSystem.B → sub-libraries |
 | Split sub-libs → dyld shared cache | 11.0 Big Sur | Library layout | Symbols not inspectable via nm but resolve at runtime |
 | bash → zsh default | 10.15 Catalina | Shell for guest-exec | Uses /bin/sh (always available), not login shell |
@@ -148,7 +153,7 @@ Both binaries link only against system frameworks (CoreFoundation, IOKit) and li
 
 | macOS | Priority | Why |
 |---|---|---|
-| 10.4 Tiger | High | Oldest supported, kext v1.9, i386 binary, validates floor |
+| 10.4 Tiger | High | Oldest supported, kext v1.9, i386 slice of the universal binary, validates floor |
 | 10.13 High Sierra | High | APFS transition — validates freeze snapshot path via tmutil |
 | 11.0 Big Sur | High | VirtIO + modern stack — validates both transports |
 | 15.x Sequoia | High | Current stable release — validates nothing has regressed |

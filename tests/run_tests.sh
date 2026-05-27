@@ -23,10 +23,31 @@ if [ ! -x "$BINARY" ]; then
     exit 1
 fi
 
-ARCH=$(file "$BINARY" | grep -o 'arm64\|x86_64\|i386' | head -1)
+# Detect binary architecture(s). For a thin binary `file` reports one arch;
+# for a fat (universal) binary it lists every slice. In the universal case
+# the plain `grep | head -1` picked the first listed slice (e.g. "i386" from
+# `[i386:... ] [x86_64:... ] [arm64:... ]`), which was misleading on modern
+# macOS where dyld actually runs the arm64 slice. Now we list all slices for
+# fat binaries and additionally probe `--self-test-json` to report the
+# runtime slice dyld picked at load time.
+ARCH_ALL=$(file "$BINARY" | grep -oE 'arm64|x86_64|i386' | sort -u | tr '\n' '+' | sed 's/+$//')
+case "$ARCH_ALL" in
+    *+*) # universal / fat binary — multiple arches listed
+        SELECTED_ARCH=$("$BINARY" --self-test-json 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["system_info"].get("selected_arch","?"))' 2>/dev/null \
+            || echo "?")
+        ARCH_LABEL="universal: ${ARCH_ALL//+/ + }, dyld selected: ${SELECTED_ARCH}"
+        ;;
+    "")
+        ARCH_LABEL="unknown"
+        ;;
+    *)
+        ARCH_LABEL="$ARCH_ALL"
+        ;;
+esac
 echo "=============================================="
 echo " macOS Guest Agent Test Suite"
-echo " Binary: $BINARY ($ARCH)"
+echo " Binary: $BINARY ($ARCH_LABEL)"
 echo " Host:   $(sw_vers -productName 2>/dev/null || echo 'unknown') $(sw_vers -productVersion 2>/dev/null || echo '')"
 echo "=============================================="
 echo ""

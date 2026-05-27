@@ -381,25 +381,36 @@ check_symbols() {
         fi
     fi
 
-    # Required symbols — agent will not function without these.
-    # (beyond basic libc like malloc/free/printf which are guaranteed)
-    local CRITICAL_SYMBOLS=(
-        _getifaddrs _freeifaddrs _getutxent _endutxent _getloadavg
-        _getmntinfo _getpwnam _sysctlbyname _gettimeofday _settimeofday
-        _host_statistics _poll _strtok_r _fcntl
-        _sync _tcgetattr _tcsetattr _tcflush _tcdrain
-    )
+    # Symbol check derived from the agent's checked-in undef-symbol baseline
+    # (audit wave 5 MED-2). The old hand-curated CRITICAL_SYMBOLS list went
+    # stale — it checked _poll and _host_statistics (the current code uses
+    # neither), and missed real imports the current binary actually needs
+    # (_select, _getopt_long, _atoll, etc.). The baseline is the source of
+    # truth for what the agent links against; using it eliminates both the
+    # false-positive ("missing _poll" on a modern installer) and false-
+    # negative ("Deep verify" passes on an installer that lacks _getopt_long).
+    local BASELINE="$REPO_DIR/tests/legacy_slice_symbols_x86_64.txt"
+    if [ ! -f "$BASELINE" ]; then
+        # i386 baseline is functionally equivalent (same source, same imports
+        # just compiled for a different arch); fall back if x86_64 baseline
+        # isn't present.
+        BASELINE="$REPO_DIR/tests/legacy_slice_symbols_i386.txt"
+    fi
+    if [ ! -f "$BASELINE" ]; then
+        fail "no baseline file found in $REPO_DIR/tests/ — cannot derive required symbols"
+        return
+    fi
 
-    # Optional symbols — agent weak-imports these and falls back when absent.
-    # Reported but not counted as failures.
-    local OPTIONAL_SYMBOLS=(
-        _host_statistics64
-    )
+    # Weak imports the agent declares with __attribute__((weak_import)).
+    # These are reported but not failed if absent. Keep in sync with the
+    # set checked by scripts/verify-legacy-slices.sh gate 3h.
+    local WEAK_IMPORTS=" _host_statistics64 "
 
-    local missing=0
-    local found=0
+    local missing=0 found=0 weak_present=0 weak_absent=0
+    local fw_skipped=0
 
-    # Dump all exported text symbols into a temp file
+    # Dump all exported text symbols into a temp file (same library
+    # selection logic as before — keyed to detected macOS version).
     local symfile
     symfile=$(mktemp)
     if [ "$use_libc" -eq 1 ]; then
@@ -410,29 +421,55 @@ check_symbols() {
         nm -g "$syslib_dir"/*.dylib 2>/dev/null | grep " T _" | awk '{print $NF}' | sort -u > "$symfile"
     fi
 
-    for sym in "${CRITICAL_SYMBOLS[@]}"; do
-        if grep -qx "$sym" "$symfile" 2>/dev/null; then
-            found=$((found + 1))
-        else
-            fail "required symbol missing: $sym"
-            missing=$((missing + 1))
-        fi
-    done
+    # Walk the baseline, strip versioning suffixes (e.g. _select$1050 →
+    # _select, _getmntinfo$INODE64 → _getmntinfo — the suffix is a linker
+    # directive that doesn't appear in nm output), categorize by prefix,
+    # and check each accordingly.
+    local raw_sym sym
+    while IFS= read -r raw_sym; do
+        [ -z "$raw_sym" ] && continue
+        sym="${raw_sym%%\$*}"
 
-    for sym in "${OPTIONAL_SYMBOLS[@]}"; do
-        if grep -qx "$sym" "$symfile" 2>/dev/null; then
-            pass "optional symbol present: $sym"
-        else
-            warn "optional symbol absent: $sym (agent will use fallback)"
-        fi
-    done
+        case "$sym" in
+            # Framework symbols — checked at the framework-directory level
+            # by check_frameworks(). Per-symbol verification against the
+            # framework binary would catch finer drift but is out of scope
+            # for this gate.
+            _CF*|_kCF*|_CG*|_CGS*|_IO*|_kIO*)
+                fw_skipped=$((fw_skipped + 1))
+                ;;
+            *)
+                # Weak vs required.
+                if [[ "$WEAK_IMPORTS" == *" $sym "* ]]; then
+                    if grep -qx "$sym" "$symfile" 2>/dev/null; then
+                        weak_present=$((weak_present + 1))
+                    else
+                        weak_absent=$((weak_absent + 1))
+                    fi
+                else
+                    if grep -qx "$sym" "$symfile" 2>/dev/null; then
+                        found=$((found + 1))
+                    else
+                        fail "required symbol missing: $sym"
+                        missing=$((missing + 1))
+                    fi
+                fi
+                ;;
+        esac
+    done < "$BASELINE"
 
     rm -f "$symfile"
 
+    if [ "$weak_present" -gt 0 ]; then
+        pass "weak-imported symbol present: _host_statistics64 (10.6+)"
+    elif [ "$weak_absent" -gt 0 ]; then
+        warn "weak-imported symbol absent: _host_statistics64 (agent uses vm_stat fallback — expected on 10.4/10.5)"
+    fi
+
     if [ "$missing" -eq 0 ]; then
-        pass "all ${#CRITICAL_SYMBOLS[@]} required symbols present"
+        pass "all $found required libc symbols from baseline present ($fw_skipped framework symbols verified separately by check_frameworks)"
     else
-        fail "$missing of ${#CRITICAL_SYMBOLS[@]} required symbols missing"
+        fail "$missing of $((found + missing)) required libc symbols missing"
     fi
 }
 
@@ -531,21 +568,10 @@ check_architecture() {
         fi
     done
 
-    if [ -z "$VERSION" ] || [ "$VERSION" = "GM" ]; then
-        return
-    fi
-
-    local major minor
-    major=$(echo "$VERSION" | cut -d. -f1)
-    minor=$(echo "$VERSION" | cut -d. -f2)
-
-    if [ "$major" -gt 10 ]; then
-        info "Agent binary: arm64 (mac-guest-agent-darwin-arm64)"
-    elif [ "$major" -eq 10 ] && [ "$minor" -ge 6 ]; then
-        info "Agent binary: x86_64 (mac-guest-agent-darwin-amd64)"
-    elif [ "$major" -eq 10 ] && [ "$minor" -lt 6 ]; then
-        info "Agent binary: i386 (mac-guest-agent-i386, if available)"
-    fi
+    # v2.5.0+: universal-only release. Same recommendation regardless of host
+    # macOS version / arch — the universal binary contains i386 + x86_64 +
+    # arm64 slices; dyld picks at load time.
+    info "Recommended binary: mac-guest-agent-darwin-universal (covers all macOS versions and architectures, one slice loads at runtime)"
 }
 
 # Resolve codename from version

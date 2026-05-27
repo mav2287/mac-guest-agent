@@ -5,8 +5,9 @@
 ```bash
 git clone https://github.com/mav2287/mac-guest-agent.git
 cd mac-guest-agent
-make build          # current architecture
-make build-all      # x86_64 + arm64 + universal
+make build          # current architecture (no SDK needed)
+make build-all      # i386 + x86_64 + arm64 + tri-fat universal
+                    # (requires LEGACY_SDK=/tmp/MacOSX10.13.sdk — see README)
 make test           # quick tests
 ```
 

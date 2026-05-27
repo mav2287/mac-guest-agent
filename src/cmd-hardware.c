@@ -67,8 +67,10 @@ static int get_logical_cpus(void)
 }
 
 /* Get memory statistics using the Mach host_statistics64 API.
-   This is a stable kernel-level API that doesn't depend on text parsing
-   and works across all macOS versions from 10.4 through current. */
+   Introduced in 10.6; weak-imported (see the declaration above) so the
+   symbol resolves to NULL on Tiger/Leopard instead of aborting at load
+   time. Callers must check for that and fall back to the vm_stat text
+   path; on 10.6+ this is the preferred kernel-level source. */
 static int get_vm_stat_mach(long long *free_pages, long long *active_pages,
                             long long *inactive_pages, long long *wired_pages,
                             long long *compressed_pages, long long *speculative_pages,

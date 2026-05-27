@@ -28,46 +28,39 @@ struct channel {
     size_t read_len;
 };
 
+/* ISA serial is the ONLY supported transport (v2.5.0+).
+ *
+ * Background: macOS guests run either under Apple's Virtualization.framework
+ * (UTM "Virtualize" mode, vz_run) or under plain QEMU/KVM (Proxmox, libvirt,
+ * raw QEMU, UTM "Emulate" backend — typically OpenCore-booted). On VZ hosts,
+ * Apple's own AppleQEMUGuestAgent is IOKit-launched on the VirtIO console
+ * channel via the `AppleVirtIOAgentDevice` match set by `applevirtio.console`
+ * — using VirtIO there silently routes traffic to Apple's 18-command agent
+ * instead of ours, with no error to the operator. On plain QEMU hosts Apple's
+ * driver doesn't load and VirtIO would technically be free, but we don't
+ * want a contract where the same agent install behaves differently depending
+ * on host class. Result: ISA-only everywhere.
+ *
+ * v2.4.x had a VirtIO fallback list as a "best effort" path for plain-QEMU
+ * configs that didn't present an ISA UART (UTM Emulate defaults, custom QEMU
+ * command lines without `-device isa-serial`). v2.5.0 removed that fallback
+ * — anyone in that situation now gets a clear "No ISA serial device found"
+ * error instead of silently picking VirtIO and (on VZ) connecting to the
+ * wrong agent. The fix is documented: add `type=isa` (PVE), an isa-serial
+ * device (libvirt), the QemuGuestAgent interface (UTM), or `-device
+ * isa-serial` (raw QEMU). Apple16X50Serial.kext has shipped on every macOS
+ * from 10.4 onwards with an identical PCI class match, so the requirement
+ * is universally satisfiable.
+ *
+ * Full rationale: docs/COMPATIBILITY.md#isa-serial-transport--why,
+ * CHANGELOG v2.5.0 BREAKING section. */
 static const char *known_devices[] = {
-    /* ISA serial — primary transport on every host class. macOS guests run
-     * either under Apple's Virtualization.framework (UTM/vz_run) or under
-     * plain QEMU (Proxmox/libvirt/raw QEMU, usually OpenCore-booted). On
-     * VZ hosts, Apple's own AppleQEMUGuestAgent is IOKit-launched on the
-     * VirtIO console channel via the `AppleVirtIOAgentDevice` match set
-     * by `applevirtio.console` — using VirtIO there would conflict. On
-     * plain QEMU hosts that driver doesn't load and VirtIO is actually
-     * free, but we still default to ISA so the install / launchd config /
-     * channel-detection list stay identical across both host classes
-     * (and so an image moved between QEMU and VZ keeps working without
-     * reinstall). Apple16X50Serial.kext has shipped on every macOS from
-     * 10.4 onwards with an identical PCI class match. Full rationale:
-     * docs/COMPATIBILITY.md#isa-serial-transport--why.
-     * Covers: PVE (agent type=isa), plain QEMU (-device isa-serial), libvirt. */
     "/dev/cu.serial1",
     "/dev/tty.serial1",
     "/dev/cu.serial2",
     "/dev/tty.serial2",
     "/dev/cu.serial",
     "/dev/tty.serial",
-    /* VirtIO serial — fallback for the small set of plain-QEMU configs that
-     * don't present an ISA serial device (e.g. UTM's QEMU backend, or
-     * custom QEMU command lines that omit `-device isa-serial`). On Apple
-     * Virtualization.framework hosts these would conflict with Apple's
-     * AppleQEMUGuestAgent (see ISA-block comment above); detection order
-     * here puts ISA first so the conflict is avoided in practice. */
-    "/dev/cu.org.qemu.guest_agent.0",
-    "/dev/tty.org.qemu.guest_agent.0",
-    "/dev/cu.virtio-console.0",
-    "/dev/tty.virtio-console.0",
-    "/dev/cu.virtio-serial",
-    "/dev/tty.virtio-serial",
-    "/dev/cu.virtio-port",
-    "/dev/tty.virtio-port",
-    "/dev/cu.qemu-guest-agent",
-    "/dev/tty.qemu-guest-agent",
-    /* UTM (Apple Virtualization.framework) */
-    "/dev/cu.virtio",
-    "/dev/tty.virtio",
     NULL
 };
 
@@ -76,14 +69,49 @@ static char *detect_device(void)
     struct stat st;
     for (int i = 0; known_devices[i]; i++) {
         if (stat(known_devices[i], &st) == 0 && (st.st_mode & S_IFCHR)) {
-            const char *transport = "serial";
-            if (strstr(known_devices[i], "virtio") || strstr(known_devices[i], "org.qemu"))
-                transport = "virtio";
-            LOG_INFO("Detected %s device: %s", transport, known_devices[i]);
+            LOG_INFO("Detected serial device: %s", known_devices[i]);
             return strdup(known_devices[i]);
         }
     }
     return NULL;
+}
+
+/* Surface the v2.4.x → v2.5.0 transport change explicitly. If a leftover
+ * VirtIO device is present (UTM Emulate default, old QEMU config), the
+ * agent would have used it in v2.4.x. Now it doesn't — log the device we
+ * see, log what to do about it, and bail. The detect_device() loop above
+ * only checks ISA paths; this scan is independent and exists purely to
+ * produce a useful diagnostic. */
+static int log_virtio_diagnostic_if_present(void)
+{
+    static const char *legacy_virtio_devices[] = {
+        "/dev/cu.org.qemu.guest_agent.0",
+        "/dev/cu.virtio-console.0",
+        "/dev/cu.virtio-serial",
+        "/dev/cu.virtio-port",
+        "/dev/cu.qemu-guest-agent",
+        "/dev/cu.virtio",
+        NULL
+    };
+    struct stat st;
+    for (int i = 0; legacy_virtio_devices[i]; i++) {
+        if (stat(legacy_virtio_devices[i], &st) == 0 && (st.st_mode & S_IFCHR)) {
+            LOG_ERROR("Found VirtIO serial device (%s) but VirtIO transport "
+                      "was removed in v2.5.0 — this agent now requires ISA "
+                      "serial. Reconfigure your hypervisor to present an "
+                      "ISA UART instead: PVE 'qm set <vmid> --agent "
+                      "enabled=1,type=isa'; libvirt isa-serial device; UTM "
+                      "Serial device with Interface=QemuGuestAgent; raw "
+                      "QEMU '-device isa-serial'. On Apple "
+                      "Virtualization.framework guests (UTM Virtualize "
+                      "mode, vz_run) ISA isn't available — switch to the "
+                      "QEMU backend or accept Apple's built-in 18-command "
+                      "agent on the VirtIO channel instead.",
+                      legacy_virtio_devices[i]);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void channel_set_poll_timeout(channel_t *ch, int timeout_ms)
@@ -128,7 +156,20 @@ int channel_open(channel_t *ch)
     if (!ch->device_path) {
         ch->device_path = detect_device();
         if (!ch->device_path) {
-            LOG_ERROR("No serial device found. Ensure PVE has 'agent: enabled=1,type=isa' and VM was fully stopped and restarted.");
+            /* If we found a VirtIO device, log the v2.5.0 transport-change
+             * explanation; otherwise fall through to the generic message. */
+            if (!log_virtio_diagnostic_if_present()) {
+                LOG_ERROR("No ISA serial device found. This agent requires "
+                          "ISA serial (v2.5.0+). Checked: /dev/cu.serial1, "
+                          "/dev/cu.serial2, /dev/cu.serial. Configure your "
+                          "hypervisor accordingly — PVE: 'qm set <vmid> "
+                          "--agent enabled=1,type=isa' then fully stop and "
+                          "restart the VM; libvirt: add an isa-serial "
+                          "device; UTM: add a Serial device with "
+                          "Interface=QemuGuestAgent; raw QEMU: pass "
+                          "'-device isa-serial'. See README.md > Quick "
+                          "Start for the full setup.");
+            }
             return -1;
         }
     }

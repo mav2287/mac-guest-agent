@@ -1,5 +1,66 @@
 # Changelog
 
+## v2.5.0 — 2026-05-27
+
+### ⚠️ BREAKING CHANGE — release asset filename
+The release ships a **single** binary: `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64 in one tri-fat Mach-O; dyld picks the right slice at load time). The previous per-architecture assets are gone:
+
+- `mac-guest-agent-darwin-amd64` → **removed**
+- `mac-guest-agent-darwin-arm64` → **removed**
+- `mac-guest-agent-darwin-i386` → **removed** (was Makefile-only, never officially published)
+
+Anything pinning the old URL — install scripts, Ansible/Salt/Chef recipes, CI jobs, IaC, package manifests — must update to:
+
+```
+https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
+```
+
+One download URL now covers macOS 10.4 Tiger through 26 Tahoe. The version bump to **2.5.0** (rather than a 2.4.4 patch) reflects that this is a backward-incompatible release-shape change, not a drop-in patch.
+
+### ⚠️ BREAKING CHANGE — ISA serial transport only
+The agent now supports **ISA serial only**; the VirtIO transport fallback that v2.4.x carried in `src/channel.c known_devices[]` has been removed. The new contract:
+
+- `known_devices[]` is ISA-only (`/dev/cu.serial1`, `/dev/cu.serial2`, `/dev/cu.serial` and their `/dev/tty.*` counterparts).
+- A VirtIO-only VM presents no usable channel — the agent logs a clear error message (`"Found VirtIO serial device (...) but VirtIO transport was removed in v2.5.0 — this agent now requires ISA serial. Reconfigure your hypervisor..."`) and exits.
+- `method = virtio-serial` is rejected at config-parse time with the same explanation; `method = auto` (default) and `method = isa-serial` continue to work.
+- CLI: `-m virtio-serial` is rejected the same way.
+
+Why: VirtIO was always a footgun on Apple Virtualization.framework hosts (UTM Virtualize mode, `vz_run`, anything `VZVirtualMachine`-backed) where Apple's own 18-command `AppleQEMUGuestAgent` claims the channel and silently intercepts traffic; v2.4.x kept it as a fallback for the narrow case of "plain QEMU configs without ISA UART," which produced the surprising behavior that the same install behaved differently depending on host class. Restricting to ISA closes that ambiguity and makes a disk image moving between QEMU and VZ-backed hosts keep working without reinstall.
+
+**Migration from v2.4.x:**
+- **PVE:** `qm set <vmid> --agent enabled=1,type=isa` (already the documented setup).
+- **libvirt:** add an `isa-serial` device to the domain XML; remove any `virtio-serial` agent channel.
+- **UTM:** in VM settings, Devices → Serial → set Interface to **QemuGuestAgent** (ISA-backed). Remove any VirtIO Serial Interface.
+- **Raw QEMU:** add `-device isa-serial` to the command line; remove `-device virtio-serial-pci` if it was the agent channel.
+- **UTM Virtualize backend on Apple Silicon:** no ISA option exists. Switch the VM to UTM's Emulate (QEMU) backend, or accept Apple's built-in 18-command agent (no freeze) on the VirtIO channel.
+
+After reconfiguring the hypervisor, fully stop and restart the VM (QEMU device changes need a full restart, not a guest reboot).
+
+### Bug Fixes
+- **Fixed (compatibility):** `mac-guest-agent-darwin-amd64` v2.4.3 crashed at startup on Mac OS X 10.6 Snow Leopard and 10.7 Lion with `dyld: unknown required load command 0x80000028` (SIGTRAP). The amd64 binary advertised `LC_VERSION_MIN_MACOSX 10.6` but its entry-point load command was `LC_MAIN` (introduced 10.8). The v2.4.3 release pipeline was running on a GitHub Actions runner image carrying Xcode 15.5, which silently clamped the Makefile's `MACOSX_DEPLOYMENT_TARGET=10.6` env var and emitted `LC_MAIN` regardless. Reported by @vit9696 in #4. Fixed by building both legacy slices (i386 + x86_64) against the phracker `MacOSX10.13.sdk` with explicit `-mmacosx-version-min` flags (10.4 for i386, 10.6 for x86_64) AND `-Wl,-ld_classic` to invoke Apple's older linker (Xcode 15-16's new `ld-prime` hardcodes `LC_MAIN` for x86_64 regardless of the min flag; `ld-classic` honors the min flag for entry-point selection). The combination emits `LC_UNIXTHREAD` which 10.6/10.7 dyld understands. Also added `scripts/verify-legacy-slices.sh` invoked by both build and release CI workflows, which fails the build on any disallowed load command, off-spec deployment target, unexpected dylib dependency, weak-import attribute regression on `host_statistics64`, or undefined-symbol drift outside the checked-in per-slice baselines. The gate makes the invariant explicit in CI; current implementation depends on `macos-14` runner + `ld-classic` (deprecated) and will need revisiting if Apple removes `ld-classic` or GitHub retires the runner image (canary build on `macos-latest` watches for both).
+
+### Tooling / Packaging
+- **Removed:** VirtIO entries from `src/channel.c known_devices[]`. The auto-detect list went from 14 entries (6 ISA + 8 VirtIO across the various `/dev/cu.virtio*`, `/dev/cu.org.qemu.guest_agent.0`, `/dev/cu.qemu-guest-agent` aliases UTM/QEMU/libvirt expose) down to 6 (ISA only). Added a separate `log_virtio_diagnostic_if_present()` that scans for the removed VirtIO paths only when ISA detect fails, so an upgrading user with a leftover VirtIO setup gets an explanatory error pointing at the migration steps rather than a generic "no serial device found."
+- **Removed:** `method = virtio-serial` (config file) and `-m virtio-serial` (CLI) are now rejected at parse time with a message pointing at the v2.5.0 BREAKING entry. `auto` (default) and `isa-serial` continue to work.
+- **Changed (release):** v2.5.0 publishes a **single binary**: `mac-guest-agent-darwin-universal`, a tri-fat Mach-O containing `i386 + x86_64 + arm64` slices. dyld picks the appropriate slice at load time: Tiger and Leopard pick i386 (those OSes lack x86_64 user-space support, or in 10.5's case prefer i386); Snow Leopard picks x86_64 when booted with a 64-bit kernel (Xserve / Mac Pro default) or i386 when booted with the 32-bit kernel default on most consumer hardware; Lion through Catalina pick x86_64 (with the `LC_UNIXTHREAD` fix above); Big Sur and Apple Silicon pick arm64. **The thin per-arch binaries (`-i386`, `-amd64`, `-arm64`) are no longer published.** One download URL covers all supported macOS versions and architectures. If the universal doesn't start on a specific host, open an issue at https://github.com/mav2287/mac-guest-agent/issues/new — we work each report as a bug.
+- **Changed:** Install URL changed from `mac-guest-agent-darwin-amd64` to `mac-guest-agent-darwin-universal`. Scripts pinning the old URL must update.
+- **Added:** `scripts/verify-legacy-slices.sh` — CI-callable script that audits per-slice invariants (LC commands, deployment targets, dylib deps, undefined symbols) of the produced universal. Replaces the previous inline `clock_gettime` check; now runs against all three slices and covers more failure modes. Hard-fails the build on any disallowed `LC_REQ_DYLD` command, unknown numeric load command, missing per-slice symbol baseline, or symbol drift outside `tests/legacy_slice_symbols_<arch>.txt`.
+- **Added:** New `surrogate-32bit` CI job builds the portable subset (`protocol.c` + `cJSON.c`) under `gcc -m32` on `ubuntu-latest` via a standalone `tests/surrogate_32bit_main.c` driver and runs portable unit tests under 32-bit code. `selftest.c` is excluded because it drags macOS-specific dependencies (`compat_*`, `run_command_capture`); `log.c` is excluded because it loads `os_log` via `dlfcn` (a macOS-runtime feature with no Linux glibc equivalent); `util.c` is excluded because it `#include`s `compat.h` and uses POSIX surface that needs `_POSIX_C_SOURCE=200809L` on Linux glibc. Catches int-width / struct-layout / endianness regressions in JSON marshaling without depending on access to old Intel Mac hardware.
+- **Added:** `#include <stdint.h>` to `src/util.c` (one line, no behavior change) — `SIZE_MAX` was previously visible only via transitive Apple SDK includes; explicit include eliminates that fragility.
+- **Changed:** `Makefile` `build-x86_64` now uses explicit `-mmacosx-version-min=10.6 -isysroot $(LEGACY_SDK)` instead of relying on `MACOSX_DEPLOYMENT_TARGET=10.6` env var (which is toolchain-version-dependent and was the underlying mechanism of the v2.4.3 bug). `build-i386` similarly gets explicit `-mmacosx-version-min=10.4`. `LEGACY_SDK` defaults to `/tmp/MacOSX10.13.sdk` (phracker tarball, SHA256 `1d2984ac…23a5a` pinned in CI); `I386_SDK` aliases it for backward compatibility.
+- **Changed:** `Makefile` `build-universal` now produces a **tri-fat** binary (i386 + x86_64 + arm64; previously x86_64 + arm64 only).
+- **Changed:** `Makefile` `dist` / `pkg` / `sign` / `dsym` / `help` targets all updated for universal-only distribution. `dist` clears `$(DIST_DIR)` before populating so stale per-arch artifacts from previous builds can't leak into the checksums.
+- **Changed:** `src/service.c` `--update` flag's instruction text now references `mac-guest-agent-darwin-universal`.
+- **Changed:** `scripts/install.sh` fetches the universal binary; `detect_arch()` removed (no per-arch asset to pick) but architecture validation preserved as `validate_arch()` so unsupported hosts (e.g., PowerPC) fail early with a clear message.
+- **Changed:** `scripts/install.sh --local` now finds the published release asset by its real filename. The pre-v2.5.0 search list only checked `build/mac-guest-agent`, `./mac-guest-agent`, `/tmp/mac-guest-agent-x86_64`, `/tmp/mac-guest-agent` — none of which match what `service.c --update` or the install docs tell users to download (`mac-guest-agent-darwin-universal`). The script now searches `./mac-guest-agent-darwin-universal` and `/tmp/mac-guest-agent-darwin-universal` first, then `build/mac-guest-agent-universal`, then the legacy generic names for recovery flows. Added explicit `--local /path/to/binary` form so the installer never has to guess: `sudo ./install.sh --local /Users/me/Downloads/mac-guest-agent-darwin-universal`. The error message on "no binary found" now lists every searched path and points at the explicit-path form. `--help` updated.
+- **Updated:** Workflow comments in `.github/workflows/build.yml` and `.github/workflows/release.yml` rewritten to name `-Wl,-ld_classic` as the load-bearing dependency (the ld-classic linker is what honors `-mmacosx-version-min` and emits `LC_UNIXTHREAD` on the legacy slices). Previous wording framed the `macos-14` runner pin as the primary mechanism; the pin is just toolchain stability — without `ld_classic` the slices break on any Xcode 15+ regardless of runner image. Documented fallback chain for when Apple removes `ld_classic`: verify canary status, try Homebrew cctools `ld`, or build legacy slices in a container with a frozen older Xcode CLT.
+- **Changed:** `scripts/build-pkg.sh` default arch is now `universal`; per-arch invocation kept for internal testing.
+- **Changed:** `scripts/verify-installer.sh` recommendation collapsed from per-arch (if/elif/elif on macOS version) to single universal-binary line.
+- **Added:** `--self-test-json` `system_info` block now includes a `selected_arch` field reporting which slice of the universal binary dyld actually picked. Useful for verify.sh evidence drops and post-incident forensics.
+
+### Documentation
+- **Updated:** `README.md`, `docs/PVE.md`, `docs/UTM.md`, `docs/COMPATIBILITY.md`, `docs/RELEASE_TEMPLATE.md` install snippets all reference the universal binary as the single download. README has a new "If the agent doesn't start" section that asks users to open a GitHub issue with diagnostic outputs (loader-safe `sw_vers` / `file` / `lipo -info` first; `--self-test-json` / `--version` / log tail only if the binary actually starts). Modern-machine TLS caveat preserved — Tiger / Leopard / older Snow Leopard guests usually need to download on a modern machine and transfer the file.
+
 ## Unreleased
 
 ### Highlights

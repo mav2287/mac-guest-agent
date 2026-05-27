@@ -65,7 +65,7 @@ protocol_parse_request()  →  cJSON parse
     ▼
 commands_dispatch()
     │
-    ├─ find_command() in registry (44 commands)
+    ├─ find_command() in registry (45 commands)
     │
     ├─ check enabled (block-rpcs / allow-rpcs)
     │
@@ -113,7 +113,7 @@ src/
 
 | Need | API | Available Since |
 |---|---|---|
-| Memory stats | `host_statistics64()` (Mach) | 10.0 |
+| Memory stats | `host_statistics64()` (Mach) | 10.6 — weak-imported (`__attribute__((weak_import))` in `src/cmd-hardware.c`); falls back to `vm_stat` text parsing on Tiger/Leopard which lack the symbol |
 | CPU stats | `host_statistics(HOST_CPU_LOAD_INFO)` (Mach) | 10.0 |
 | Total memory | `sysctlbyname("hw.memsize")` | 10.0 |
 | CPU count | `sysctlbyname("hw.logicalcpu")` | 10.4 |

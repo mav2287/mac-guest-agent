@@ -12,12 +12,16 @@ qm set <vmid> --agent enabled=1,type=isa
 qm stop <vmid> && sleep 5 && qm start <vmid>
 ```
 
-> **Why `type=isa`?** macOS guests run in two distinct environments: under **Apple's Virtualization.framework** (UTM, `vz_run`, anything backed by `VZVirtualMachine`), and under **plain QEMU/KVM** (Proxmox, libvirt, raw QEMU — typically with OpenCore as the bootloader). On Virtualization.framework hosts, Apple's own `AppleQEMUGuestAgent` is IOKit-launched on the VirtIO console channel and would conflict with ours. On Proxmox/QEMU/OpenCore hosts, Apple's agent never launches (its `AppleVirtIOAgentDevice` IOKit match is only set by `applevirtio.console`, which only loads on VZ). We use ISA serial universally to keep one transport across both host types — no host-detection logic, no per-environment conditional registration — at the cost of using a slightly older transport, which every macOS version from 10.4 onwards supports natively via `Apple16X50Serial.kext`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#isa-serial-transport--why) for the full evidence.
+> **Why `type=isa`?** As of v2.5.0 the agent supports **ISA serial only**; VirtIO transport was removed. macOS guests run either under Apple's Virtualization.framework (UTM Virtualize, `vz_run`, anything `VZVirtualMachine`-backed) — where Apple's own 18-command `AppleQEMUGuestAgent` claims the VirtIO console channel — or under plain QEMU/KVM (Proxmox, libvirt, raw QEMU, UTM Emulate; typically OpenCore-booted) where Apple's agent never launches but VirtIO would still let an image silently start behaving differently if it ever moved between host classes. Restricting to ISA serial gives one transport, one install, one launchd config, and one channel-detection list everywhere — `Apple16X50Serial.kext` has shipped on every macOS from 10.4 Tiger onwards with an identical PCI class match, so this is universally satisfiable. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#isa-serial-transport--why) for the full evidence and [CHANGELOG v2.5.0 BREAKING](CHANGELOG.md) for the v2.4.x → v2.5.0 migration.
 
 **2. In the macOS VM:**
 ```bash
-# Download binary (from a modern machine if VM can't reach GitHub)
-curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-amd64
+# Download the universal binary — one slice (i386 / x86_64 / arm64) loads at runtime.
+# Covers macOS 10.4 Tiger through 26 Tahoe.
+# Note: on Tiger / Leopard / older Snow Leopard guests, the VM's TLS stack
+# usually cannot reach GitHub directly. Download on a modern machine and
+# transfer the file (scp / shared folder / USB).
+curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
 
 # Install
 sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
@@ -43,16 +47,29 @@ The agent communicates via an **ISA serial port** (16550 UART) using Apple's bui
 
 ## Compatibility
 
-| Binary | Arch | Min macOS |
-|---|---|---|
-| `mac-guest-agent-i386` | i386 | 10.4 Tiger |
-| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard |
-| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur |
-| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 |
+**Single download:** `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
 
 ISA serial driver (`Apple16X50Serial.kext`) verified present with identical PCI class match on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026). See the [compatibility matrix](docs/COMPATIBILITY.md) for per-version evidence.
 
 > **Tiger / Leopard (10.4 / 10.5):** `/usr/local/bin` is not in the default shell PATH. Invoke the binary by its absolute path (`sudo /usr/local/bin/mac-guest-agent ...`) or add it to PATH for the session: `export PATH=/usr/local/bin:$PATH`. The LaunchDaemon itself uses the absolute path and is unaffected.
+
+## If the agent doesn't start
+
+Open an issue at https://github.com/mav2287/mac-guest-agent/issues/new with as much of the following as you can collect. Items 1-3 work even when the binary won't launch (dyld rejection); items 4-6 require the binary to start successfully.
+
+**Loader-safe (no execution needed):**
+
+1. `sw_vers` — macOS version, build
+2. `file /usr/local/bin/mac-guest-agent` — confirms it's a Mach-O fat binary
+3. `lipo -info /usr/local/bin/mac-guest-agent` — shows the slice list
+
+**If the binary starts:**
+
+4. `mac-guest-agent --version`
+5. `mac-guest-agent --self-test-json` — pipe to a file or `grep selected_arch` directly (do NOT pipe through `python -m json.tool` on Tiger/Leopard — those versions lack a reliable stdlib `json` module)
+6. `tail -50 /var/log/mac-guest-agent.log`
+
+The universal binary is the supported install path; if it doesn't load on your specific host configuration we want to fix it, not work around it.
 
 ## Service Management
 
@@ -67,12 +84,31 @@ sudo mac-guest-agent --uninstall              # Remove
 ## Building from Source
 
 ```bash
-make build              # Current architecture
-make build-x86_64      # Intel (10.6+)
-make build-arm64       # Apple Silicon (11.0+)
-make build-universal   # Fat binary
-make test              # Run all tests
+make build              # Current architecture (no SDK needed)
+make build-arm64        # Apple Silicon (11.0+, no SDK needed)
+make test               # Run all tests
 ```
+
+The legacy slices (i386 for 10.4+, x86_64 for 10.6+) require the macOS 10.13
+SDK because modern Xcode SDKs no longer expose pre-10.7 deployment targets.
+Download it once, then pass it to `make`:
+
+```bash
+curl -fL -o /tmp/sdk.tar.xz \
+  https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
+# SHA256 1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a
+tar xf /tmp/sdk.tar.xz -C /tmp
+
+make build-i386       LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.4+ (32-bit)
+make build-x86_64     LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.6+ (64-bit)
+make build-universal  LEGACY_SDK=/tmp/MacOSX10.13.sdk   # tri-fat (release shape)
+```
+
+The legacy slices also depend on Apple's `ld-classic` linker (`-Wl,-ld_classic`
+in the Makefile) to honor `-mmacosx-version-min` for entry-point selection;
+the default `ld-prime` hardcodes `LC_MAIN` on x86_64 and produces binaries
+that 10.6/10.7 dyld cannot load (issue #4). See `.github/workflows/build.yml`
+for the full toolchain story.
 
 ## Documentation
 

@@ -214,7 +214,12 @@ redact() {
 
             if (length $ENV{REDACT_VMID}) {
                 my $v = quotemeta $ENV{REDACT_VMID};
-                s/(VM ID: |VM |vmid )$v\b/$1<REDACTED-VMID>/g;
+                # Prose contexts where the VMID appears with a known
+                # prefix. `VMID=` (no space) was leaking through prior to
+                # this branch — it shows up in the transport header line
+                # and any caller that prints `VMID=$id` directly.
+                s/(VM ID: |VM |vmid |VMID=)$v\b/$1<REDACTED-VMID>/g;
+                # JSON field — `"vmid": "107"` or `"vmid":107`.
                 s/("vmid"\s*:\s*)"?$v"?/$1"<REDACTED-VMID>"/g;
             }
             print;

@@ -30,13 +30,9 @@ Use this template when cutting a new release. Copy the relevant sections into th
 - Test suite: [N unit + N proactive + Nk fuzz + N integration]
 - Code coverage: [N% line, N% function]
 
-### Downloads
-| Binary | Arch | Min macOS |
-|---|---|---|
-| `mac-guest-agent-i386` | i386 | 10.4 Tiger |
-| `mac-guest-agent-darwin-amd64` | x86_64 | 10.6 Snow Leopard |
-| `mac-guest-agent-darwin-arm64` | arm64 | 11.0 Big Sur |
-| `mac-guest-agent-darwin-universal` | x86_64 + arm64 | 10.6 / 11.0 |
+### Download
+
+**Single download:** `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
 ```
 
 ## Checklist
@@ -48,7 +44,7 @@ Before cutting a release:
 - [ ] Memory leak check clean (macOS `leaks` tool)
 - [ ] CHANGELOG.md updated with new version section
 - [ ] COMPATIBILITY.md updated with any new verification results
-- [ ] Version bumped in: `src/agent.h`, `Makefile`, `scripts/build-pkg.sh`
+- [ ] Version bumped in `Makefile` (`VERSION := X.Y.Z`) — single source of truth; `scripts/build-pkg.sh` reads it via env override and the release workflow stamps it onto the build artifacts via `make VERSION="$VERSION"`
 - [ ] All binaries build (`make build-all`)
 - [ ] .pkg installers build (`make pkg`)
 - [ ] Git tag created: `git tag vX.Y.Z`

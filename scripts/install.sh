@@ -20,12 +20,15 @@ check_root() {
     fi
 }
 
-detect_arch() {
+# v2.5.0+: universal-only release. No per-arch detection for asset selection
+# (the universal binary contains i386 + x86_64 + arm64 slices; dyld picks at
+# load time). We still validate the host arch is one we ship a slice for, so
+# unsupported architectures (e.g., PowerPC Tiger/Leopard) fail early with a
+# clear message instead of downloading a universal binary dyld cannot load.
+validate_arch() {
     case "$(uname -m)" in
-        x86_64)  echo "amd64" ;;
-        i386)    echo "amd64" ;;
-        arm64)   echo "arm64" ;;
-        *) err "Unsupported architecture: $(uname -m)"; exit 1 ;;
+        x86_64|i386|i486|i586|i686|arm64|arm64e) return 0 ;;
+        *) err "Unsupported architecture: $(uname -m). This project ships i386, x86_64, and arm64 slices only. PowerPC and other architectures are not supported."; exit 1 ;;
     esac
 }
 
@@ -47,45 +50,115 @@ check_serial_device() {
 
 main() {
     echo "=== macOS Guest Agent Installer ==="
-    check_root
 
-    ARCH=$(detect_arch)
-    info "Architecture: $ARCH"
-    info "macOS: $(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    # Detect --dry-run and remove it from the argument list so the rest of
+    # the parser keeps its positional layout (--local PATH still works).
+    # --dry-run prints every action the installer WOULD take without
+    # touching /usr/local/bin, /Library/LaunchDaemons, or launchctl.
+    # Lets CI and audit-style smoke tests exercise the install path
+    # without root and without modifying the host. Audit wave 5 LOW-3.
+    DRY_RUN=0
+    NEW_ARGS=()
+    for arg in "$@"; do
+        if [ "$arg" = "--dry-run" ]; then
+            DRY_RUN=1
+        else
+            NEW_ARGS+=("$arg")
+        fi
+    done
+    set -- "${NEW_ARGS[@]}"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY RUN: no filesystem or service changes will be made."
+    fi
 
+    # Resolve the local-binary argument BEFORE the root check so a bogus
+    # --local PATH gives a clean "file not found" without prompting for
+    # sudo first. Same for --local with no path falling through to the
+    # search list. Audit wave 5 LOW-3.
     if [ "$1" = "--local" ]; then
-        if [ -f "build/${BINARY_NAME}" ]; then
+        # Optional explicit path: `--local /path/to/binary` skips the search
+        # entirely. Use this when the file was transferred to a non-standard
+        # location or renamed.
+        if [ -n "$2" ]; then
+            if [ ! -f "$2" ]; then
+                err "Local binary not found at: $2"
+                exit 1
+            fi
+            BINARY="$2"
+        # Search order: release asset name first (what users actually transfer
+        # from a modern machine), then in-tree build outputs, then legacy
+        # generic names kept for pre-v2.5.0 recovery flows.
+        elif [ -f "./${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="./${BINARY_NAME}-darwin-universal"
+        elif [ -f "/tmp/${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="/tmp/${BINARY_NAME}-darwin-universal"
+        elif [ -f "build/${BINARY_NAME}-universal" ]; then
+            BINARY="build/${BINARY_NAME}-universal"
+        elif [ -f "build/${BINARY_NAME}" ]; then
             BINARY="build/${BINARY_NAME}"
         elif [ -f "./${BINARY_NAME}" ]; then
             BINARY="./${BINARY_NAME}"
-        elif [ -f "/tmp/${BINARY_NAME}-x86_64" ]; then
-            BINARY="/tmp/${BINARY_NAME}-x86_64"
         elif [ -f "/tmp/${BINARY_NAME}" ]; then
             BINARY="/tmp/${BINARY_NAME}"
         else
             err "No local binary found."
+            err "Searched: ./${BINARY_NAME}-darwin-universal, /tmp/${BINARY_NAME}-darwin-universal, build/${BINARY_NAME}-universal, build/${BINARY_NAME}, ./${BINARY_NAME}, /tmp/${BINARY_NAME}"
+            err "Pass an explicit path: sudo $0 --local /path/to/${BINARY_NAME}-darwin-universal"
             exit 1
         fi
         info "Using local binary: $BINARY"
+    fi
+
+    # Now that argument resolution succeeded, do the privilege check
+    # (skipped in dry-run since we don't actually touch anything).
+    if [ "$DRY_RUN" -eq 0 ]; then
+        check_root
     else
+        info "DRY RUN: skipping root check (no privileged operations will run)."
+    fi
+
+    validate_arch
+    info "Installing universal binary (covers i386 / x86_64 / arm64 — dyld picks at load time on $(uname -m))"
+    info "macOS: $(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+
+    if [ "$1" != "--local" ]; then
         info "Downloading latest release..."
-        TMPDIR=$(mktemp -d)
-        trap "rm -rf $TMPDIR" EXIT
-
-        BINARY_FILE="${BINARY_NAME}-darwin-${ARCH}"
-        URL="https://github.com/${REPO}/releases/latest/download/${BINARY_FILE}"
-
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL -o "$TMPDIR/$BINARY_FILE" "$URL" || { err "Download failed. On older macOS, download from another machine and use: sudo $0 --local"; exit 1; }
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q -O "$TMPDIR/$BINARY_FILE" "$URL" || { err "Download failed"; exit 1; }
+        if [ "$DRY_RUN" -eq 1 ]; then
+            info "DRY RUN: would download mac-guest-agent-darwin-universal from GitHub releases."
+            BINARY="<dry-run-pending-download>"
         else
-            err "curl or wget required. Or download the binary manually and use: sudo $0 --local"
-            exit 1
-        fi
+            TMPDIR=$(mktemp -d)
+            trap "rm -rf $TMPDIR" EXIT
 
-        BINARY="$TMPDIR/$BINARY_FILE"
-        ok "Downloaded"
+            BINARY_FILE="${BINARY_NAME}-darwin-universal"
+            URL="https://github.com/${REPO}/releases/latest/download/${BINARY_FILE}"
+
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL -o "$TMPDIR/$BINARY_FILE" "$URL" || { err "Download failed. On older macOS, download from another machine and use: sudo $0 --local"; exit 1; }
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q -O "$TMPDIR/$BINARY_FILE" "$URL" || { err "Download failed"; exit 1; }
+            else
+                err "curl or wget required. Or download the binary manually and use: sudo $0 --local"
+                exit 1
+            fi
+
+            BINARY="$TMPDIR/$BINARY_FILE"
+            ok "Downloaded"
+        fi
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo ""
+        info "DRY RUN: would now do:"
+        echo "    launchctl stop com.macos.guest-agent"
+        echo "    launchctl unload /Library/LaunchDaemons/com.macos.guest-agent.plist"
+        echo "    mkdir -p /usr/local/bin"
+        echo "    cp \"$BINARY\" \"$INSTALL_PATH\""
+        echo "    chmod +x \"$INSTALL_PATH\""
+        echo "    \"$INSTALL_PATH\" --install"
+        echo "    [serial-device probe]"
+        info "DRY RUN complete — no files modified."
+        exit 0
     fi
 
     stop_existing
@@ -124,10 +197,18 @@ main() {
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "macOS Guest Agent Installer"
     echo ""
-    echo "Usage: sudo $0 [--local]"
+    echo "Usage: sudo $0 [--local [PATH]] [--dry-run]"
     echo ""
-    echo "  --local   Install from a local binary (for VMs that can't reach GitHub)"
-    echo "  (default) Download latest release from GitHub"
+    echo "  --local         Install from a local binary (for VMs that can't reach GitHub)."
+    echo "                  Searches ./mac-guest-agent-darwin-universal, /tmp/mac-guest-agent-darwin-universal,"
+    echo "                  build/mac-guest-agent-universal, build/mac-guest-agent, ./mac-guest-agent,"
+    echo "                  /tmp/mac-guest-agent (in that order)."
+    echo "  --local PATH    Install from an explicit binary path (skips the search)."
+    echo "  --dry-run       Print every action the installer would take WITHOUT touching"
+    echo "                  /usr/local/bin, /Library/LaunchDaemons, or launchctl. Argument"
+    echo "                  validation (--local PATH existence) still happens. Does not"
+    echo "                  require root. Combinable with --local."
+    echo "  (default)       Download latest release from GitHub"
     echo ""
     echo "Prerequisites:"
     echo "  On the Proxmox VE host, set ISA serial mode:"

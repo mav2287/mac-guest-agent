@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.4.3
+VERSION := 2.5.0
 BUILD_DIR := build
 DIST_DIR := dist
 
@@ -54,23 +54,46 @@ docs/mac-guest-agent.8: docs/mac-guest-agent.8.in Makefile
 	     < docs/mac-guest-agent.8.in > docs/mac-guest-agent.8
 	@echo "Regenerated docs/mac-guest-agent.8 (version $(VERSION), date $$(date '+%B %Y'))"
 
-# i386 targeting 10.4+ (requires MacOSX10.13.sdk or earlier for i386 libs)
+# Legacy SDK used for both i386 (10.4+) and x86_64 (10.6+) builds.
+# Explicit -mmacosx-version-min flags below force ld64 to emit LC_UNIXTHREAD
+# (instead of LC_MAIN, introduced 10.8) so 10.6/10.7 dyld can load the binary.
 # Download SDK: curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz && tar xf /tmp/sdk.tar.xz -C /tmp
-I386_SDK ?= /tmp/MacOSX10.13.sdk
+# SHA256: 1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a
+LEGACY_SDK ?= /tmp/MacOSX10.13.sdk
+I386_SDK ?= $(LEGACY_SDK)
+
+# i386 build links libclang_rt.osx.a's divdi3.S.o / udivdi3.S.o (64-bit
+# integer division helpers). Modern Xcode stamps those .o files with
+# `LC_VERSION_MIN_MACOSX 10.7`, so the linker prints a "newer macOS version
+# than being linked" warning. They are pure integer-arithmetic assembly with
+# no runtime OS dependency and are statically linked into our binary (verified:
+# `nm` shows them as local text symbols `t`). vit9696 ran v2.4.2 (same helpers)
+# on Tiger 10.4.11 successfully, confirming runtime compatibility. Warning is
+# cosmetic; suppression would require either eliminating 64-bit division on
+# i386 (intrusive) or linking against an older compiler-rt (build complexity).
 build-i386: plist-header
 	@echo "Building $(PROGRAM_NAME) v$(VERSION) (i386, 10.4+)..."
 	@if [ ! -d "$(I386_SDK)" ]; then echo "Error: i386 SDK not found at $(I386_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
-	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" \
+	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) -Wall -Wextra -Werror -O2 -std=c99 -DVERSION=\"$(VERSION)\" -mmacosx-version-min=10.4 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch i386 -isysroot $(I386_SDK) \
+		-Wl,-ld_classic -Wl,-platform_version,macos,10.4,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 
-# x86_64 targeting 10.6+
+# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version
+# + ld-classic linker). Xcode 15-16's new ld-prime linker hardcodes LC_MAIN
+# for x86_64 regardless of -mmacosx-version-min; Apple kept the older
+# ld-classic as a fallback that DOES honor the min-flag for entry-point
+# selection. `-Wl,-ld_classic` invokes it. Layered signals (env var + flag
+# + explicit platform_version directive + ld-classic) for belt-and-suspenders.
 build-x86_64: plist-header
-	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+)..."
+	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+, LC_UNIXTHREAD via ld-classic + legacy SDK)..."
+	@if [ ! -d "$(LEGACY_SDK)" ]; then echo "Error: legacy SDK not found at $(LEGACY_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
-	MACOSX_DEPLOYMENT_TARGET=10.6 $(CC) $(CFLAGS) $(INCLUDES) -arch x86_64 \
+	MACOSX_DEPLOYMENT_TARGET=10.6 $(CC) $(CFLAGS) -mmacosx-version-min=10.6 \
+		-Wno-deprecated-declarations $(INCLUDES) -arch x86_64 -isysroot $(LEGACY_SDK) \
+		-Wl,-ld_classic -Wl,-platform_version,macos,10.6,10.13 \
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(SRCS) $(LDFLAGS)
 	@echo "x86_64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64"
 
@@ -82,15 +105,22 @@ build-arm64: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 $(SRCS) $(LDFLAGS)
 	@echo "arm64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-arm64"
 
-# Universal binary (x86_64 + arm64)
-build-universal: build-x86_64 build-arm64
-	@echo "Creating universal binary..."
-	lipo -create $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 \
+# Tri-fat universal binary (i386 + x86_64 + arm64) — the v2.5.0+ canonical artifact.
+# dyld picks the right slice at load time across macOS 10.4 Tiger → 26 Tahoe.
+build-universal: build-i386 build-x86_64 build-arm64
+	@echo "Creating tri-fat universal binary (i386 + x86_64 + arm64)..."
+	lipo -create \
+		$(BUILD_DIR)/$(PROGRAM_NAME)-i386 \
+		$(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 \
+		$(BUILD_DIR)/$(PROGRAM_NAME)-arm64 \
 		-output $(BUILD_DIR)/$(PROGRAM_NAME)-universal
-	@echo "Universal binary: $(BUILD_DIR)/$(PROGRAM_NAME)-universal"
+	@echo "Tri-fat universal binary: $(BUILD_DIR)/$(PROGRAM_NAME)-universal"
 
-# All architectures
-build-all: build-x86_64 build-arm64 build-universal
+# All architectures (i386 + x86_64 + arm64 thin slices + tri-fat universal).
+# build-universal already depends on all three thin slices, so listing them
+# here is redundant in terms of the make DAG — but the explicit list makes
+# the intent visible to readers and keeps `make help` honest.
+build-all: build-i386 build-x86_64 build-arm64 build-universal
 	@echo "All builds complete"
 	@ls -la $(BUILD_DIR)/$(PROGRAM_NAME)-*
 
@@ -103,8 +133,7 @@ clean:
 # Generate dSYM debug symbols for crash analysis
 dsym: build-all
 	@echo "Generating dSYM files..."
-	@dsymutil $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 -o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64.dSYM 2>/dev/null || true
-	@dsymutil $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 -o $(BUILD_DIR)/$(PROGRAM_NAME)-arm64.dSYM 2>/dev/null || true
+	@dsymutil $(BUILD_DIR)/$(PROGRAM_NAME)-universal -o $(BUILD_DIR)/$(PROGRAM_NAME)-universal.dSYM 2>/dev/null || true
 	@echo "dSYM files generated"
 
 # Install to system
@@ -119,19 +148,20 @@ install: build
 	sudo cp docs/mac-guest-agent.8 /usr/local/share/man/man8/
 	@echo "Man page installed (try: man mac-guest-agent)"
 
-# Build .pkg installer (double-click or sudo installer -pkg)
+# Build .pkg installer — universal only (v2.5.0+).
+# The produced pkg is unsigned by default; supported install path is
+# `sudo installer -pkg build/mac-guest-agent-<ver>-universal.pkg -target /`.
+# For Finder-double-click distribution, set PRODUCTSIGN_IDENTITY to a
+# Developer ID Installer identity before invoking — see scripts/build-pkg.sh
+# header for the full sign / notarize flow.
 pkg: build-all
-	@./scripts/build-pkg.sh amd64
-	@./scripts/build-pkg.sh arm64
 	@./scripts/build-pkg.sh universal
 
 # Code signing (for users with a Developer ID)
 sign: build-all
-	@echo "Signing binaries..."
+	@echo "Signing universal binary..."
 	@if security find-identity -v -p basic 2>/dev/null | grep -q "Developer ID"; then \
 		IDENTITY=$$(security find-identity -v -p basic | grep "Developer ID Application" | head -1 | awk -F'"' '{print $$2}'); \
-		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64; \
-		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-arm64; \
 		codesign --sign "$$IDENTITY" --timestamp $(BUILD_DIR)/$(PROGRAM_NAME)-universal; \
 		echo "Signed with: $$IDENTITY"; \
 	else \
@@ -148,10 +178,18 @@ uninstall:
 test: build test-unit test-proactive test-fuzz test-integration test-verify-transports
 
 # Shell-shim integration tests for scripts/verify.sh (PVE, libvirt,
-# UTM, qga-socket). Mocks the host CLIs and a local QGA socket; no
+# UTM, qga-serial). Mocks the host CLIs and a local QGA socket; no
 # real hypervisor needed.
 test-verify-transports:
 	@bash tests/test_verify_transports.sh
+
+# Sabotage tests for scripts/verify-legacy-slices.sh — deliberately
+# produce broken universal binaries and assert the verifier rejects
+# them. Without this, the verifier's happy-path "PASS" doesn't prove
+# it would catch a regression. Requires `make build-all LEGACY_SDK=...`
+# to have produced the good i386 + x86_64 + arm64 thin slices first.
+test-legacy-slice-gate: build-all
+	@bash tests/test_legacy_slice_gate.sh
 
 # Code coverage report (llvm-cov)
 test-coverage:
@@ -248,10 +286,8 @@ check: build
 
 # Create release distribution
 dist: build-all
-	@echo "Creating distribution..."
-	@mkdir -p $(DIST_DIR)
-	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(DIST_DIR)/$(PROGRAM_NAME)-darwin-amd64
-	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-arm64 $(DIST_DIR)/$(PROGRAM_NAME)-darwin-arm64
+	@echo "Creating distribution (universal-only, v2.5.0+)..."
+	@rm -rf $(DIST_DIR) && mkdir -p $(DIST_DIR)
 	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-universal $(DIST_DIR)/$(PROGRAM_NAME)-darwin-universal
 	@cd $(DIST_DIR) && shasum -a 256 * > checksums.sha256
 	@echo "Distribution ready in $(DIST_DIR)/"
@@ -275,7 +311,7 @@ help:
 	@echo "  build-i386      Build i386 (10.4+)"
 	@echo "  build-x86_64    Build x86_64 (10.6+)"
 	@echo "  build-arm64     Build arm64 (11.0+)"
-	@echo "  build-universal Build x86_64+arm64 fat binary"
+	@echo "  build-universal Build tri-fat (i386+x86_64+arm64) — the v2.5.0+ canonical artifact"
 	@echo "  build-all       Build all architectures"
 	@echo ""
 	@echo "Other targets:"

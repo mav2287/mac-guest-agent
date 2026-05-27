@@ -42,18 +42,17 @@ CLI flags override config file values.
 
 ## Device Auto-Detection
 
-The agent searches for serial devices in this order (first match wins):
+As of v2.5.0 the agent is **ISA serial only**. The auto-detect list (first match wins):
 
-1. **ISA serial** — primary transport on all macOS 10.4+ via `Apple16X50Serial.kext`
-   - `/dev/cu.serial1`, `/dev/cu.serial2`, `/dev/cu.serial` (and their `tty.*` equivalents)
-   - Preferred on Big Sur and later because Apple's built-in VirtIO guest agent claims the VirtIO channel — ISA is the only channel it does not take.
-2. **VirtIO serial** — used on pre-Big Sur or when specifically configured to avoid conflict
-   - `/dev/cu.org.qemu.guest_agent.0` — plain QEMU, libvirt
-   - `/dev/cu.virtio-console.0`, `/dev/cu.virtio-serial`, etc.
-3. **UTM** (Apple Virtualization.framework)
-   - `/dev/cu.virtio`, `/dev/tty.virtio`
+- `/dev/cu.serial1`, `/dev/tty.serial1`
+- `/dev/cu.serial2`, `/dev/tty.serial2`
+- `/dev/cu.serial`,  `/dev/tty.serial`
 
-Override with `-p /dev/cu.serial1` to force a specific device.
+All of these are backed by `Apple16X50Serial.kext`, which has shipped on every macOS from 10.4 Tiger onwards with an identical PCI class match.
+
+If a VirtIO device is present but no ISA device is, the agent logs a diagnostic identifying the VirtIO path and pointing at the hypervisor reconfiguration steps (`type=isa` on PVE, isa-serial device on libvirt, QemuGuestAgent interface on UTM, `-device isa-serial` on raw QEMU), then exits. See [CHANGELOG v2.5.0 BREAKING — ISA serial transport only](../CHANGELOG.md) for the v2.4.x migration.
+
+Override with `-p /dev/cu.serial1` (or any path you trust) to skip auto-detect entirely.
 
 ## Test Mode
 
