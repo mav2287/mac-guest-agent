@@ -1,6 +1,6 @@
-# macOS 10.4.11 (Tiger) — evidence
+# macOS 10.5.8 (Leopard) — evidence
 
-**Contributor:** [@vit9696](https://github.com/vit9696) via [PR #3](https://github.com/mav2287/mac-guest-agent/pull/3).
+**Contributor:** [@vit9696](https://github.com/vit9696).
 **Captured against:** mac-guest-agent v2.4.3.
 **Result:** 35 passed, 0 failed.
 
@@ -12,21 +12,19 @@
 agent: enabled=1,type=isa
 args: -device usb-kbd -device usb-audio,audiodev=main -audiodev none,id=main
 bios: ovmf
-boot: order=sata0;sata2
+boot: order=sata0;sata1
 cores: 4
-cpu: Penryn
+cpu: Nehalem
 description:
 efidisk0: <redacted>
 machine: q35
 memory: 8192
-meta: <redacted>
 name: <redacted>
 net0: e1000=<redacted>
 numa: 0
 ostype: other
 sata0: <redacted>
-sata1: <redacted>
-sata2: none,media=cdrom
+sata1: none,media=cdrom
 scsihw: virtio-scsi-single
 smbios1: uuid=<redacted>
 sockets: 1
@@ -86,55 +84,35 @@ vga: vmware
     </dict>
 ```
 
-#### Kernel patches
+#### Kernel extensions
+
+Patched [IONDRVSupport](https://github.com/acidanthera/IONDRVSupport) is needed to support many graphics applications (e.g. third-party VNC servers) due to uninitialised memory bug.
 
 ```xml
       <dict>
         <key>Arch</key>
         <string>i386</string>
-        <key>Base</key>
-        <string></string>
+        <key>BundlePath</key>
+        <string>IONDRVSupport.kext</string>
         <key>Comment</key>
-        <string>Fix Intel e1000 link detection in QEMU</string>
-        <key>Count</key>
-        <integer>0</integer>
+        <string>Acidanthera IONDRVSupport</string>
         <key>Enabled</key>
         <true/>
-        <key>Find</key>
-        <data>x0QkBBEAAAAAAADoAAAAAA==</data>
-        <key>Identifier</key>
-        <string>com.apple.driver.AppleIntel8254XEthernet</string>
-        <key>Limit</key>
-        <integer>0</integer>
-        <key>Mask</key>
-        <data>//////////8AAAD/AAAAAA==</data>
+        <key>ExecutablePath</key>
+        <string>IONDRVSupport</string>
         <key>MaxKernel</key>
-        <string>8.99.99</string>
+        <string>9.99.99</string>
         <key>MinKernel</key>
-        <string>8.0.0</string>
-        <key>Replace</key>
-        <data>i0QkCMcACKwAADHAkJCQkA==</data>
-        <key>ReplaceMask</key>
-        <data></data>
-        <key>Skip</key>
-        <integer>0</integer>
+        <string>9.0.0</string>
+        <key>PlistPath</key>
+        <string>Info.plist</string>
       </dict>
 ```
 
-This patch requires force-loading:
+This kext requires force-loading:
 
-- System/Library/Extensions/IONetworkingFamily.kext/Contents/MacOS/IONetworkingFamily
-- System/Library/Extensions/IONetworkingFamily.kext/Contents/PlugIns/AppleIntel8254XEthernet.kext
+- System/Library/Extensions/IOGraphicsFamily.kext/IOGraphicsFamily
 
-#### NVRAM variables
-
-```xml
-      <key>4D1EDE05-38C7-4A6A-9CC6-4BCCA8B38C14</key>
-      <dict>
-        <key>DefaultBackgroundColor</key>
-        <data>v7+/AA==</data>
-      </dict>
-```
 
 #### Other
 
