@@ -53,7 +53,14 @@ The schema is additive — every 1.0 field is preserved in 2.0. Consumers readin
 
 ## How to capture the evidence
 
-The full validation sequence is documented in [COMPATIBILITY.md → Step 2: Runtime Validation](../COMPATIBILITY.md#step-2-runtime-validation-tier-2--tier-1). Short version:
+The end-to-end runbook is in **[`docs/TESTING_HARNESS.md`](../TESTING_HARNESS.md)**. It covers two profiles:
+
+- **Profile A — in-guest only.** For standalone Macs or VMs where the hypervisor doesn't expose a QGA socket you can reach (an old Tiger Mac on your desk; VirtualBox without a serial-to-socket channel). Uses [`scripts/contributor-evidence-collect.sh`](../../scripts/contributor-evidence-collect.sh) inside the VM. Captures loader-safe checks, `--version`, `--self-test-json`, install side-effects, log tail. Doesn't exercise the freeze cycle.
+- **Profile B — full host-driven.** For VMs running under PVE / libvirt / UTM (QEMU backend) / any QEMU configuration that exposes a QGA Unix socket. Uses `scripts/verify.sh` from the host. Produces full Schema-2.0 evidence including freeze/thaw cycles and mount-dispatch cross-check. **Required for Tier 1 promotion.**
+
+Pick the profile that fits your setup. The compact summary of the validation sequence is also in [COMPATIBILITY.md → Step 2: Runtime Validation](../COMPATIBILITY.md#step-2-runtime-validation-tier-2--tier-1).
+
+Short version (Profile B — the most common case):
 
 **One-time setup inside the VM (install the agent):**
 
