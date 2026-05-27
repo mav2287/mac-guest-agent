@@ -16,7 +16,13 @@
 /*
  * CLI flags mirror the Linux qemu-ga where applicable:
  *   -d, --daemonize         Run as daemon
- *   -m, --method METHOD     Transport: virtio-serial (default)
+ *   -m, --method METHOD     Transport: auto (default — ISA-first auto-detect,
+ *                             VirtIO fallback); accepts isa-serial /
+ *                             virtio-serial / auto for compatibility, but the
+ *                             channel selection logic in src/channel.c
+ *                             walks known_devices[] regardless of this value.
+ *                             The field is informational; behavior is
+ *                             ISA-first universally.
  *   -p, --path PATH         Device path
  *   -l, --logfile PATH      Log file (default: stderr, daemon: /var/log/mac-guest-agent.log)
  *   -f, --pidfile PATH      PID file
@@ -33,7 +39,13 @@
  */
 
 #define DEFAULT_CONFIG_PATH "/etc/qemu/qemu-ga.conf"
-#define DEFAULT_METHOD      "virtio-serial"
+/* DEFAULT_METHOD is informational only — see header comment above and
+ * src/channel.c known_devices[]. Channel selection walks the ISA-first list
+ * regardless of this value; the field exists for parity with the Linux
+ * qemu-ga config schema and for users who want to record their intent in
+ * the config file. Existing configs with `method = virtio-serial` or
+ * `method = isa-serial` still load cleanly. */
+#define DEFAULT_METHOD      "auto"
 #define DEFAULT_PIDFILE     "/var/run/qemu-ga.pid"
 
 typedef struct {
@@ -172,7 +184,9 @@ static void print_usage(const char *prog)
     printf("Usage: %s [options]\n\n", prog);
     printf("Options (compatible with Linux qemu-ga):\n");
     printf("  -d, --daemonize        Daemonize (log to file; launchd handles backgrounding)\n");
-    printf("  -m, --method METHOD    Transport method [default: virtio-serial]\n");
+    printf("  -m, --method METHOD    Transport method [default: auto — ISA-first auto-detect,\n"
+           "                          VirtIO fallback]. Informational; behavior is hard-coded\n"
+           "                          ISA-first in src/channel.c known_devices[].\n");
     printf("  -p, --path PATH        Device/socket path [default: auto-detect]\n");
     printf("  -l, --logfile PATH     Log file path [default: stderr]\n");
     printf("  -f, --pidfile PATH     PID file path\n");
@@ -292,8 +306,8 @@ int main(int argc, char *argv[])
 
     /* Log QEMU environment detection (informational only).
      * The Linux qemu-ga does NOT gate on environment detection —
-     * it just tries to open the virtio-serial device and fails if
-     * it's not there. We do the same. macOS QEMU VMs typically use
+     * it just tries to open its configured transport device and fails
+     * if it's not there. We do the same. macOS QEMU VMs typically use
      * real Mac hardware models (MacPro6,1 etc.) so hw.model won't
      * say "QEMU" and system_profiler won't say "VIRTUAL". */
     if (!cfg.test_mode) {
