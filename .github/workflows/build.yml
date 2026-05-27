@@ -251,20 +251,24 @@ jobs:
           # -fsanitize=address,undefined on macOS 26.
           ./tests/run_tests.sh ./build/mac-guest-agent-asan
 
-  # Canary: same build on macos-latest (informational, non-blocking).
-  # Surfaces drift on the unpinned runner image before the pinned `build`
-  # job is forced off macos-14. Two specific risks this catches:
+  # Canary: same build on macos-latest. PROMOTED FROM INFORMATIONAL TO
+  # REQUIRED in audit wave 5 follow-up after 10 consecutive green runs.
+  # Two specific risks this catches:
   #   (1) Apple removes `-Wl,-ld_classic` (deprecated; warned in current
   #       Xcode 26.5). When that happens, the build job's recipe will start
   #       failing on whatever runner has the new Xcode.
   #   (2) GitHub retires the macos-14 image. The release path would break
   #       silently until someone tries a release.
-  # If this canary stays green, we know macos-latest can take over when
-  # needed. If it fails, the failure mode is visible early.
+  # As a required check, a canary failure now BLOCKS PR merges. That's
+  # the desired behavior — a real linker drift on macos-latest is a real
+  # release-quality signal and should not silently go green elsewhere.
+  # If the canary breaks legitimately (Apple change, not our bug), the
+  # fallback chain documented in the `build` job header is the path to
+  # unblock: verify canary toolchain report, try Homebrew cctools, or
+  # build legacy slices in a container with a frozen older Xcode CLT.
   canary-build-on-macos-latest:
-    name: Canary build on macos-latest (informational; failure here is OK)
+    name: Canary build on macos-latest (required)
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Download legacy SDK
