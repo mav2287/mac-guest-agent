@@ -11,6 +11,25 @@
 
 set -uo pipefail
 
+# --- PIPELINE CONVENTION (do not violate) -------------------------------------
+# Pipelines of the shape `producer | <consumer-that-exits-early>` (where
+# early-exit means `awk '...{print; exit}'`, `head -1`, `grep -q`, `sed
+# 'NUMq'`, etc.) are FORBIDDEN under the `set -o pipefail` setting above.
+# When the consumer exits before the producer finishes writing, the producer
+# gets SIGPIPE on its next write, dies with status 141, and pipefail
+# propagates non-zero through the pipeline — making the surrounding `if` or
+# command-substitution see a "failure" that didn't logically happen.
+#
+# Observed once: CI run 26532052157, commit d0bde24, macos-14, 2026-05-27
+# (in tests/test_verify_transports.sh; see that file's ASSERTION-HELPER
+# CONVENTION block for the canonical write-up).
+#
+# Rule for this file: capture binary `--test` output via `awk 'NR==1{...;
+# print}'` WITHOUT an `exit` action — awk reads to EOF, the producer
+# finishes cleanly, no SIGPIPE possible. Use the same `awk 'NR==1{...;
+# print}'` form instead of `sed ... | head -1`.
+# ------------------------------------------------------------------------------
+
 BINARY="${1:-./build/mac-guest-agent}"
 PASS=0
 FAIL=0
@@ -55,7 +74,7 @@ echo ""
 # Run a command and capture the JSON response (strip the "QMP> " prompt)
 run_cmd() {
     local input="$1"
-    echo "$input" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}'
+    echo "$input" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}'
 }
 
 # Run two commands in sequence (for exec + exec-status pattern)
@@ -364,7 +383,7 @@ test_cmd "guest-get-cpustats" \
 # GuestLinuxCpuStats; "linux" is the only currently-defined discriminator
 # in upstream GuestCpuStatsType — see docs/design/AGENT_BEHAVIOUR_SPEC.md Q4).
 CPUSTATS_SHAPE=$(echo '{"execute":"guest-get-cpustats"}' \
-    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //' | head -1 \
+    | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}' \
     | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
@@ -418,7 +437,7 @@ test_cmd "guest-get-diskstats" \
 # + ios + ticks); the remaining 9 Linux-block-layer-specific fields are
 # zero-valued (same honest-zero pattern as cpustats nice:0 and route
 # metric:0 / irtt:0). Audit finding 2c.
-DISKSTATS=$(echo '{"execute":"guest-get-diskstats"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+DISKSTATS=$(echo '{"execute":"guest-get-diskstats"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$DISKSTATS" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)['return']
@@ -532,7 +551,7 @@ fi
 
 # Non-string entry: must return a spec-shaped error, not crash
 FREEZE_LIST_BADTYPE=$(echo '{"execute":"guest-fsfreeze-freeze-list","arguments":{"mountpoints":[123]}}' \
-    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //' | head -1)
+    | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$FREEZE_LIST_BADTYPE" | grep -q '"error".*"mountpoints entries must be strings"'; then
     echo "  PASS: freeze-list with non-string entry returns spec-shaped error"
     PASS=$((PASS + 1))
@@ -878,7 +897,7 @@ echo "--- Block/Allow RPC Filtering ---"
 # =========================================================
 
 # Test block-rpcs: ping should be blocked
-BLOCK_RESULT=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+BLOCK_RESULT=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$BLOCK_RESULT" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
    echo "$BLOCK_RESULT" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
     echo "  PASS: block-rpcs blocks guest-ping"
@@ -889,7 +908,7 @@ else
 fi
 
 # Test block-rpcs: non-blocked command should still work
-BLOCK_ALLOW=$(echo '{"execute":"guest-get-time"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+BLOCK_ALLOW=$(echo '{"execute":"guest-get-time"}' | "$BINARY" --test -b "guest-ping" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$BLOCK_ALLOW" | python3 -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null || \
    echo "$BLOCK_ALLOW" | python -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null; then
     echo "  PASS: block-rpcs allows unblocked commands"
@@ -900,7 +919,7 @@ else
 fi
 
 # Test allow-rpcs: only listed commands work
-ALLOW_BLOCKED=$(echo '{"execute":"guest-get-osinfo"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+ALLOW_BLOCKED=$(echo '{"execute":"guest-get-osinfo"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$ALLOW_BLOCKED" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
    echo "$ALLOW_BLOCKED" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
     echo "  PASS: allow-rpcs blocks unlisted commands"
@@ -910,7 +929,7 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-ALLOW_OK=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+ALLOW_OK=$(echo '{"execute":"guest-ping"}' | "$BINARY" --test -a "guest-ping,guest-sync,guest-sync-delimited,guest-info" 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$ALLOW_OK" | python3 -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null || \
    echo "$ALLOW_OK" | python -c "import json,sys; assert 'return' in json.load(sys.stdin)" 2>/dev/null; then
     echo "  PASS: allow-rpcs permits listed commands"
@@ -985,7 +1004,7 @@ echo "--- SSH Commands (success path) ---"
 
 # Test with current user (should succeed for get, at least)
 CURRENT_USER=$(whoami)
-SSH_GET=$(echo "{\"execute\":\"guest-ssh-get-authorized-keys\",\"arguments\":{\"username\":\"$CURRENT_USER\"}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+SSH_GET=$(echo "{\"execute\":\"guest-ssh-get-authorized-keys\",\"arguments\":{\"username\":\"$CURRENT_USER\"}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$SSH_GET" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d and 'keys' in d['return']" 2>/dev/null || \
    echo "$SSH_GET" | python -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d and 'keys' in d['return']" 2>/dev/null; then
     echo "  PASS: guest-ssh-get-authorized-keys for $CURRENT_USER"
@@ -1003,7 +1022,7 @@ echo "--- Set Time (validation only) ---"
 # Send a set-time with current time (should succeed without changing anything meaningful)
 CURRENT_NS=$(python3 -c "import time; print(int(time.time() * 1e9))" 2>/dev/null || python -c "import time; print(int(time.time() * 1e9))" 2>/dev/null)
 if [ -n "$CURRENT_NS" ]; then
-    SET_TIME=$(echo "{\"execute\":\"guest-set-time\",\"arguments\":{\"time\":$CURRENT_NS}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+    SET_TIME=$(echo "{\"execute\":\"guest-set-time\",\"arguments\":{\"time\":$CURRENT_NS}}" | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
     if echo "$SET_TIME" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d or 'error' in d" 2>/dev/null || \
        echo "$SET_TIME" | python -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d or 'error' in d" 2>/dev/null; then
         echo "  PASS: guest-set-time accepts valid timestamp"
@@ -1174,7 +1193,7 @@ chmod 755 "$HOOK_TEST_DIR/01-failing-hook.sh"
 
 ABORT_RESP=$(printf '%s\n' '{"execute":"guest-fsfreeze-freeze"}' \
     | MGA_HOOK_DIR_OVERRIDE="$HOOK_TEST_DIR" "$BINARY" --test 2>/dev/null \
-    | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+    | awk 'NR==1{sub(/^QMP> /,""); print}')
 
 if echo "$ABORT_RESP" | python3 -c "
 import json, sys
@@ -1200,7 +1219,7 @@ exit 0
 HOOKEOF
 SUCCESS_RESP=$(printf '%s\n' '{"execute":"guest-fsfreeze-freeze"}' \
     | MGA_HOOK_DIR_OVERRIDE="$HOOK_TEST_DIR" "$BINARY" --test 2>/dev/null \
-    | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+    | awk 'NR==1{sub(/^QMP> /,""); print}')
 
 if echo "$SUCCESS_RESP" | python3 -c "
 import json, sys
@@ -1256,7 +1275,7 @@ echo "--- Audit Fix: Command Injection Prevention ---"
 # =========================================================
 
 # Disk command with injection attempt should be safe
-INJECT_TEST=$(echo '{"execute":"guest-get-disks"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+INJECT_TEST=$(echo '{"execute":"guest-get-disks"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$INJECT_TEST" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'return' in d" 2>/dev/null; then
     echo "  PASS: disk listing uses safe command execution"
     PASS=$((PASS + 1))

@@ -12,6 +12,20 @@
 
 set -euo pipefail
 
+# --- PIPELINE CONVENTION (do not violate) -------------------------------------
+# Pipelines `producer | consumer-that-exits-early` (awk with `exit`, grep -q,
+# head -N, sed 'Nq', etc.) under `set -o pipefail` are SIGPIPE traps:
+# the consumer exits early, the producer's next write gets EPIPE, dies with
+# status 141, pipefail propagates non-zero. Observed once on CI run
+# 26532052157 (macos-14, 2026-05-27) in tests/test_verify_transports.sh;
+# see that file's ASSERTION-HELPER CONVENTION block for the full write-up.
+#
+# Rule for this file: awk extracts that need "the first matching value" use
+# the `flag=1 ... flag && /match/{print; flag=0}` pattern (no `exit`) so awk
+# reads to EOF and the producer finishes cleanly. Substring checks on bash
+# variables use `case "$var" in *pattern*)` instead of `echo $var | grep -q`.
+# ------------------------------------------------------------------------------
+
 BIN="${1:-build/mac-guest-agent-universal}"
 SYMBOL_DIR="${2:-tests}"
 [ -f "$BIN" ] || { echo "::error::$BIN not found"; exit 1; }
@@ -31,16 +45,23 @@ slice_loads_all() {
     | awk '/^[[:space:]]*cmd[[:space:]]+/{print $2}'
 }
 
+# NOTE on awk usage below: the `print $2; exit` idiom would short-circuit
+# the otool producer, risking SIGPIPE under `set -o pipefail`. Same class
+# as the test-harness flake fixed in tests/test_verify_transports.sh —
+# see that file's ASSERTION-HELPER CONVENTION block for the full story.
+# Here we drop `exit` and instead set+clear a flag so awk prints exactly
+# the first matching value and then reads to EOF without acting. otool
+# finishes writing cleanly; no SIGPIPE possible.
 slice_min_macosx() {
   otool -arch "$1" -l "$BIN" \
-    | awk '/cmd LC_VERSION_MIN_MACOSX/{flag=1; next} flag && /version/{print $2; exit}'
+    | awk '/cmd LC_VERSION_MIN_MACOSX/{flag=1; next} flag && /version/{print $2; flag=0}'
 }
 
 # Parse LC_BUILD_VERSION minos (used by arm64 instead of LC_VERSION_MIN_MACOSX).
 # Format: "    minos 11.0"
 slice_build_version_minos() {
   otool -arch "$1" -l "$BIN" \
-    | awk '/cmd LC_BUILD_VERSION/{flag=1; next} flag && /minos/{print $2; exit}'
+    | awk '/cmd LC_BUILD_VERSION/{flag=1; next} flag && /minos/{print $2; flag=0}'
 }
 
 slice_deps() { otool -arch "$1" -L "$BIN" | tail -n +2 | awk '{print $1}'; }
@@ -227,11 +248,26 @@ check_slice() {
   # Tiger would refuse to load the i386 slice ("Symbol not found"). The plain
   # baseline diff would NOT catch this — the symbol name is unchanged.
   # Gate 3h closes that gap by inspecting `nm -m` (full attribute info).
-  local nm_full
+  # Find the nm -m line mentioning _host_statistics64 using pure bash so
+  # the `echo "$nm_full" | grep -q` pattern (a producer | short-circuit-
+  # consumer SIGPIPE risk under pipefail — see tests/test_verify_transports.sh
+  # ASSERTION-HELPER CONVENTION) is eliminated. nm_full is ~150 lines so the
+  # risk was low in practice but the pattern is the same class as the one
+  # that actually flaked on CI run 26532052157.
+  local nm_full statline=""
   nm_full=$(slice_undefs_full "$arch")
-  if echo "$nm_full" | grep -q '_host_statistics64'; then
-    echo "$nm_full" | grep '_host_statistics64' | grep -q 'weak external' \
-      || fail "$arch slice: _host_statistics64 must be 'weak external' for Tiger compatibility (cmd-hardware.c __attribute__((weak_import))). Current nm -m: $(echo "$nm_full" | grep _host_statistics64 | head -1)"
+  while IFS= read -r line; do
+    case "$line" in
+      *"_host_statistics64"*) statline="$line"; break ;;
+    esac
+  done <<<"$nm_full"
+  if [ -n "$statline" ]; then
+    case "$statline" in
+      *"weak external"*) ;;  # OK — weak-imported as required
+      *)
+        fail "$arch slice: _host_statistics64 must be 'weak external' for Tiger compatibility (cmd-hardware.c __attribute__((weak_import))). Current nm -m: $statline"
+        ;;
+    esac
   fi
 
   pass "$arch slice: LCs allowlisted, min=${expected_min:-<no-min-set>}, deps OK, symbols match baseline, weak-imports preserved"
