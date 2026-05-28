@@ -858,6 +858,84 @@ fi
 
 # =========================================================
 echo ""
+echo "--- Async guest-exec: process-table slot release on terminal status ---"
+# =========================================================
+#
+# Regression for v2.5.2 audit Finding 2: src/cmd-exec.c::process_table caps
+# at MAX_PROCESSES = 64. Slots used to be reclaimed only by a 30-minute
+# wall-time cleanup, which meant a caller polling status correctly until
+# exited:true could still exhaust the table after 64 short execs (DoS for
+# 30 minutes). v2.5.2 releases the slot at the end of the terminal
+# guest-exec-status response.
+#
+# This test runs 100 short execs back-to-back, polling each until exited,
+# and asserts every single one succeeds. Without the fix, the 65th would
+# return GenericError "Too many running processes".
+
+SLOTRELEASE_RESULT=$(python3 - "$BINARY" <<'PY' 2>/dev/null
+import json, subprocess, sys, time
+binary = sys.argv[1]
+p = subprocess.Popen([binary, "--test"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def send(c):
+    p.stdin.write(json.dumps(c) + "\n"); p.stdin.flush()
+    l = p.stdout.readline()
+    if l.startswith("QMP> "): l = l[5:]
+    return json.loads(l)
+def poll(pid, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = send({"execute":"guest-exec-status","arguments":{"pid":pid}})
+        ret = s.get("return") or {}
+        if ret.get("exited"): return ret
+        time.sleep(0.02)
+    return None
+
+N = 100
+failures = []
+for i in range(N):
+    r = send({"execute":"guest-exec","arguments":{
+        "path":"/bin/echo","arg":["slot-release-" + str(i)],"capture-output":True}})
+    if "error" in r:
+        failures.append({"iteration": i, "phase": "exec",
+                         "error_class": r["error"].get("class"),
+                         "error_desc": r["error"].get("desc")})
+        break
+    pid = (r.get("return") or {}).get("pid")
+    if pid is None:
+        failures.append({"iteration": i, "phase": "no-pid", "raw": r})
+        break
+    status = poll(pid, timeout=3.0)
+    if status is None:
+        failures.append({"iteration": i, "phase": "timeout"})
+        break
+
+p.stdin.close()
+try:
+    p.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    p.kill()
+print(json.dumps({"total_attempted": N, "first_fail": failures[0] if failures else None,
+                  "failure_count": len(failures)}))
+PY
+)
+
+if echo "$SLOTRELEASE_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['first_fail'] is None, f\"slot-release regression: {d['first_fail']}\"
+assert d['failure_count'] == 0
+" 2>/dev/null; then
+    echo "  PASS: 100 short execs with poll-until-exited (slot release on terminal status)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: process-table slot leak — exhausted before 100 execs (audit Finding 2 regression)"
+    echo "         result: $SLOTRELEASE_RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# =========================================================
+echo ""
 echo "--- SSH Commands (structure only) ---"
 # =========================================================
 

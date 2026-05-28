@@ -411,6 +411,23 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
          * signaled exits but we want the signal number surfaced. */
         if (WIFSIGNALED(proc->wait_status))
             cJSON_AddNumberToObject(result, "signal", WTERMSIG(proc->wait_status));
+
+        /* v2.5.2: release the slot now that the caller has received the
+         * terminal status with all captured output. Without this, the 64-
+         * entry process_table fills up after 64 short execs even when the
+         * caller polls correctly until exited:true — the 30-minute
+         * cleanup in alloc_process() only reaps slots after a half-hour
+         * idle, so a backup tool / monitoring loop hits "Too many running
+         * processes" until that wall passes. Releasing here matches the
+         * common "poll until exited, then move on" pattern documented in
+         * the QGA usage; subsequent calls to guest-exec-status with the
+         * same PID will now return InvalidParameter (the QGA spec does
+         * not promise idempotent terminal polling, and we never did
+         * either — but the slot was leaking).
+         *
+         * The 30-minute cleanup in alloc_process() stays as the safety
+         * net for callers who launched and never polled at all. */
+        release_process(proc);
     }
 
     return result;
