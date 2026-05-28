@@ -16,6 +16,29 @@ set -uo pipefail
 # (those would dump the entire backgrounded heredoc command into stderr).
 set +m
 
+# --- ASSERTION-HELPER CONVENTION (do not violate) -----------------------------
+# Helpers below this banner that compare a value against an expected pattern
+# (assert_eq / assert_contains / assert_not_contains and any future siblings)
+# MUST NOT use pipelines. Under `set -o pipefail`, a pipeline whose right-hand
+# side exits early — `grep -q`, `head -1`, `awk '...{print; exit}'`, etc. —
+# SIGPIPEs the left-hand side mid-write. That makes the pipeline's exit
+# status non-zero even when the logical assertion succeeded; the `if` takes
+# the wrong branch and the test FAILs even though the value matched.
+#
+# Observed once in the wild: CI run 26532052157, commit d0bde24, macos-14,
+# 2026-05-27 — `assert_contains "PVE: VMID redacted in human output" "<REDACTED-VMID>" "$OUT"`
+# failed because grep -q found the match and exited 0 before printf had
+# finished writing the multi-kilobyte `$OUT` haystack into the pipe, so
+# printf got EPIPE and pipefail propagated non-zero. The fix below uses
+# `case "$haystack" in *"$needle"*)` pattern matching — pure bash, no
+# subprocess, no pipe, no race possible.
+#
+# Use bash builtins for comparison: case, [[ ]], [ ], parameter expansion.
+# Data-extraction pipelines elsewhere in this file (extract_appendix,
+# json_field) ARE allowed because their consumers (awk-without-exit, perl
+# with `local $/; <STDIN>`) read to EOF — no early-exit SIGPIPE race.
+# ------------------------------------------------------------------------------
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERIFY="$REPO_ROOT/scripts/verify.sh"
 
@@ -41,21 +64,22 @@ assert_eq() {
     if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi
 }
 # assert_contains <label> <needle> <haystack>
-# `--` after grep flags so needles starting with `--` aren't mistaken for options.
+# Uses bash `case` pattern matching to avoid the pipefail+SIGPIPE race
+# documented in the ASSERTION-HELPER CONVENTION block above. The needle
+# is quoted inside the pattern so glob metacharacters in $2 (`*`, `?`,
+# `[...]`) are matched literally rather than expanded.
 assert_contains() {
-    if printf '%s' "$3" | grep -qF -- "$2" 2>/dev/null; then
-        ok "$1"
-    else
-        bad "$1 (did not contain '$2')"
-    fi
+    case "$3" in
+        *"$2"*) ok "$1" ;;
+        *)      bad "$1 (did not contain '$2')" ;;
+    esac
 }
 # assert_not_contains <label> <needle> <haystack>
 assert_not_contains() {
-    if ! printf '%s' "$3" | grep -qF -- "$2" 2>/dev/null; then
-        ok "$1"
-    else
-        bad "$1 (unexpectedly contained '$2')"
-    fi
+    case "$3" in
+        *"$2"*) bad "$1 (unexpectedly contained '$2')" ;;
+        *)      ok "$1" ;;
+    esac
 }
 
 # extract_appendix <output> — print the JSON object that starts after the
