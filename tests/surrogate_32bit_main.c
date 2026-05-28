@@ -8,9 +8,9 @@
  *
  * Purpose: catch int-width / struct-layout / endianness / integer-truncation
  * regressions in portable code without requiring access to old Intel Mac
- * hardware. Scope is deliberately narrow per universal_upgrade.md §4.5 / D16 /
- * H04 — util.c includes compat.h and uses POSIX surface that needs
- * _POSIX_C_SOURCE; selftest.c and log.c also pull macOS-specific deps.
+ * hardware. Scope is deliberately narrow: util.c includes compat.h and
+ * uses POSIX surface that needs _POSIX_C_SOURCE on Linux glibc; selftest.c
+ * and log.c also pull macOS-specific deps.
  *
  * This driver is a standalone test, NOT a wrapper around tests/test_unit.c
  * (which is set up for macOS native builds with -framework CoreFoundation).

@@ -211,9 +211,7 @@ static uint64_t cfdict_u64(CFDictionaryRef d, const char *key)
  * host_processor_info doesn't split niced time from user) and as
  * `guest-network-get-route` emitting `metric: 0` / `irtt: 0`. Honest
  * zeros over silently dropping the field, so spec-strict consumers
- * (virsh / PVE plugins) get the canonical shape they can parse.
- *
- * Audit.md finding 2c. */
+ * (virsh / PVE plugins) get the canonical shape they can parse. */
 static cJSON *handle_get_diskstats(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;

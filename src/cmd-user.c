@@ -118,8 +118,7 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
      * QGA protocol) — reject invalid base64 rather than silently using
      * the raw literal as the password (the prior behaviour would have
      * set the user's password to whatever literal bytes the caller
-     * happened to send, including non-base64 garbage like "!!!!"). See
-     * audit.md finding 3. */
+     * happened to send, including non-base64 garbage like "!!!!"). */
     char *decoded_pass = NULL;
     if (!cJSON_IsTrue(crypted_item)) {
         size_t decoded_len;

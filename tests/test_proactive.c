@@ -415,7 +415,7 @@ static void test_password_validation(void)
     }
 }
 
-/* ---- Base64 validation (audit finding 3) ---- */
+/* ---- Base64 strict-alphabet validation ---- */
 
 static void test_base64_validation(void)
 {
@@ -500,7 +500,7 @@ static void test_base64_validation(void)
     ASSERT("NULL input -> NULL", base64_decode(NULL, NULL) == NULL);
 }
 
-/* ---- SSH safe-write symlink-attack regression (audit finding 6) ---- */
+/* ---- SSH safe-write symlink-attack regression ---- */
 
 /* Forward decls — defined in src/cmd-ssh.c, exposed for tests. */
 char *ssh_safe_read_file(const char *path, size_t *out_len);

@@ -31,7 +31,7 @@ set -e
 # Single-source the version from the Makefile so a release tag never
 # ships a .pkg whose stamped version disagrees with the binary. Honour
 # a VERSION env override (used by .github/workflows/release.yml to stamp
-# the git-tag version on tagged releases). See audit.md finding 4.
+# the git-tag version on tagged releases).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="${VERSION:-$(awk -F':= *' '/^VERSION[[:space:]]*:=/{print $2; exit}' "$SCRIPT_DIR/../Makefile")}"
 if [ -z "$VERSION" ]; then

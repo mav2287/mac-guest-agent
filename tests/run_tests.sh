@@ -436,7 +436,7 @@ test_cmd "guest-get-diskstats" \
 # cumulative counters for 6 of the 15 stats fields (read/write sectors
 # + ios + ticks); the remaining 9 Linux-block-layer-specific fields are
 # zero-valued (same honest-zero pattern as cpustats nice:0 and route
-# metric:0 / irtt:0). Audit finding 2c.
+# metric:0 / irtt:0).
 DISKSTATS=$(echo '{"execute":"guest-get-diskstats"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print}')
 if echo "$DISKSTATS" | python3 -c "
 import json, sys
@@ -761,9 +761,9 @@ echo ""
 echo "--- Async guest-exec: spec contract + deadlock regression ---"
 # =========================================================
 #
-# Regression coverage for audit.md finding 1 (the sync drain that
-# deadlocked on stderr floods and blocked the agent for the child's
-# entire lifetime). Three assertions:
+# Regression coverage for the v2.4.3 guest-exec async rewrite — the
+# prior sync drain deadlocked on stderr floods and blocked the agent
+# for the child's entire lifetime; see CHANGELOG v2.4.3. Three assertions:
 #   (a) guest-exec returns {pid:N} within 250 ms even when the child
 #       lives 2 seconds — confirms the spec-conformant async contract.
 #   (b) A child that writes >64 KB to stderr while keeping stdout tiny
@@ -1256,8 +1256,8 @@ echo ""
 echo "--- Freeze hook abort contract ---"
 # =========================================================
 #
-# Locks the docs/code contract from audit finding 5: a freeze hook
-# script that exits non-zero must abort the freeze with a GenericError
+# Locks the documented freeze-hook contract: a freeze hook script
+# that exits non-zero must abort the freeze with a GenericError
 # carrying "Freeze hook script failed". Uses the MGA_HOOK_DIR_OVERRIDE
 # env var (honored only in --test mode) to install a failing hook in
 # /tmp/ without polluting the host's real /etc/qemu/fsfreeze-hook.d.

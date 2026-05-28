@@ -1,6 +1,6 @@
 # Agent behaviour specification
 
-**Status:** in progress. Phase 2 of `../PLAN.md`.
+**Status:** historical reference (Phase 2 of the design process that produced v2.4.3). The decisions documented below have shipped; the file is preserved for design-history context, not as a description of work in progress. See CHANGELOG v2.4.3 for the implementation summary.
 
 This document is the answer to the seven design questions Phase 1 surfaced (see `../research/UPSTREAM_NOTES.md`). Each section follows the same shape:
 
@@ -137,7 +137,7 @@ Tests:
 
 ### The question
 
-QGA spec defines `guest-fsfreeze-freeze-list` with an optional `mountpoints: [str]` argument — freeze *only* the listed mountpoints, leave the rest writable. Typical use: a backup tool wants to freeze a data volume but keep the OS volume writable so the backup tool's own logs can land somewhere. We currently ignore the argument because we register both `freeze` and `freeze-list` against the same `(void)args` handler in `src/cmd-fs.c:436`. A caller passing `mountpoints` gets a global freeze instead of the requested subset.
+QGA spec defines `guest-fsfreeze-freeze-list` with an optional `mountpoints: [str]` argument — freeze *only* the listed mountpoints, leave the rest writable. Typical use: a backup tool wants to freeze a data volume but keep the OS volume writable so the backup tool's own logs can land somewhere. **(v2.4.3+ implementation note: the mountpoints filter is now wired through `src/cmd-fs.c handle_fsfreeze_freeze_list()` — see CHANGELOG. The question text below is preserved for design-history context; the answer shipped.)** The original pre-fix state: we ignored the argument because we registered both `freeze` and `freeze-list` against the same `(void)args` handler.
 
 ### Evidence
 
@@ -305,7 +305,7 @@ The honest disclosure of this choice lives in the source-file comment and in the
 
 ### The question
 
-Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` once frozen — only `thaw` exits the state. Ours (9) allows idempotent re-freeze. The deeper question: which of our 45 commands (44 after Q4) should be allowed during freeze? Current 9 was set heuristically.
+Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` once frozen — only `thaw` exits the state. Ours (9) allows idempotent re-freeze. The deeper question: which of our 45 commands should be allowed during freeze? Current 9 was set heuristically.
 
 ### Evidence
 

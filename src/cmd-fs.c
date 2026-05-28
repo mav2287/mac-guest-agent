@@ -53,7 +53,7 @@ void fsfreeze_set_test_mode(int enabled) { test_mode = enabled; }
  * and without polluting the host's real hook directory. The override
  * is gated on test_mode (set only by main.c when --test is on the
  * command line) — attacker-controlled QGA traffic cannot enable test
- * mode, so this is safe in production. See audit.md finding 5 and the
+ * mode, so this is safe in production. The contract is locked by the
  * tests/run_tests.sh "Freeze hook abort contract" block. */
 static const char *hook_dir(void)
 {

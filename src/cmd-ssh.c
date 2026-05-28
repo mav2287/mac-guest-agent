@@ -16,7 +16,7 @@
  * final path component, which is the privesc surface for SSH paths run
  * as root (an attacker who owns the home dir can swap a symlink in for
  * .ssh/authorized_keys and trick a root-running agent into reading a
- * root-owned file like /etc/shadow). See audit.md finding 6.
+ * root-owned file like /etc/shadow).
  *
  * Returns a heap-allocated NUL-terminated buffer (caller frees) and
  * sets *out_len, OR NULL on any error including:
@@ -26,8 +26,8 @@
  *
  * O_NOFOLLOW is POSIX.1-2001 and present on every macOS from 10.0
  * onwards — works on the i386/10.4 build. */
-/* Exposed (not static) for unit testing in tests/test_proactive.c —
- * see audit finding 6 regression tests. */
+/* Exposed (not static) for unit testing — regression tests live in
+ * tests/test_proactive.c. */
 char *ssh_safe_read_file(const char *path, size_t *out_len);
 char *ssh_safe_read_file(const char *path, size_t *out_len)
 {
@@ -93,8 +93,7 @@ char *ssh_safe_read_file(const char *path, size_t *out_len)
  *
  * Returns 0 on success, -1 on any error.
  *
- * Exposed (not static) for unit testing — see audit finding 6
- * regression tests in tests/test_proactive.c. */
+ * Exposed (not static) for unit testing in tests/test_proactive.c. */
 int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
                          const char *data, size_t len);
 int ssh_safe_write_file(const char *path, uid_t uid, gid_t gid,
@@ -314,7 +313,7 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
     }
 
     /* Read existing keys via the O_NOFOLLOW safe reader (symlink at
-     * authorized_keys is rejected — see audit.md finding 6). */
+     * authorized_keys is rejected — keeps the same fchown-by-fd safety pattern documented in CHANGELOG v2.4.3). */
     char *existing = ssh_safe_read_file(path, NULL);
 
     /* Build new content with dedup */
@@ -373,7 +372,7 @@ static cJSON *handle_ssh_add_keys(cJSON *args, const char **err_class, const cha
 
     /* Atomic-ish safe write: O_NOFOLLOW prevents symlink targets,
      * fchown/fchmod by fd binds the metadata change to OUR fd's
-     * inode regardless of any racing path swap. See audit finding 6. */
+     * inode regardless of any racing path swap. */
     if (ssh_safe_write_file(path, pw->pw_uid, pw->pw_gid, content, content_len) != 0) {
         free(content);
         free(path);
@@ -413,7 +412,7 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
     }
 
     /* O_NOFOLLOW read — symlink at authorized_keys is rejected
-     * before we expose its contents. See audit.md finding 6. */
+     * before we expose its contents. */
     char *data = ssh_safe_read_file(path, NULL);
     if (!data) {
         free(path);
@@ -470,7 +469,7 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
         return NULL;
     }
     /* Same safe-write helper as the add path — O_NOFOLLOW + fchown/
-     * fchmod by fd. See audit finding 6. */
+     * fchmod by fd. */
     if (ssh_safe_write_file(path, pw->pw_uid, pw->pw_gid, result_buf, result_len) != 0) {
         LOG_ERROR("Failed to write authorized_keys during remove (temp create or rename failed)");
         free(result_buf);

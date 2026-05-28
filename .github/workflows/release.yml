@@ -30,16 +30,16 @@ jobs:
 
       - name: Download legacy SDK (used for i386 + x86_64 legacy builds)
         run: |
-          # SDK choice per universal_upgrade.md Step 0 (10.6 SDK rejected; 10.13 used)
+          # SDK choice: phracker MacOSX10.13.sdk (the 10.6 SDK was tried first but rejected — source uses vm_statistics64.compressor_page_count which is a 10.9+ field).
           curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
           EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
           actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
           [ "$actual" = "$EXPECTED_SHA256" ] || { echo "::error::SDK checksum mismatch: $actual != $EXPECTED_SHA256"; exit 1; }
           tar xf /tmp/sdk.tar.xz -C /tmp
 
-      # Per audit.md finding 4: pass VERSION through to make so a tagged
-      # release ships binaries whose embedded version matches the git
-      # tag, not whatever the Makefile happens to hold at tag time.
+      # Pass VERSION through to make so a tagged release ships binaries
+      # whose embedded version matches the git tag, not whatever the
+      # Makefile happens to hold at tag time.
       - name: Build tri-fat universal (i386 + x86_64 + arm64)
         run: make VERSION="$VERSION" build-all LEGACY_SDK=/tmp/MacOSX10.13.sdk
 

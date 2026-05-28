@@ -44,7 +44,7 @@ build: plist-header docs/mac-guest-agent.8
 	@echo "Build complete: $(BUILD_DIR)/$(PROGRAM_NAME)"
 
 # Generate the man page from the .in template, substituting $(VERSION)
-# from this Makefile (single source of truth — audit finding 4) and the
+# from this Makefile (single source of truth for version) and the
 # current month/year. Triggered when the template OR the Makefile changes.
 # CI has a "no-diff" check that fails if a VERSION bump landed without
 # regenerating this file.

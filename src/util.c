@@ -196,8 +196,8 @@ unsigned char *base64_decode(const char *input, size_t *out_len)
      * character outside the alphabet to 0 (the lookup table is zero-
      * initialised for non-listed entries, and 0 == 'A' in the table),
      * so unvalidated input like "!!!!" silently decodes to three zero
-     * bytes. See audit.md finding 3 — the failure mode affects
-     * guest-file-write (writes wrong bytes) and password decoding
+     * bytes. The failure mode affects guest-file-write (writes wrong
+     * bytes) and password decoding
      * (uses zero bytes as the password). */
     for (size_t i = 0; i + pad_count < in_len; i++) {
         unsigned char c = (unsigned char)input[i];

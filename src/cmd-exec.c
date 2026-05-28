@@ -28,9 +28,9 @@
  * callbacks off the main loop) and Windows qemu-ga (one reader thread
  * per pipe), without the GLib/threading dependencies — built on POSIX
  * primitives that have been on macOS since 10.0 (fork / pipe / fcntl
- * F_SETFL O_NONBLOCK / waitpid WNOHANG). See finding 1 in audit.md and
- * docs/research/UPSTREAM_NOTES.md for the prior sync implementation's
- * deadlock + agent-blocking flaws.
+ * F_SETFL O_NONBLOCK / waitpid WNOHANG). The CHANGELOG v2.4.3 entry
+ * for `guest-exec` documents the prior sync implementation's deadlock +
+ * agent-blocking flaws that drove this rewrite.
  */
 
 #define MAX_PROCESSES 64

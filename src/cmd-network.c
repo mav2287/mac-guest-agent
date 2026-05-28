@@ -263,8 +263,8 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
          * macOS's `netstat -rn` doesn't expose a routing-table `metric`
          * column at all (would require per-route `route -n get`) and has
          * no `irtt` concept; we emit 0 for both — same precedent as
-         * cpustats' `nice: 0` on macOS (audit.md finding 2b, Q4-style
-         * spec-conformant-with-honest-zeros). */
+         * cpustats' `nice: 0` on macOS — spec-conformant with honest
+         * zeros for fields the host can't supply. */
 
         /* Derive the prefix length first — destination may carry /CIDR
          * suffix, may be "default", or may be an abbreviated form like

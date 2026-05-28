@@ -11,7 +11,7 @@ void cmd_exec_init(void);
  * guest-exec-status polls. Cheap when nothing is in flight.
  *
  * See src/cmd-exec.c for the async design rationale (matches upstream
- * Linux / Windows qemu-ga's async model, audit.md finding 1). */
+ * Linux / Windows qemu-ga's async model). */
 void cmd_exec_drain_all(void);
 
 #endif

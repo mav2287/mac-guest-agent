@@ -1,6 +1,6 @@
 # Upstream research: QGA spec, Linux reference impl, PVE wrapper behaviour
 
-**Status:** in progress. Phase 1 of `../PLAN.md`.
+**Status:** historical reference (Phase 1 research that fed the v2.4.3 design decisions in `../design/AGENT_BEHAVIOUR_SPEC.md`). Preserved for evidence-chain context, not as a description of work in progress.
 
 This document captures evidence — quoted source, schema excerpts, line numbers, URLs — for questions our implementation needs to answer before we touch code. Each section ends with a **Verdict** that states what the finding means for `mac-guest-agent`.
 

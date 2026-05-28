@@ -43,9 +43,9 @@ jobs:
 
       - name: Manpage freshness (regenerate from template, fail on diff)
         run: |
-          # Audit finding 4 follow-up: docs/mac-guest-agent.8 is
-          # generated from docs/mac-guest-agent.8.in via `make
-          # docs/mac-guest-agent.8` using $(VERSION) from the Makefile.
+          # docs/mac-guest-agent.8 is generated from
+          # docs/mac-guest-agent.8.in via `make docs/mac-guest-agent.8`
+          # using $(VERSION) from the Makefile.
           # If a VERSION bump lands without regenerating, fail CI here
           # so the drift never reaches a release.
           # Pin the date so this check isn't sensitive to the day the
@@ -89,7 +89,7 @@ jobs:
 
       - name: Download legacy SDK (used for i386 + x86_64 legacy builds)
         run: |
-          # SDK choice per universal_upgrade.md Step 0 (10.6 SDK rejected; 10.13 used)
+          # SDK choice: phracker MacOSX10.13.sdk (the 10.6 SDK was tried first but rejected — source uses vm_statistics64.compressor_page_count which is a 10.9+ field).
           curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
           EXPECTED_SHA256="1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a"
           actual=$(shasum -a 256 /tmp/sdk.tar.xz | awk '{print $1}')
@@ -245,10 +245,9 @@ jobs:
         run: |
           make build
           # No `|| true` — ASAN integration failures should fail CI.
-          # Audit finding 7: the prior suppression let the job pass
-          # even if the ASAN binary failed the suite, defeating the
-          # purpose of running it. Verified 75/0 passes locally under
-          # -fsanitize=address,undefined on macOS 26.
+          # An earlier suppression let the job pass even if the ASAN
+          # binary failed the suite, defeating the purpose. Verified
+          # to pass locally under -fsanitize=address,undefined.
           ./tests/run_tests.sh ./build/mac-guest-agent-asan
 
   # Canary: same build on macos-latest. PROMOTED FROM INFORMATIONAL TO
@@ -291,7 +290,7 @@ jobs:
   # 32-bit portable code surrogate (Linux -m32)
   # Catches int-width / struct-layout / endianness regressions in portable
   # code (protocol.c + cJSON.c) without requiring access to old Intel Mac
-  # hardware. Scope per universal_upgrade.md §4.5 / D16 / H04:
+  # hardware. Scope:
   # - INCLUDED: protocol.c (pure portable, only stdlib + cJSON deps)
   # - INCLUDED: third_party/cJSON.c (pure portable)
   # - EXCLUDED: util.c (#include compat.h + POSIX needs _POSIX_C_SOURCE)
