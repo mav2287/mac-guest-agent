@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.5.2 — 2026-05-28
+
+### Fixed
+- **`guest-exec` process-table slot leak (DoS after 64 short execs even with correct status polling).** `src/cmd-exec.c::process_table` caps at `MAX_PROCESSES = 64`. Slots were reclaimed only by a 30-minute wall-time cleanup, so a caller polling `guest-exec-status` until `exited:true` (the correct usage pattern) would still see the slot held for half an hour. After 64 short execs the 65th returned `GenericError: Too many running processes` until the cleanup window passed — affecting backup tools, monitoring loops, and the project's own `scripts/verify.sh` which uses `guest-exec` for the in-VM `--self-test-json` and `--safe-test-json` calls. Reproducer (now a regression test in `tests/run_tests.sh`): launched `/bin/echo` + poll-until-exited 64 times → 65th failed.
+
+  Fix: `handle_exec_status()` now calls `release_process(proc)` after the terminal `exited:true` response is fully built (the response JSON owns its own malloc'd b64 strings, so freeing `proc->out_buf` / `proc->err_buf` is safe). The 30-minute cleanup in `alloc_process()` stays as the safety net for callers who launched and never polled. New regression test runs 100 short execs with `poll-until-exited` and asserts every single one succeeds; sabotage-verified the test catches the bug at iteration 64 without the fix.
+
+  **Behavioral change**: a `guest-exec-status` call against a PID that already received its terminal status now returns `InvalidParameter`. The QGA spec does not guarantee idempotent terminal polling and we never documented it; the common pattern is "poll until exited, then move on."
+
+### Documentation
+- **`docs/TESTING_HARNESS.md` unblocked for contributors.** The Profile B verify.sh download URL pointed at the deleted `universal-upgrade-v2.4.4` branch (404'd as soon as PR #6 merged). Updated to `main`. Stale `agent_version = 2.5.0` expectations replaced with "the version you installed." Same applies to evidence-expectation wording further down.
+- **`docs/COMPATIBILITY.md` introduces Tier 1†** (Production-ready, current-artifact retest pending) for 10.4 Tiger and 10.5 Leopard. Runtime evidence on those rows is still v2.4.3 (vit9696's PR #5); the i386 slice's build recipe is unchanged from v2.4.3 → v2.5.x and `scripts/verify-legacy-slices.sh` confirms structural equivalence on every CI build, so the rows remain Tier 1 in spirit but the dagger flags the pending current-release runtime drop. Promotes back to plain Tier 1 once a v2.5.x evidence drop lands.
+- **Cleanup sweep**: tracked source / scripts / workflows no longer reference the deleted `audit.md` and `universal_upgrade.md` files. `docs/design/AGENT_BEHAVIOUR_SPEC.md` and `docs/research/UPSTREAM_NOTES.md` now marked as "historical reference" rather than "in progress" — the work they describe shipped in v2.4.3.
+
 ## v2.5.1 — 2026-05-28
 
 ### ⚠️ BREAKING CHANGE — release asset filename
