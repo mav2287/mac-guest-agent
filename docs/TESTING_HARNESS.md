@@ -1,6 +1,6 @@
 # Testing Harness — Runtime Validation on Target Macs
 
-This is the **how-to** for running the v2.5.0+ universal binary on a macOS version we haven't fully validated in CI (typically Tiger, Leopard, Snow Leopard, Lion, or a clean Big Sur arm64 install) and submitting evidence the maintainer can use to promote the matching row in [`COMPATIBILITY.md`](COMPATIBILITY.md) from Tier 2 (static-validated, runtime-pending) to Tier 1 (runtime-confirmed).
+This is the **how-to** for running the v2.5.0+ universal binary (latest is v2.5.1) on a macOS version we haven't fully validated in CI (typically Tiger, Leopard, Snow Leopard, Lion, or a clean Big Sur arm64 install) and submitting evidence the maintainer can use to promote the matching row in [`COMPATIBILITY.md`](COMPATIBILITY.md) from Tier 2 (static-validated, runtime-pending) to Tier 1 (runtime-confirmed).
 
 CI gives strong **static** guarantees — every release goes through the Mach-O verifier ([`scripts/verify-legacy-slices.sh`](../scripts/verify-legacy-slices.sh)), the symbol-baseline diff, the load-command allowlist, the LC_UNIXTHREAD-on-legacy-slices check that fixed issue #4. CI cannot give **runtime** guarantees on OS versions GitHub doesn't ship runners for. That's where this harness comes in: a contributor with an actual Tiger Mac, an actual Snow Leopard VM, an actual arm64 Big Sur install runs the harness, captures evidence, opens a PR or attaches to a GitHub issue, and the maintainer folds the row into the matrix.
 
@@ -76,7 +76,7 @@ sudo launchctl list com.macos.guest-agent | grep -E '"PID"|"LastExitStatus"'
 # Expect: numeric PID (not "-"), LastExitStatus = 0
 
 sudo /usr/local/bin/mac-guest-agent --self-test-json
-# Expect: agent_version = 2.5.0, selected_arch = (the slice for this host),
+# Expect: agent_version = (whichever release you installed), selected_arch = (the slice dyld picked for this host),
 # errors = 0, status = pass
 ```
 
@@ -111,7 +111,7 @@ This is the same flow that produced the existing [`docs/evidence/10.11.6/`](evid
 
 ```bash
 # From your modern Mac with access to the VM's QGA channel:
-curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/universal-upgrade-v2.4.4/scripts/verify.sh \
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/verify.sh \
   -o /tmp/verify.sh \
   && chmod +x /tmp/verify.sh \
   && /tmp/verify.sh <identifier> | tee verify-output.txt
@@ -151,7 +151,7 @@ The audit specifically called out these as the highest-value gaps:
 A successful Profile B run produces output ending in `Status: ALL CHECKS PASSED`, with the JSON appendix carrying:
 
 - `counts: {passed: 38, failed: 0}` (or more passes if the host's `freeze-cycles` is bumped above 3)
-- `in_vm_selftest.agent_version: "2.5.0"`
+- `in_vm_selftest.agent_version` matches the release you installed (currently `"2.5.1"` for the latest tag)
 - `in_vm_selftest.system_info.selected_arch:` the slice dyld picked for the guest (i386 for Tiger/Leopard, x86_64 for Snow Leopard through Catalina, arm64 for Big Sur+)
 - `mount_dispatch_crosscheck.match: true`
 - All `freeze_cycles_log` entries with `behavioural_check: "pass"`
@@ -160,6 +160,6 @@ The existing `docs/evidence/10.11.6/` is the reference. Compare your output's sh
 
 ## Reporting failures
 
-A `--version` SIGTRAP on 10.6/10.7 with v2.5.0 would be a critical regression of the issue #4 fix. A failed `--self-test` step listing a specific missing tool or kext is a doc-update opportunity (the matrix row should reflect what's actually present). A `scripts/verify.sh` non-zero exit on freeze/thaw is a freeze-semantics issue worth a GitHub issue with the full `verify.txt` + `verify.json` attached.
+A `--version` SIGTRAP on 10.6/10.7 with any v2.5.x release would be a critical regression of the issue #4 fix. A failed `--self-test` step listing a specific missing tool or kext is a doc-update opportunity (the matrix row should reflect what's actually present). A `scripts/verify.sh` non-zero exit on freeze/thaw is a freeze-semantics issue worth a GitHub issue with the full `verify.txt` + `verify.json` attached.
 
 Open at [github.com/mav2287/mac-guest-agent/issues](https://github.com/mav2287/mac-guest-agent/issues/new). Include the OS version, hardware/hypervisor, the exact command that failed, and the captured evidence file (Profile A or Profile B).
