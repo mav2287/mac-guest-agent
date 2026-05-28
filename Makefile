@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.5.0
+VERSION := 2.5.1
 BUILD_DIR := build
 DIST_DIR := dist
 
@@ -284,11 +284,17 @@ check: build
 	@otool -l $(BUILD_DIR)/$(PROGRAM_NAME) | grep -A 3 "LC_VERSION_MIN\|LC_BUILD_VERSION" || true
 	@echo "Size: $$(du -h $(BUILD_DIR)/$(PROGRAM_NAME) | cut -f1)"
 
-# Create release distribution
+# Create release distribution.
+# v2.5.1+: published asset is named `mac-guest-agent` (no -darwin-universal
+# suffix). The file is the same tri-fat universal binary; the shorter name
+# matches what /usr/local/bin/ will contain post-install, so the manual
+# install flow becomes `mv mac-guest-agent /usr/local/bin/` instead of
+# requiring a rename. v2.5.0 published `mac-guest-agent-darwin-universal`;
+# pinned URLs from that one-day window need to drop the suffix.
 dist: build-all
-	@echo "Creating distribution (universal-only, v2.5.0+)..."
+	@echo "Creating distribution (universal-only, v2.5.1+)..."
 	@rm -rf $(DIST_DIR) && mkdir -p $(DIST_DIR)
-	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-universal $(DIST_DIR)/$(PROGRAM_NAME)-darwin-universal
+	@cp $(BUILD_DIR)/$(PROGRAM_NAME)-universal $(DIST_DIR)/$(PROGRAM_NAME)
 	@cd $(DIST_DIR) && shasum -a 256 * > checksums.sha256
 	@echo "Distribution ready in $(DIST_DIR)/"
 

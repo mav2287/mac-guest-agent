@@ -1,6 +1,25 @@
 # Changelog
 
-## v2.5.1 (unreleased)
+## v2.5.1 — 2026-05-28
+
+### ⚠️ BREAKING CHANGE — release asset filename
+The published release asset is renamed from `mac-guest-agent-darwin-universal` (v2.5.0) to simply `mac-guest-agent` (v2.5.1+). Same tri-fat universal binary, shorter name. The shorter name matches what `/usr/local/bin/mac-guest-agent` will contain post-install — the manual install flow becomes:
+
+```bash
+curl -fLO https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
+sudo mv mac-guest-agent /usr/local/bin/
+sudo /usr/local/bin/mac-guest-agent --install
+```
+
+instead of requiring a per-step rename. Requested by @vit9696 ([#4](https://github.com/mav2287/mac-guest-agent/issues/4)).
+
+**Anyone with v2.5.0 URLs** (one-day window between v2.5.0 and v2.5.1) must update:
+
+| Was (v2.5.0) | Now (v2.5.1+) |
+|---|---|
+| `…/releases/latest/download/mac-guest-agent-darwin-universal` | `…/releases/latest/download/mac-guest-agent` |
+
+`scripts/install.sh --local` accepts both names during the transition — the v2.5.0 `*-darwin-universal` filename is kept in the search list as a recovery fallback so users who downloaded yesterday's release don't need to rename. `service.c --update` text and all install snippets updated to the new name.
 
 ### Fixed
 - **`producer | short-circuit-consumer` SIGPIPE race class eliminated across all `set -o pipefail` shell scripts.** Under pipefail, a pipeline whose right-hand side exits early (`grep -q`, `head -1`, `awk '...{print; exit}'`, `sed 'Nq'`, etc.) SIGPIPEs the producer's next write, which dies with status 141 and propagates non-zero through the pipeline — making the surrounding `if` or `$()` see a "failure" that didn't logically happen. Hit once in the wild as the "PVE: VMID redacted in human output" flake on CI run 26532052157 (commit `d0bde24`, macos-14, 2026-05-27); other instances of the same pattern existed in the codebase and would have been timing-bombs.

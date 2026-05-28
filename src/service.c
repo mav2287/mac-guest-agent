@@ -232,8 +232,8 @@ int service_update(const char *new_binary_path, int dry_run)
         fprintf(stderr, "Usage: sudo mac-guest-agent --update /path/to/new/binary\n");
         fprintf(stderr, "\nTo update from another machine:\n");
         fprintf(stderr, "  1. Download the new binary on a machine with internet\n");
-        fprintf(stderr, "  2. scp mac-guest-agent-darwin-universal user@vm-ip:/tmp/\n");
-        fprintf(stderr, "  3. sudo mac-guest-agent --update /tmp/mac-guest-agent-darwin-universal\n");
+        fprintf(stderr, "  2. scp mac-guest-agent user@vm-ip:/tmp/\n");
+        fprintf(stderr, "  3. sudo mac-guest-agent --update /tmp/mac-guest-agent\n");
         return 1;
     }
 

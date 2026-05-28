@@ -32,7 +32,7 @@ Use this template when cutting a new release. Copy the relevant sections into th
 
 ### Download
 
-**Single download:** `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
+**Single download:** `mac-guest-agent` (i386 + x86_64 + arm64 in one tri-fat Mach-O, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
 ```
 
 ## Checklist

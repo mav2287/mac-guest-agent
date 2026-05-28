@@ -31,7 +31,7 @@ The guest agent turns a UTM VM from a "window with a desktop" into a **managed v
 
 ```bash
 # Inside the macOS VM
-sudo cp mac-guest-agent-darwin-universal /usr/local/bin/mac-guest-agent
+sudo mv mac-guest-agent /usr/local/bin/
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
@@ -224,7 +224,7 @@ UTM on Apple Silicon supports two backends for macOS guests, and the transport s
 
 ### QEMU backend (recommended)
 
-Works the same way as on Intel hosts: ISA serial via the **QemuGuestAgent** interface (or any other Mode that surfaces an ISA UART to the guest). The agent loads its arm64 slice on arm64 guests and its x86_64 slice on x86_64-emulated guests — same `mac-guest-agent-darwin-universal` binary, dyld picks the slice at load time.
+Works the same way as on Intel hosts: ISA serial via the **QemuGuestAgent** interface (or any other Mode that surfaces an ISA UART to the guest). The agent loads its arm64 slice on arm64 guests and its x86_64 slice on x86_64-emulated guests — same `mac-guest-agent` universal binary, dyld picks the slice at load time.
 
 This is the supported path.
 

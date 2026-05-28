@@ -85,25 +85,27 @@ main() {
                 exit 1
             fi
             BINARY="$2"
-        # Search order: release asset name first (what users actually transfer
-        # from a modern machine), then in-tree build outputs, then legacy
-        # generic names kept for pre-v2.5.0 recovery flows.
-        elif [ -f "./${BINARY_NAME}-darwin-universal" ]; then
-            BINARY="./${BINARY_NAME}-darwin-universal"
-        elif [ -f "/tmp/${BINARY_NAME}-darwin-universal" ]; then
-            BINARY="/tmp/${BINARY_NAME}-darwin-universal"
-        elif [ -f "build/${BINARY_NAME}-universal" ]; then
-            BINARY="build/${BINARY_NAME}-universal"
-        elif [ -f "build/${BINARY_NAME}" ]; then
-            BINARY="build/${BINARY_NAME}"
+        # Search order: release asset name first (v2.5.1+ ships as plain
+        # `mac-guest-agent` — what users actually transfer from a modern
+        # machine), then in-tree build outputs, then the pre-v2.5.1
+        # `-darwin-universal` name as recovery fallback for anyone whose
+        # local copy is from the one-day v2.5.0 window.
         elif [ -f "./${BINARY_NAME}" ]; then
             BINARY="./${BINARY_NAME}"
         elif [ -f "/tmp/${BINARY_NAME}" ]; then
             BINARY="/tmp/${BINARY_NAME}"
+        elif [ -f "build/${BINARY_NAME}-universal" ]; then
+            BINARY="build/${BINARY_NAME}-universal"
+        elif [ -f "build/${BINARY_NAME}" ]; then
+            BINARY="build/${BINARY_NAME}"
+        elif [ -f "./${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="./${BINARY_NAME}-darwin-universal"
+        elif [ -f "/tmp/${BINARY_NAME}-darwin-universal" ]; then
+            BINARY="/tmp/${BINARY_NAME}-darwin-universal"
         else
             err "No local binary found."
-            err "Searched: ./${BINARY_NAME}-darwin-universal, /tmp/${BINARY_NAME}-darwin-universal, build/${BINARY_NAME}-universal, build/${BINARY_NAME}, ./${BINARY_NAME}, /tmp/${BINARY_NAME}"
-            err "Pass an explicit path: sudo $0 --local /path/to/${BINARY_NAME}-darwin-universal"
+            err "Searched: ./${BINARY_NAME}, /tmp/${BINARY_NAME}, build/${BINARY_NAME}-universal, build/${BINARY_NAME}, ./${BINARY_NAME}-darwin-universal, /tmp/${BINARY_NAME}-darwin-universal"
+            err "Pass an explicit path: sudo $0 --local /path/to/${BINARY_NAME}"
             exit 1
         fi
         info "Using local binary: $BINARY"
@@ -124,13 +126,15 @@ main() {
     if [ "$1" != "--local" ]; then
         info "Downloading latest release..."
         if [ "$DRY_RUN" -eq 1 ]; then
-            info "DRY RUN: would download mac-guest-agent-darwin-universal from GitHub releases."
+            info "DRY RUN: would download ${BINARY_NAME} from GitHub releases."
             BINARY="<dry-run-pending-download>"
         else
             TMPDIR=$(mktemp -d)
             trap "rm -rf $TMPDIR" EXIT
 
-            BINARY_FILE="${BINARY_NAME}-darwin-universal"
+            # v2.5.1+: release asset is `mac-guest-agent` (was
+            # `mac-guest-agent-darwin-universal` in v2.5.0 for one day).
+            BINARY_FILE="${BINARY_NAME}"
             URL="https://github.com/${REPO}/releases/latest/download/${BINARY_FILE}"
 
             if command -v curl >/dev/null 2>&1; then
@@ -200,9 +204,10 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: sudo $0 [--local [PATH]] [--dry-run]"
     echo ""
     echo "  --local         Install from a local binary (for VMs that can't reach GitHub)."
-    echo "                  Searches ./mac-guest-agent-darwin-universal, /tmp/mac-guest-agent-darwin-universal,"
-    echo "                  build/mac-guest-agent-universal, build/mac-guest-agent, ./mac-guest-agent,"
-    echo "                  /tmp/mac-guest-agent (in that order)."
+    echo "                  Searches ./mac-guest-agent, /tmp/mac-guest-agent,"
+    echo "                  build/mac-guest-agent-universal, build/mac-guest-agent,"
+    echo "                  ./mac-guest-agent-darwin-universal,"
+    echo "                  /tmp/mac-guest-agent-darwin-universal (pre-v2.5.1 fallback)."
     echo "  --local PATH    Install from an explicit binary path (skips the search)."
     echo "  --dry-run       Print every action the installer would take WITHOUT touching"
     echo "                  /usr/local/bin, /Library/LaunchDaemons, or launchctl. Argument"

@@ -22,7 +22,7 @@ Two harness profiles cover the gap:
 
 **Step 1 — Transfer the binary to the target Mac/VM.**
 
-The release artifact (or your locally-built `dist/mac-guest-agent-darwin-universal`) has SHA256 `d60bb06d1d075fcdbdd44697fffe7404e11484a68b27f6acf40d3992536831a2` for v2.5.0 (this changes per release — check the release page). Transfer by whatever works on the target OS:
+The release artifact is `mac-guest-agent` (v2.5.1+; was `mac-guest-agent-darwin-universal` for the v2.5.0 one-day window). The SHA256 changes per release — check the release page. Transfer by whatever works on the target OS:
 
 | Target OS | Transfer methods that typically work |
 |---|---|
@@ -35,8 +35,8 @@ The TLS landscape on pre-10.13 macOS is messy — GitHub's modern cipher require
 **Step 2 — Verify the SHA256 inside the target.**
 
 ```bash
-shasum -a 256 /tmp/mac-guest-agent-darwin-universal
-# Expected (for v2.5.0): d60bb06d1d075fcdbdd44697fffe7404e11484a68b27f6acf40d3992536831a2
+shasum -a 256 /tmp/mac-guest-agent
+# Compare against the release page's checksums.sha256
 ```
 
 If the SHA doesn't match the expected, the file was corrupted in transit (HFS+ resource forks, USB FAT32 size truncation, etc.) — re-transfer before continuing. **A SHA mismatch invalidates every downstream test.**
@@ -46,10 +46,10 @@ If the SHA doesn't match the expected, the file was corrupted in transit (HFS+ r
 These don't execute the binary; they only inspect its Mach-O headers. They confirm dyld *could* load a slice for this host without actually trying:
 
 ```bash
-file /tmp/mac-guest-agent-darwin-universal
+file /tmp/mac-guest-agent
 # Expect: Mach-O universal binary with 3 architectures: [i386:...] [x86_64:...] [arm64:...]
 
-lipo -info /tmp/mac-guest-agent-darwin-universal
+lipo -info /tmp/mac-guest-agent
 # Expect: i386 x86_64 arm64
 ```
 
@@ -60,8 +60,8 @@ If either fails, the binary itself is broken — stop and report.
 This is the actual issue #4 reproduction gate. If your dyld doesn't accept the binary's load commands, `--version` will SIGTRAP here. If it works, the slice that matters for your OS loaded successfully.
 
 ```bash
-/tmp/mac-guest-agent-darwin-universal --version
-# Expect: mac-guest-agent 2.5.0
+/tmp/mac-guest-agent --version
+# Expect: mac-guest-agent 2.5.1 (or whatever release you downloaded)
 ```
 
 On 10.6 Snow Leopard and 10.7 Lion, this is the EXACT command that crashed in v2.4.3 with `dyld: unknown required load command 0x80000028`. A clean response here is the runtime confirmation of the LC_UNIXTHREAD fix.
@@ -69,7 +69,7 @@ On 10.6 Snow Leopard and 10.7 Lion, this is the EXACT command that crashed in v2
 **Step 5 — Install + self-test.**
 
 ```bash
-sudo cp /tmp/mac-guest-agent-darwin-universal /usr/local/bin/mac-guest-agent
+sudo mv /tmp/mac-guest-agent /usr/local/bin/
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 sudo launchctl list com.macos.guest-agent | grep -E '"PID"|"LastExitStatus"'

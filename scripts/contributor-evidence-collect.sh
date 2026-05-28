@@ -95,7 +95,7 @@ probe() {
     if [ ! -e "$BINARY" ]; then
         emit ""
         emit "FATAL: binary not found at: $BINARY"
-        emit "Pass a path: sudo $0 /path/to/mac-guest-agent-darwin-universal"
+        emit "Pass a path: sudo $0 /path/to/mac-guest-agent"
         exit 1
     fi
 

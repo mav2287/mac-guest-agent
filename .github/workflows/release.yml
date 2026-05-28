@@ -50,15 +50,20 @@ jobs:
         run: ./tests/run_tests.sh ./build/mac-guest-agent-universal
 
       - name: Prepare release binary
+        # v2.5.1+: published asset is `mac-guest-agent` (no -darwin-universal
+        # suffix). Same tri-fat universal binary; the shorter name matches
+        # /usr/local/bin/mac-guest-agent post-install so manual installers
+        # can `mv mac-guest-agent /usr/local/bin/` without renaming. v2.5.0
+        # one-day-old `mac-guest-agent-darwin-universal` URLs need updating.
         run: |
-          cp build/mac-guest-agent-universal build/mac-guest-agent-darwin-universal
-          cd build && shasum -a 256 mac-guest-agent-darwin-universal > checksums.sha256
+          cp build/mac-guest-agent-universal build/mac-guest-agent
+          cd build && shasum -a 256 mac-guest-agent > checksums.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/mac-guest-agent-darwin-universal
+            build/mac-guest-agent
             build/checksums.sha256
           body: |
             ## macOS QEMU Guest Agent ${{ github.ref_name }}
@@ -76,15 +81,14 @@ jobs:
             # On Tiger / Leopard / older Snow Leopard, the VM's TLS stack usually
             # can't reach GitHub directly — download from a modern machine and
             # transfer the file.
-            sudo cp mac-guest-agent-darwin-universal /usr/local/bin/mac-guest-agent
+            sudo mv mac-guest-agent /usr/local/bin/
             sudo chmod +x /usr/local/bin/mac-guest-agent
             sudo /usr/local/bin/mac-guest-agent --install
             ```
 
             ### Download
 
-            Single download: `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 → 26).
-            dyld picks the appropriate slice at load time.
+            Single download: `mac-guest-agent` (i386 + x86_64 + arm64 in one tri-fat Mach-O, covers macOS 10.4 → 26). dyld picks the appropriate slice at load time.
 
             ### If something goes wrong
 

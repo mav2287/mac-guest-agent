@@ -21,10 +21,10 @@ qm stop <vmid> && sleep 5 && qm start <vmid>
 # Note: on Tiger / Leopard / older Snow Leopard guests, the VM's TLS stack
 # usually cannot reach GitHub directly. Download on a modern machine and
 # transfer the file (scp / shared folder / USB).
-curl -L -o mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent-darwin-universal
+curl -fLO https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
 
 # Install
-sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
+sudo mv mac-guest-agent /usr/local/bin/
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
@@ -47,7 +47,7 @@ The agent communicates via an **ISA serial port** (16550 UART) using Apple's bui
 
 ## Compatibility
 
-**Single download:** `mac-guest-agent-darwin-universal` (i386 + x86_64 + arm64, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time.
+**Single download:** `mac-guest-agent` (i386 + x86_64 + arm64 in one tri-fat Mach-O, covers macOS 10.4 Tiger through 26 Tahoe). dyld picks the right slice at load time. (v2.5.0 published this as `mac-guest-agent-darwin-universal` for one day; v2.5.1+ drops the suffix.)
 
 ISA serial driver (`Apple16X50Serial.kext`) verified present with identical PCI class match on every macOS from 10.4 Tiger (2005) through 26.3 Tahoe (2026). See the [compatibility matrix](docs/COMPATIBILITY.md) for per-version evidence.
 

@@ -571,7 +571,7 @@ check_architecture() {
     # v2.5.0+: universal-only release. Same recommendation regardless of host
     # macOS version / arch — the universal binary contains i386 + x86_64 +
     # arm64 slices; dyld picks at load time.
-    info "Recommended binary: mac-guest-agent-darwin-universal (covers all macOS versions and architectures, one slice loads at runtime)"
+    info "Recommended binary: mac-guest-agent (covers all macOS versions and architectures, one slice loads at runtime)"
 }
 
 # Resolve codename from version
