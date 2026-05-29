@@ -102,6 +102,10 @@ assert_rc           "--uninstall + --virtio-force is rejected"       1 "$RC"
 run_install --uninstall --dry-run
 assert_rc           "--uninstall + --dry-run is rejected"            1 "$RC"
 
+run_install --uninstall --local /tmp/some-binary
+assert_rc           "--uninstall + --local is rejected"              1 "$RC"
+assert_contains     "rejection lists --local"                        "--local" "$OUT"
+
 # --dry-run --virtio: prints the gated plan with apple-unload + verify.
 run_install --dry-run --virtio
 assert_rc           "--dry-run --virtio exits 0"                     0 "$RC"

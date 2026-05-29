@@ -120,11 +120,30 @@ our_daemon_running_pid() {
     launchctl list 2>/dev/null | awk -v label="$OUR_DAEMON_LABEL" '$3==label && $1 ~ /^[0-9]+$/ {print $1; found=1} END {exit !found}'
 }
 
-# Check the agent log for evidence the agent opened the requested device.
+# Check the agent log for evidence the agent opened the requested device
+# since the offset given in $1 (byte count from start of file). The byte
+# offset is captured BEFORE the daemon restart so we don't false-positive
+# on a prior run's "Opened device:" line that's still in the log from
+# an earlier --virtio install.
 # The log line format from src/channel.c:218 is: "Opened device: <path> (fd=...)".
-agent_opened_virtio() {
+agent_opened_virtio_since() {
+    local offset="$1"
     [ -f "$AGENT_LOG_FILE" ] || return 1
-    grep -q "Opened device: $VIRTIO_DEVICE" "$AGENT_LOG_FILE"
+    # tail -c +N is 1-indexed (byte N onward). offset+1 makes "start of new
+    # content" work whether offset is 0 (file didn't exist before) or N>0
+    # (file existed; we want only what was appended since).
+    tail -c "+$((offset + 1))" "$AGENT_LOG_FILE" 2>/dev/null | grep -q "Opened device: $VIRTIO_DEVICE"
+}
+
+# Capture the current log file size in bytes (BSD stat). Returns 0 if the
+# file doesn't yet exist. Caller passes the result back into
+# agent_opened_virtio_since after the restart.
+agent_log_size() {
+    if [ -f "$AGENT_LOG_FILE" ]; then
+        stat -f%z "$AGENT_LOG_FILE" 2>/dev/null || echo 0
+    else
+        echo 0
+    fi
 }
 
 write_virtio_config() {
@@ -262,7 +281,12 @@ restore_apple_agent_best_effort() {
 # VirtIO device. The plist already has KeepAlive + RunAtLoad, so `launchctl
 # load` (run by the binary's --install) starts it; we just need to give it
 # a moment to actually connect to the channel.
+#
+# $1 is the log-file byte size at the moment BEFORE the restart, so we can
+# scan only the bytes added since (and not match a "Opened device:" line
+# left over from a prior --virtio install of the same daemon).
 verify_agent_on_virtio() {
+    local log_offset="$1"
     local pid=""
     local i=0
     while [ $i -lt 5 ]; do
@@ -279,13 +303,13 @@ verify_agent_on_virtio() {
     info "Agent process running (PID $pid). Checking it opened the VirtIO device..."
     i=0
     while [ $i -lt 5 ]; do
-        if agent_opened_virtio; then
+        if agent_opened_virtio_since "$log_offset"; then
             return 0
         fi
         sleep 1
         i=$((i+1))
     done
-    err "Agent process started but the log does not show 'Opened device: $VIRTIO_DEVICE' within 5 seconds. Check $AGENT_LOG_FILE."
+    err "Agent process started but the log does not show 'Opened device: $VIRTIO_DEVICE' within 5 seconds (looked past byte $log_offset). Check $AGENT_LOG_FILE."
     return 1
 }
 
@@ -342,6 +366,15 @@ virtio_install() {
 
     # Past this point we start making changes. Each failure attempts
     # rollback to the prior state before exiting.
+    #
+    # Stop our own daemon FIRST so that an idempotent re-install (operator
+    # re-running --virtio after a macOS update relanded Apple's daemon)
+    # doesn't fail the unload-verify's "device still held" check by
+    # detecting our own previously-running daemon as the holder. After
+    # this call, our daemon is stopped + unloaded; nothing should hold the
+    # VirtIO device except Apple's daemon (which we unload next).
+    stop_existing
+
     if ! unload_apple_agent_and_verify; then
         # Nothing else changed yet, but if the unload partially succeeded
         # (e.g., process exited but launchctl record stuck), try to reload
@@ -357,12 +390,18 @@ virtio_install() {
 
     drop_marker "full"
 
+    # Capture the agent log's current size before restart so the verify
+    # step only inspects bytes written by THIS run's daemon. See
+    # agent_opened_virtio_since() for the race this guards against.
+    local log_offset
+    log_offset=$(agent_log_size)
+
     info "Restarting agent so it picks up the VirtIO config..."
     launchctl stop "$OUR_DAEMON_LABEL" 2>/dev/null || true
     sleep 1
     launchctl start "$OUR_DAEMON_LABEL" 2>/dev/null || true
 
-    if ! verify_agent_on_virtio; then
+    if ! verify_agent_on_virtio "$log_offset"; then
         err "Agent failed to come up on the VirtIO channel. Rolling back."
         launchctl unload "$OUR_DAEMON_PLIST" 2>/dev/null || true
         rm -f "$VIRTIO_CONFIG_PATH"
@@ -494,8 +533,8 @@ main() {
     set -- "${NEW_ARGS[@]:-}"
 
     if [ "$UNINSTALL" -eq 1 ]; then
-        if [ -n "$VIRTIO_MODE" ] || [ "$DRY_RUN" -eq 1 ]; then
-            err "--uninstall does not combine with --virtio / --virtio-force / --dry-run."
+        if [ -n "$VIRTIO_MODE" ] || [ "$DRY_RUN" -eq 1 ] || [ "${NEW_ARGS[0]:-}" = "--local" ]; then
+            err "--uninstall does not combine with --virtio / --virtio-force / --dry-run / --local."
             exit 1
         fi
         check_root

@@ -72,19 +72,22 @@ The installer will:
 6. Write `/etc/qemu/qemu-ga.conf` with the explicit `path =` override.
 7. Start the LaunchDaemon and confirm it answers `guest-info`.
 
-A marker file at `/var/db/mac-guest-agent/virtio-override` is dropped on success so `--uninstall` knows to restore Apple's daemon.
+A marker file at `/var/db/mac-guest-agent/.virtio-mode` (content: `mode=full`) is dropped on success so `--uninstall` knows to restore Apple's daemon.
 
 ## Rolling back
 
 ```bash
-sudo /usr/local/bin/mac-guest-agent --uninstall
+sudo ./install.sh --uninstall
 ```
 
-If the marker file is present, the uninstall path additionally:
+**Use the script, not the binary's `--uninstall`.** The binary's `--uninstall` only removes the LaunchDaemon and binary; it does NOT know about the marker, the override config, or Apple's daemon. The script's `--uninstall` reads the marker and orchestrates the full restoration:
 
+- Stops and removes mac-guest-agent (calls the binary's `--uninstall` internally if the binary is still present)
+- Removes `/etc/qemu/qemu-ga.conf`
 - Reloads `/System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist`
-- Removes `/etc/qemu/qemu-ga.conf` (only if we wrote it — fingerprint check)
 - Removes the marker file
+
+If the install was done with `--virtio-force` (no Apple-daemon unload at install time), the uninstall skips the Apple-daemon reload — only the agent and override config are removed.
 
 SIP is not re-enabled automatically. To restore SIP, reboot to Recovery and run `csrutil enable`.
 
