@@ -21,7 +21,7 @@ If any of those don't apply, this page isn't for you.
 | 3 | Unload Apple's `AppleQEMUGuestAgent` LaunchDaemon |
 | 4 | Verify the unload landed (LaunchDaemon gone, no process holding the VirtIO device) |
 | 5 | Install `mac-guest-agent` as usual + write `/etc/qemu/qemu-ga.conf` with `path = /dev/cu.org.qemu.guest_agent.0` |
-| 6 | Start the LaunchDaemon and confirm the agent answers `guest-info` over the new channel |
+| 6 | Start the LaunchDaemon and confirm the agent process is running and that `/var/log/mac-guest-agent.log` shows `Opened device: /dev/cu.org.qemu.guest_agent.0` |
 
 If any step fails, no further changes are made and the installer reports the precise failure point. If the unload landed but the install or functional verify failed, the installer attempts to reload Apple's LaunchDaemon to restore the prior state.
 
@@ -70,7 +70,7 @@ The installer will:
 4. Unload Apple's daemon and verify it released the channel.
 5. Install `mac-guest-agent` as usual.
 6. Write `/etc/qemu/qemu-ga.conf` with the explicit `path =` override.
-7. Start the LaunchDaemon and confirm it answers `guest-info`.
+7. Start the LaunchDaemon and confirm two signals — the agent's PID appears in `launchctl list com.macos.guest-agent`, AND the agent's log shows a fresh `Opened device: /dev/cu.org.qemu.guest_agent.0` line written after the restart. The check is local-state-only — it does not perform a host-to-guest QGA round-trip.
 
 A marker file at `/var/db/mac-guest-agent/.virtio-mode` (content: `mode=full`) is dropped on success so `--uninstall` knows to restore Apple's daemon.
 

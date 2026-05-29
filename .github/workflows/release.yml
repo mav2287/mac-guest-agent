@@ -49,6 +49,12 @@ jobs:
       - name: Run test suite against the universal artifact
         run: ./tests/run_tests.sh ./build/mac-guest-agent-universal
 
+      - name: Install-flags tests (scripts/install.sh)
+        run: make test-install-flags
+
+      - name: Verify-transports tests (scripts/verify.sh)
+        run: make test-verify-transports
+
       - name: Prepare release binary
         # v2.5.1+: published asset is `mac-guest-agent` (no -darwin-universal
         # suffix). Same tri-fat universal binary; the shorter name matches

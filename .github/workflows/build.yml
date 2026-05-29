@@ -193,6 +193,9 @@ jobs:
       - name: Verify-transports tests (scripts/verify.sh)
         run: make test-verify-transports
 
+      - name: Install-flags tests (scripts/install.sh)
+        run: make test-install-flags
+
       - name: Code coverage
         run: make test-coverage
 

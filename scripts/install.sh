@@ -178,6 +178,56 @@ remove_marker() {
     rmdir "$VIRTIO_MARKER_DIR" 2>/dev/null || true
 }
 
+# --- Install state detection (v2.5.3+) ---------------------------------------
+#
+# Returns one of: "not-installed", "standard", "virtio-full", "virtio-force".
+#
+# Order matters: the VirtIO marker is the most authoritative signal because
+# only --virtio / --virtio-force writes it. Without a marker, we fall back to
+# binary/plist presence to detect a standard install. Stale state (e.g., a
+# leftover marker after a partial uninstall) produces best-effort answers
+# rather than failing — the install/upgrade routing handles the edge cases.
+#
+# Test hook: if $MAC_GUEST_AGENT_TEST_STATE is set, its value is echoed
+# verbatim. install.sh's flag-parsing tests use this to exercise the
+# state-driven branches without privileged setup (no need to write to
+# /var/db/, /usr/local/bin/, or /Library/LaunchDaemons/).
+detect_install_state() {
+    if [ -n "${MAC_GUEST_AGENT_TEST_STATE:-}" ]; then
+        echo "$MAC_GUEST_AGENT_TEST_STATE"
+        return
+    fi
+    if [ -f "$VIRTIO_MARKER_FILE" ]; then
+        local mode
+        mode=$(awk -F= '$1=="mode" {print $2; exit}' "$VIRTIO_MARKER_FILE" 2>/dev/null)
+        case "$mode" in
+            full)  echo "virtio-full";  return ;;
+            force) echo "virtio-force"; return ;;
+        esac
+        # Marker present but unparseable; fall through to binary/plist check.
+    fi
+    if [ -x "$INSTALL_PATH" ] || [ -f "$OUR_DAEMON_PLIST" ]; then
+        echo "standard"
+        return
+    fi
+    echo "not-installed"
+}
+
+# True iff /etc/qemu/qemu-ga.conf exists. Used by main() to refuse a fresh
+# --virtio install that would clobber an operator's pre-customized config
+# (HIGH-1 elimination). The check is intentionally coarse — any file content
+# counts, because we can't safely distinguish "operator's customizations"
+# from "our prior install's leftovers" without a separate marker.
+#
+# Test hook: $MAC_GUEST_AGENT_TEST_CONFIG_EXISTS=1 forces TRUE; =0 forces FALSE.
+operator_config_exists() {
+    if [ -n "${MAC_GUEST_AGENT_TEST_CONFIG_EXISTS:-}" ]; then
+        [ "$MAC_GUEST_AGENT_TEST_CONFIG_EXISTS" = "1" ]
+        return
+    fi
+    [ -f "$VIRTIO_CONFIG_PATH" ]
+}
+
 # Read a single yes/no answer from /dev/tty (NOT stdin). Reading from
 # /dev/tty means `yes | ./install.sh --virtio` cannot bypass the prompt —
 # the prompt always talks to the user's terminal, not whatever's piped in.
@@ -403,7 +453,20 @@ virtio_install() {
 
     if ! verify_agent_on_virtio "$log_offset"; then
         err "Agent failed to come up on the VirtIO channel. Rolling back."
-        launchctl unload "$OUR_DAEMON_PLIST" 2>/dev/null || true
+        # MED-1 (audit 2026-05-29): rollback must also remove the binary and
+        # the LaunchDaemon plist, not just unload the daemon. Leaving them in
+        # place lets the system relaunch our agent on next manual `launchctl
+        # load` despite the rollback claiming prior state was restored. Use
+        # the binary's own --uninstall (idempotent, removes plist via
+        # service.c) then rm the binary; fall back to manual cleanup if the
+        # binary's --uninstall is unavailable.
+        if [ -x "$INSTALL_PATH" ]; then
+            "$INSTALL_PATH" --uninstall >/dev/null 2>&1 || true
+        else
+            launchctl unload "$OUR_DAEMON_PLIST" 2>/dev/null || true
+            rm -f "$OUR_DAEMON_PLIST"
+        fi
+        rm -f "$INSTALL_PATH"
         rm -f "$VIRTIO_CONFIG_PATH"
         remove_marker
         restore_apple_agent_best_effort
@@ -450,6 +513,99 @@ virtio_force_install() {
   Config:    $VIRTIO_CONFIG_PATH
   Log:       $AGENT_LOG_FILE
   Uninstall: sudo $0 --uninstall   (does NOT touch AppleQEMUGuestAgent)
+
+EOF
+}
+
+# --upgrade (or auto-detected upgrade on bare install.sh re-run): swap the
+# binary in place, regenerate the LaunchDaemon plist, restart the daemon,
+# leave /etc/qemu/qemu-ga.conf untouched. Works identically for all install
+# modes (standard / virtio-full / virtio-force) because operator state lives
+# entirely in the config file (which the upgrade does not touch) — only the
+# binary and plist need to be refreshed.
+#
+# Rollback on failed verify: restore the backed-up binary, regenerate its
+# plist via --install, restart. The old binary is byte-equivalent to what
+# was running pre-upgrade, so this returns to a known-good state.
+#
+# $1 is the detected install mode for logging + functional-verify dispatch.
+upgrade_install() {
+    local mode="$1"
+    info "Upgrading mac-guest-agent (mode=$mode)..."
+
+    # Backup the current binary so we can restore on rollback. Use cp,
+    # not mv — we want the old binary to remain installed and runnable
+    # until the new one is verified.
+    local backup=""
+    if [ -x "$INSTALL_PATH" ]; then
+        backup="$INSTALL_PATH.backup"
+        cp "$INSTALL_PATH" "$backup"
+        chmod +x "$backup"
+        info "Backed up current binary to $backup"
+    fi
+
+    stop_existing
+
+    info "Installing new binary..."
+    mkdir -p /usr/local/bin
+    cp "$BINARY" "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH"
+
+    info "Refreshing LaunchDaemon plist via --install..."
+    "$INSTALL_PATH" --install
+
+    # Functional verify. For VirtIO modes, confirm the agent opened the
+    # VirtIO device (since the override config carries the path). For
+    # standard mode, the binary's --install already loaded + started the
+    # daemon; we just check it produced a running PID.
+    case "$mode" in
+        virtio-full|virtio-force)
+            local log_offset
+            log_offset=$(agent_log_size)
+            launchctl stop "$OUR_DAEMON_LABEL" 2>/dev/null || true
+            sleep 1
+            launchctl start "$OUR_DAEMON_LABEL" 2>/dev/null || true
+            if ! verify_agent_on_virtio "$log_offset"; then
+                err "Upgrade verify failed: agent did not open the VirtIO device. Rolling back to the backed-up binary."
+                if [ -n "$backup" ] && [ -x "$backup" ]; then
+                    cp "$backup" "$INSTALL_PATH"
+                    chmod +x "$INSTALL_PATH"
+                    "$INSTALL_PATH" --install >/dev/null 2>&1 || true
+                    info "Restored prior binary; please investigate $AGENT_LOG_FILE."
+                fi
+                exit 1
+            fi
+            ;;
+        standard)
+            # Brief settle window so the binary's --install can start the
+            # daemon before we sanity-check.
+            sleep 1
+            if ! our_daemon_running_pid >/dev/null; then
+                err "Upgrade verify failed: daemon did not start within 1 second."
+                if [ -n "$backup" ] && [ -x "$backup" ]; then
+                    cp "$backup" "$INSTALL_PATH"
+                    chmod +x "$INSTALL_PATH"
+                    "$INSTALL_PATH" --install >/dev/null 2>&1 || true
+                    info "Restored prior binary; please investigate $AGENT_LOG_FILE."
+                fi
+                exit 1
+            fi
+            ;;
+    esac
+
+    # Verify succeeded; remove the backup.
+    if [ -n "$backup" ]; then
+        rm -f "$backup"
+    fi
+
+    echo "" >&2
+    ok "Upgrade complete (mode=$mode)."
+    cat >&2 <<EOF
+
+  Mode:      $mode
+  Binary:    $INSTALL_PATH
+  Log:       $AGENT_LOG_FILE
+  Status:    sudo launchctl list $OUR_DAEMON_LABEL
 
 EOF
 }
@@ -502,6 +658,7 @@ main() {
     DRY_RUN=0
     VIRTIO_MODE=""   # "", "virtio", or "force"
     UNINSTALL=0
+    UPGRADE=0
     NEW_ARGS=()
     for arg in "$@"; do
         case "$arg" in
@@ -525,6 +682,9 @@ main() {
             --uninstall)
                 UNINSTALL=1
                 ;;
+            --upgrade)
+                UPGRADE=1
+                ;;
             *)
                 NEW_ARGS+=("$arg")
                 ;;
@@ -533,13 +693,68 @@ main() {
     set -- "${NEW_ARGS[@]:-}"
 
     if [ "$UNINSTALL" -eq 1 ]; then
-        if [ -n "$VIRTIO_MODE" ] || [ "$DRY_RUN" -eq 1 ] || [ "${NEW_ARGS[0]:-}" = "--local" ]; then
-            err "--uninstall does not combine with --virtio / --virtio-force / --dry-run / --local."
+        if [ -n "$VIRTIO_MODE" ] || [ "$DRY_RUN" -eq 1 ] || [ "$UPGRADE" -eq 1 ] || [ "${NEW_ARGS[0]:-}" = "--local" ]; then
+            err "--uninstall does not combine with --virtio / --virtio-force / --dry-run / --upgrade / --local."
             exit 1
         fi
         check_root
         uninstall_flow
         exit 0
+    fi
+
+    # --upgrade is incompatible with --virtio / --virtio-force: the upgrade
+    # path preserves the detected install mode automatically; passing both
+    # the mode flag and --upgrade is ambiguous about operator intent.
+    if [ "$UPGRADE" -eq 1 ] && [ -n "$VIRTIO_MODE" ]; then
+        err "--upgrade cannot combine with --virtio / --virtio-force. Upgrades preserve the detected install mode."
+        exit 1
+    fi
+
+    # Phase 2: detect current install state and decide whether this run is a
+    # fresh install or an upgrade. Detection runs unconditionally — even on
+    # bare 'install.sh', so we can auto-route to the upgrade path if an
+    # existing install is present (preserves the historical "just re-run
+    # install.sh" workflow across v2.4.x/2.5.x without surprising users).
+    DETECTED_STATE=$(detect_install_state)
+    info "Detected install state: $DETECTED_STATE"
+
+    # Refusal logic: incompatible (flag, state) combinations.
+    if [ "$UPGRADE" -eq 1 ] && [ "$DETECTED_STATE" = "not-installed" ]; then
+        err "--upgrade requested but no existing install detected. Run install.sh without --upgrade for a fresh install."
+        exit 1
+    fi
+    if [ -n "$VIRTIO_MODE" ] && [ "$DETECTED_STATE" != "not-installed" ]; then
+        err "Existing install detected (state=$DETECTED_STATE). --virtio / --virtio-force is for fresh installs only."
+        err "  To update in place:        sudo $0 --upgrade"
+        err "  To switch modes:           sudo $0 --uninstall, then sudo $0 --virtio"
+        exit 1
+    fi
+    if [ -n "$VIRTIO_MODE" ] && operator_config_exists; then
+        err "Pre-existing $VIRTIO_CONFIG_PATH detected (operator state). --virtio refuses to overwrite it."
+        err "  Either back it up first and retry, or hand-edit the file to add:"
+        err "      [general]"
+        err "      path = $VIRTIO_DEVICE"
+        err "  and run the standard install (no --virtio flag)."
+        exit 1
+    fi
+
+    # Determine the effective operation. Auto-promotes bare 'install.sh' to
+    # an upgrade when an existing install is detected.
+    if [ "$UPGRADE" -eq 1 ] || [ "$DETECTED_STATE" != "not-installed" ]; then
+        case "$DETECTED_STATE" in
+            standard)     OPERATION="upgrade-standard" ;;
+            virtio-full)  OPERATION="upgrade-virtio-full" ;;
+            virtio-force) OPERATION="upgrade-virtio-force" ;;
+        esac
+        if [ "$UPGRADE" -eq 0 ]; then
+            info "Existing install detected; auto-routing to upgrade path. Use --upgrade to be explicit."
+        fi
+    else
+        case "$VIRTIO_MODE" in
+            virtio) OPERATION="fresh-virtio" ;;
+            force)  OPERATION="fresh-virtio-force" ;;
+            "")     OPERATION="fresh-standard" ;;
+        esac
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -555,6 +770,15 @@ main() {
                 exit 1
             fi
             BINARY="$2"
+            # MED-2 (audit 2026-05-29): after --local PATH is consumed, any
+            # remaining positional argument is unknown — reject it rather
+            # than silently ignoring (which previously let typos like
+            # `--virto` fall through to the default install path).
+            if [ -n "${3:-}" ]; then
+                err "Unexpected extra argument after --local PATH: $3"
+                err "Usage: sudo $0 --help"
+                exit 1
+            fi
         elif [ -f "./${BINARY_NAME}" ]; then
             BINARY="./${BINARY_NAME}"
         elif [ -f "/tmp/${BINARY_NAME}" ]; then
@@ -574,6 +798,14 @@ main() {
             exit 1
         fi
         info "Using local binary: $BINARY"
+    elif [ -n "${1:-}" ]; then
+        # MED-2 (audit 2026-05-29): any positional argument that ISN'T
+        # --local is an unknown flag (typos like --virto, --uninstal,
+        # stale automation flags from older releases, etc.). Reject rather
+        # than silently ignoring.
+        err "Unknown argument: $1"
+        err "Run 'sudo $0 --help' to see the supported flags."
+        exit 1
     fi
 
     if [ "$DRY_RUN" -eq 0 ]; then
@@ -614,42 +846,63 @@ main() {
 
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "" >&2
-        info "DRY RUN: would now do:"
-        if [ "$VIRTIO_MODE" = "virtio" ]; then
-            echo "    [prereq checks: macOS>=11, SIP off, AppleQEMUGuestAgent present, VirtIO device present]"
-            echo "    [interactive warning + yes/no via /dev/tty]"
-            echo "    launchctl unload -w $APPLE_AGENT_PLIST"
-            echo "    [verify: launchctl list && lsof on $VIRTIO_DEVICE]"
-        elif [ "$VIRTIO_MODE" = "force" ]; then
-            echo "    [no prereq checks, no Apple agent unload]"
-        fi
-        echo "    launchctl stop $OUR_DAEMON_LABEL"
-        echo "    launchctl unload $OUR_DAEMON_PLIST"
-        echo "    mkdir -p /usr/local/bin"
-        echo "    cp \"$BINARY\" \"$INSTALL_PATH\""
-        echo "    chmod +x \"$INSTALL_PATH\""
-        echo "    \"$INSTALL_PATH\" --install"
-        if [ "$VIRTIO_MODE" = "virtio" ]; then
-            echo "    write $VIRTIO_CONFIG_PATH with path = $VIRTIO_DEVICE"
-            echo "    drop marker $VIRTIO_MARKER_FILE (mode=full)"
-            echo "    launchctl stop/start $OUR_DAEMON_LABEL"
-            echo "    [verify: agent running + log shows 'Opened device: $VIRTIO_DEVICE']"
-        elif [ "$VIRTIO_MODE" = "force" ]; then
-            echo "    write $VIRTIO_CONFIG_PATH with path = $VIRTIO_DEVICE"
-            echo "    drop marker $VIRTIO_MARKER_FILE (mode=force)"
-            echo "    launchctl stop/start $OUR_DAEMON_LABEL"
-        else
-            echo "    [serial-device probe]"
-        fi
+        info "DRY RUN: operation=$OPERATION; would now do:"
+        case "$OPERATION" in
+            fresh-virtio)
+                echo "    [prereq checks: macOS>=11, SIP off, AppleQEMUGuestAgent present, VirtIO device present]"
+                echo "    [interactive warning + yes/no via /dev/tty]"
+                echo "    stop our daemon (release VirtIO device if held)"
+                echo "    launchctl unload -w $APPLE_AGENT_PLIST"
+                echo "    [verify: launchctl list && lsof on $VIRTIO_DEVICE]"
+                echo "    install binary + plist via --install"
+                echo "    write $VIRTIO_CONFIG_PATH with path = $VIRTIO_DEVICE"
+                echo "    drop marker $VIRTIO_MARKER_FILE (mode=full)"
+                echo "    launchctl stop/start $OUR_DAEMON_LABEL"
+                echo "    [verify: agent running + log shows 'Opened device: $VIRTIO_DEVICE']"
+                ;;
+            fresh-virtio-force)
+                echo "    [no prereq checks, no Apple agent unload]"
+                echo "    install binary + plist via --install"
+                echo "    write $VIRTIO_CONFIG_PATH with path = $VIRTIO_DEVICE"
+                echo "    drop marker $VIRTIO_MARKER_FILE (mode=force)"
+                echo "    launchctl stop/start $OUR_DAEMON_LABEL"
+                ;;
+            fresh-standard)
+                echo "    launchctl stop $OUR_DAEMON_LABEL"
+                echo "    launchctl unload $OUR_DAEMON_PLIST"
+                echo "    mkdir -p /usr/local/bin"
+                echo "    cp \"$BINARY\" \"$INSTALL_PATH\""
+                echo "    chmod +x \"$INSTALL_PATH\""
+                echo "    \"$INSTALL_PATH\" --install"
+                echo "    [serial-device probe]"
+                ;;
+            upgrade-standard|upgrade-virtio-full|upgrade-virtio-force)
+                echo "    backup $INSTALL_PATH -> $INSTALL_PATH.backup"
+                echo "    stop our daemon"
+                echo "    cp \"$BINARY\" \"$INSTALL_PATH\""
+                echo "    chmod +x \"$INSTALL_PATH\""
+                echo "    \"$INSTALL_PATH\" --install   (regenerates plist; config file untouched)"
+                if [ "$OPERATION" != "upgrade-standard" ]; then
+                    echo "    launchctl stop/start $OUR_DAEMON_LABEL"
+                    echo "    [verify: agent running + log shows 'Opened device: $VIRTIO_DEVICE']"
+                else
+                    echo "    [verify: agent running]"
+                fi
+                echo "    rm $INSTALL_PATH.backup on success; restore on verify failure"
+                ;;
+        esac
         info "DRY RUN complete — no files modified."
         exit 0
     fi
 
     # Hand off to the matching install flow.
-    case "$VIRTIO_MODE" in
-        virtio) virtio_install ;;
-        force)  virtio_force_install ;;
-        "")
+    case "$OPERATION" in
+        fresh-virtio)          virtio_install ;;
+        fresh-virtio-force)    virtio_force_install ;;
+        upgrade-standard)      upgrade_install standard ;;
+        upgrade-virtio-full)   upgrade_install virtio-full ;;
+        upgrade-virtio-force)  upgrade_install virtio-force ;;
+        fresh-standard)
             install_binary
             echo "" >&2
             if check_serial_device; then
@@ -684,8 +937,15 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<EOF
 macOS Guest Agent Installer
 
-Usage: sudo $0 [--local [PATH]] [--dry-run] [--virtio | --virtio-force]
+Usage: sudo $0 [--local [PATH]] [--dry-run] [--virtio | --virtio-force | --upgrade]
        sudo $0 --uninstall
+
+Detection: install.sh detects whether an existing install is present (via the
+LaunchDaemon plist, the binary, or the VirtIO marker file). On a bare
+'install.sh' invocation:
+  - no existing install detected -> fresh standard install
+  - existing install detected    -> auto-routes to the upgrade path,
+                                    preserving the installed mode
 
   --local         Install from a local binary (for VMs that can't reach GitHub).
                   Searches ./mac-guest-agent, /tmp/mac-guest-agent,
@@ -696,24 +956,35 @@ Usage: sudo $0 [--local [PATH]] [--dry-run] [--virtio | --virtio-force]
   --dry-run       Print every action the installer would take WITHOUT touching
                   /usr/local/bin, /Library/LaunchDaemons, or launchctl. Argument
                   validation (--local PATH existence) still happens. Does not
-                  require root. Combinable with --local, --virtio, --virtio-force.
-  --virtio        Install with VirtIO transport override. Runs prerequisite
-                  checks (macOS >= 11, SIP disabled, AppleQEMUGuestAgent
-                  present, VirtIO device present), prints a risk block, and
-                  requires interactive yes/no via /dev/tty before unloading
-                  Apple's daemon and installing. See docs/NO_ISA_OVERRIDE.md
+                  require root. Combinable with --local, --virtio,
+                  --virtio-force, --upgrade.
+  --upgrade       Explicit upgrade in place. Preserves the detected install
+                  mode (standard / virtio-full / virtio-force). Swaps the
+                  binary, regenerates the LaunchDaemon plist, leaves
+                  /etc/qemu/qemu-ga.conf untouched. On verify failure, the
+                  prior binary is restored from /usr/local/bin/mac-guest-agent.backup.
+                  Refuses if no existing install is detected.
+                  Cannot combine with --virtio / --virtio-force.
+  --virtio        Install with VirtIO transport override. Fresh installs only;
+                  refuses if an existing install is detected (use --upgrade
+                  to update in place, or --uninstall first to switch modes).
+                  Runs prerequisite checks (macOS >= 11, SIP disabled,
+                  AppleQEMUGuestAgent present, VirtIO device present), prints
+                  a risk block, and requires interactive yes/no via /dev/tty
+                  before unloading Apple's daemon. See docs/NO_ISA_OVERRIDE.md
                   for the full contract and risks. Unsupported configuration.
   --virtio-force  Advanced: install with VirtIO path-override and skip all
                   safety checks. No SIP probe, no Apple agent unload, no
-                  prompts. For experts who have already configured the host
-                  manually. Unsupported.
+                  prompts. Fresh installs only (same refusal pattern as
+                  --virtio). For experts who have already configured the
+                  host manually. Unsupported.
   --uninstall     Remove mac-guest-agent. If installed via --virtio, also
                   removes /etc/qemu/qemu-ga.conf and reloads
                   AppleQEMUGuestAgent. If installed via --virtio-force,
                   removes our agent + config but does not touch Apple's
                   daemon. SIP is not re-enabled (operator action).
-  (default)       Download latest release from GitHub and install with
-                  ISA serial transport (supported).
+  (default)       Auto-detect: fresh standard install if not installed;
+                  upgrade preserving detected mode if installed.
 
 Prerequisites for the standard install:
   On the Proxmox VE host, set ISA serial mode:

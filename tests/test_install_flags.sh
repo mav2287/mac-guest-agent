@@ -46,6 +46,32 @@ run_install() {
     return 0
 }
 
+# Run install.sh with detection-state override via the documented test hook.
+# $1 is the state to inject (not-installed / standard / virtio-full /
+# virtio-force); remaining args are forwarded to install.sh.
+run_install_with_state() {
+    local state="$1"
+    shift
+    set +e
+    OUT=$(MAC_GUEST_AGENT_TEST_STATE="$state" bash "$INSTALL_SH" "$@" 2>&1)
+    RC=$?
+    set -e
+    return 0
+}
+
+# Same but with the operator-config-exists hook flipped on. State is
+# implicitly not-installed (the only state where the config-exists check
+# fires, since installed states' configs are already managed).
+run_install_with_operator_config() {
+    set +e
+    OUT=$(MAC_GUEST_AGENT_TEST_STATE=not-installed \
+          MAC_GUEST_AGENT_TEST_CONFIG_EXISTS=1 \
+          bash "$INSTALL_SH" "$@" 2>&1)
+    RC=$?
+    set -e
+    return 0
+}
+
 assert_contains() {
     local label="$1" needle="$2" haystack="$3"
     case "$haystack" in
@@ -79,6 +105,8 @@ assert_rc           "--help exits 0"                 0 "$RC"
 assert_contains     "--help mentions --virtio"       "--virtio        Install with VirtIO transport override" "$OUT"
 assert_contains     "--help mentions --virtio-force" "--virtio-force  Advanced: install with VirtIO" "$OUT"
 assert_contains     "--help mentions --uninstall"    "--uninstall     Remove mac-guest-agent" "$OUT"
+assert_contains     "--help mentions --upgrade"      "--upgrade       Explicit upgrade in place" "$OUT"
+assert_contains     "--help describes auto-detect"   "auto-routes to the upgrade path" "$OUT"
 assert_contains     "--help still mentions --local"  "--local         Install from a local binary" "$OUT"
 assert_contains     "--help still mentions --dry-run" "--dry-run       Print every action" "$OUT"
 
@@ -105,6 +133,99 @@ assert_rc           "--uninstall + --dry-run is rejected"            1 "$RC"
 run_install --uninstall --local /tmp/some-binary
 assert_rc           "--uninstall + --local is rejected"              1 "$RC"
 assert_contains     "rejection lists --local"                        "--local" "$OUT"
+
+run_install --uninstall --upgrade
+assert_rc           "--uninstall + --upgrade is rejected"            1 "$RC"
+assert_contains     "rejection lists --upgrade"                      "--upgrade" "$OUT"
+
+# MED-2: unknown flags / extra args must be rejected, not silently ignored.
+run_install --dry-run --definitely-unknown-option
+assert_rc           "unknown flag is rejected"                       1 "$RC"
+assert_contains     "rejection identifies the unknown flag"          "Unknown argument: --definitely-unknown-option" "$OUT"
+
+run_install --dry-run --virto
+assert_rc           "typo'd flag (--virto) is rejected"              1 "$RC"
+assert_contains     "rejection identifies the typo"                  "Unknown argument: --virto" "$OUT"
+
+# --local PATH validation runs before the extra-positional check, so the
+# PATH must point at a real file for the extra-positional rejection to fire.
+# The install.sh script itself is conveniently a file that exists.
+run_install --dry-run --local "$INSTALL_SH" extra-positional
+assert_rc           "extra positional after --local is rejected"     1 "$RC"
+assert_contains     "rejection names the extra argument"             "Unexpected extra argument after --local PATH: extra-positional" "$OUT"
+
+# --upgrade is incompatible with --virtio / --virtio-force.
+run_install --upgrade --virtio --dry-run
+assert_rc           "--upgrade + --virtio is rejected"               1 "$RC"
+assert_contains     "rejection names upgrade-vs-virtio conflict"     "--upgrade cannot combine with --virtio" "$OUT"
+
+run_install --upgrade --virtio-force --dry-run
+assert_rc           "--upgrade + --virtio-force is rejected"         1 "$RC"
+
+# === Detection-driven routing (uses MAC_GUEST_AGENT_TEST_STATE hook) ===
+
+# Bare install.sh with no detected install: fresh-standard.
+run_install_with_state not-installed --dry-run
+assert_rc           "bare install with no state -> fresh-standard"   0 "$RC"
+assert_contains     "operation is fresh-standard"                    "operation=fresh-standard" "$OUT"
+
+# Bare install.sh with detected standard install: auto-upgrade.
+run_install_with_state standard --dry-run
+assert_rc           "bare install with standard -> auto-upgrade"     0 "$RC"
+assert_contains     "logs auto-routing message"                      "Existing install detected; auto-routing to upgrade path" "$OUT"
+assert_contains     "operation is upgrade-standard"                  "operation=upgrade-standard" "$OUT"
+assert_contains     "plan shows binary backup"                       "backup /usr/local/bin/mac-guest-agent -> /usr/local/bin/mac-guest-agent.backup" "$OUT"
+
+# Bare install.sh with detected virtio-full install: auto-upgrade in virtio-full.
+run_install_with_state virtio-full --dry-run
+assert_rc           "bare install with virtio-full -> auto-upgrade"  0 "$RC"
+assert_contains     "operation is upgrade-virtio-full"               "operation=upgrade-virtio-full" "$OUT"
+assert_contains     "virtio upgrade plan shows agent restart"        "launchctl stop/start" "$OUT"
+assert_contains     "virtio upgrade plan shows VirtIO verify"        "Opened device: /dev/cu.org.qemu.guest_agent.0" "$OUT"
+
+# Bare install.sh with detected virtio-force install: auto-upgrade in virtio-force.
+run_install_with_state virtio-force --dry-run
+assert_rc           "bare install with virtio-force -> auto-upgrade" 0 "$RC"
+assert_contains     "operation is upgrade-virtio-force"              "operation=upgrade-virtio-force" "$OUT"
+
+# Explicit --upgrade with no install detected: refuse.
+run_install_with_state not-installed --upgrade --dry-run
+assert_rc           "--upgrade with no install detected: refuse"     1 "$RC"
+assert_contains     "rejection mentions no install detected"         "no existing install detected" "$OUT"
+
+# Explicit --upgrade with each install state: proceed.
+run_install_with_state standard --upgrade --dry-run
+assert_rc           "--upgrade with standard detected: proceeds"     0 "$RC"
+assert_contains     "explicit upgrade does NOT log auto-routing"     "operation=upgrade-standard" "$OUT"
+assert_not_contains "explicit upgrade suppresses auto-routing line"  "auto-routing to upgrade path" "$OUT"
+
+run_install_with_state virtio-full --upgrade --dry-run
+assert_rc           "--upgrade with virtio-full detected: proceeds"  0 "$RC"
+assert_contains     "explicit upgrade preserves virtio-full mode"    "operation=upgrade-virtio-full" "$OUT"
+
+# --virtio with each non-zero state: refuse with specific messages.
+run_install_with_state standard --virtio --dry-run
+assert_rc           "--virtio with standard detected: refuse"        1 "$RC"
+assert_contains     "rejection names detected state"                 "Existing install detected (state=standard)" "$OUT"
+assert_contains     "rejection points at --upgrade"                  "sudo" "$OUT"
+
+run_install_with_state virtio-full --virtio --dry-run
+assert_rc           "--virtio with virtio-full detected: refuse"     1 "$RC"
+assert_contains     "rejection names virtio-full state"              "state=virtio-full" "$OUT"
+
+run_install_with_state virtio-force --virtio --dry-run
+assert_rc           "--virtio with virtio-force detected: refuse"    1 "$RC"
+
+# --virtio-force is gated by the same state checks.
+run_install_with_state standard --virtio-force --dry-run
+assert_rc           "--virtio-force with standard detected: refuse"  1 "$RC"
+assert_contains     "rejection mentions virtio/virtio-force"         "--virtio / --virtio-force is for fresh installs only" "$OUT"
+
+# --virtio with a pre-existing operator config (state=not-installed): refuse.
+run_install_with_operator_config --virtio --dry-run
+assert_rc           "--virtio with operator config present: refuse"  1 "$RC"
+assert_contains     "rejection names the operator-config path"       "/etc/qemu/qemu-ga.conf" "$OUT"
+assert_contains     "rejection suggests backup or manual add"        "back it up first" "$OUT"
 
 # --dry-run --virtio: prints the gated plan with apple-unload + verify.
 run_install --dry-run --virtio

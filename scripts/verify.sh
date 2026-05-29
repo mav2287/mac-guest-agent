@@ -683,17 +683,24 @@ libvirt_config_summary() {
         fail "domain config not retrievable via virsh dumpxml"
         return
     fi
-    # Look for the QGA virtio-serial channel that libvirt documents:
-    #   <channel type='unix'>
-    #     <target type='virtio' name='org.qemu.guest_agent.0'/>
-    #   </channel>
-    # Without this, the in-guest agent has nothing to talk to and the
-    # transport simply doesn't work — same effect as type=isa missing on
-    # PVE, even though the underlying reason (virtio vs ISA) differs.
-    if printf '%s' "$xml" | grep -q "org.qemu.guest_agent.0"; then
-        pass "guest-agent virtio channel present (org.qemu.guest_agent.0)"
+    # MED-3 (audit 2026-05-29): pre-v2.5.3 this checked for the VirtIO QGA
+    # channel `org.qemu.guest_agent.0` — exactly the opposite of the
+    # project's documented requirement. v2.5.0+ requires ISA serial on
+    # macOS (Apple's built-in AppleQEMUGuestAgent claims the VirtIO channel
+    # on Big Sur+; ISA is the only transport our agent can reliably use).
+    #
+    # Correct libvirt config per docs/LIBVIRT.md:
+    #   <serial type='unix'>
+    #     <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
+    #     <target type='isa-serial' port='0'/>
+    #   </serial>
+    # Pass on isa-serial detection. Single-quoted and double-quoted
+    # attribute forms both accepted (libvirt normalizes on output but the
+    # verifier shouldn't depend on which).
+    if printf '%s' "$xml" | grep -qE "target type=['\"]isa-serial['\"]"; then
+        pass "guest-agent ISA serial target present (target type='isa-serial')"
     else
-        fail "guest-agent virtio channel missing — add <channel><target name='org.qemu.guest_agent.0'/></channel> to the domain XML"
+        fail "guest-agent ISA serial target missing — add <serial type='unix'><target type='isa-serial' port='0'/></serial> to the domain XML; see docs/LIBVIRT.md"
     fi
     # discard / SSD emulation hints (best-effort grep — libvirt's disk XML
     # is structured but a string grep is enough for an evidence check).

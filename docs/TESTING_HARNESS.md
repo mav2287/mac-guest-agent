@@ -1,6 +1,6 @@
 # Testing Harness — Runtime Validation on Target Macs
 
-This is the **how-to** for running the v2.5.0+ universal binary (latest is v2.5.1) on a macOS version we haven't fully validated in CI (typically Tiger, Leopard, Snow Leopard, Lion, or a clean Big Sur arm64 install) and submitting evidence the maintainer can use to promote the matching row in [`COMPATIBILITY.md`](COMPATIBILITY.md) from Tier 2 (static-validated, runtime-pending) to Tier 1 (runtime-confirmed).
+This is the **how-to** for running the v2.5.0+ universal binary (current `main` release — check the GitHub releases page for the version you're targeting) on a macOS version we haven't fully validated in CI (typically Tiger, Leopard, Snow Leopard, Lion, or a clean Big Sur arm64 install) and submitting evidence the maintainer can use to promote the matching row in [`COMPATIBILITY.md`](COMPATIBILITY.md) from Tier 2 (static-validated, runtime-pending) to Tier 1 (runtime-confirmed).
 
 CI gives strong **static** guarantees — every release goes through the Mach-O verifier ([`scripts/verify-legacy-slices.sh`](../scripts/verify-legacy-slices.sh)), the symbol-baseline diff, the load-command allowlist, the LC_UNIXTHREAD-on-legacy-slices check that fixed issue #4. CI cannot give **runtime** guarantees on OS versions GitHub doesn't ship runners for. That's where this harness comes in: a contributor with an actual Tiger Mac, an actual Snow Leopard VM, an actual arm64 Big Sur install runs the harness, captures evidence, opens a PR or attaches to a GitHub issue, and the maintainer folds the row into the matrix.
 
@@ -22,7 +22,7 @@ Two harness profiles cover the gap:
 
 **Step 1 — Transfer the binary to the target Mac/VM.**
 
-The release artifact is `mac-guest-agent` (v2.5.1+; was `mac-guest-agent-darwin-universal` for the v2.5.0 one-day window). The SHA256 changes per release — check the release page. Transfer by whatever works on the target OS:
+The release artifact is `mac-guest-agent` (v2.5.1+; was `mac-guest-agent-darwin-universal` for the v2.5.0 one-day window — kept as a recovery fallback in `install.sh --local`'s search list). The SHA256 changes per release — check the release page. Transfer by whatever works on the target OS:
 
 | Target OS | Transfer methods that typically work |
 |---|---|
@@ -61,7 +61,7 @@ This is the actual issue #4 reproduction gate. If your dyld doesn't accept the b
 
 ```bash
 /tmp/mac-guest-agent --version
-# Expect: mac-guest-agent 2.5.1 (or whatever release you downloaded)
+# Expect: mac-guest-agent <release-version> (matching the binary you downloaded)
 ```
 
 On 10.6 Snow Leopard and 10.7 Lion, this is the EXACT command that crashed in v2.4.3 with `dyld: unknown required load command 0x80000028`. A clean response here is the runtime confirmation of the LC_UNIXTHREAD fix.
@@ -151,7 +151,7 @@ The audit specifically called out these as the highest-value gaps:
 A successful Profile B run produces output ending in `Status: ALL CHECKS PASSED`, with the JSON appendix carrying:
 
 - `counts: {passed: 38, failed: 0}` (or more passes if the host's `freeze-cycles` is bumped above 3)
-- `in_vm_selftest.agent_version` matches the release you installed (currently `"2.5.1"` for the latest tag)
+- `in_vm_selftest.agent_version` matches the release you installed
 - `in_vm_selftest.system_info.selected_arch:` the slice dyld picked for the guest (i386 for Tiger/Leopard, x86_64 for Snow Leopard through Catalina, arm64 for Big Sur+)
 - `mount_dispatch_crosscheck.match: true`
 - All `freeze_cycles_log` entries with `behavioural_check: "pass"`

@@ -446,6 +446,121 @@ assert_contains "UTM: rejects when utmctl missing" "utmctl' not found" "$OUT"
 assert_contains "UTM: suggests --qga-socket override" "--qga-socket PATH to skip discovery" "$OUT"
 
 # =========================================================================
+# MED-5 (audit 2026-05-29): test_verify_transports.sh historically claimed
+# libvirt coverage in its file header but had no virsh shim block — so the
+# libvirt_config_summary regression (MED-3, where the verifier was looking
+# for the wrong channel type) survived undetected. This block adds the
+# minimum coverage to catch the same class of regression: virsh shims that
+# return the documented ISA serial XML (pass case) and a misconfigured XML
+# (fail case), and assertions that the verifier produces the right verdict.
+section_hdr "5b. libvirt transport (virsh shim) — config check covers MED-3"
+
+LIBVIRT_DOMAIN="macos-vm-test"
+
+make_virsh_shim() {
+    local tmpd="$1"
+    local fixture_dir="$2"
+    cat > "$tmpd/virsh" <<SHIMEOF
+#!/bin/bash
+# Mock virsh for libvirt-transport verifier tests.
+# Returns canned responses for the subcommands verify.sh's libvirt
+# auto-detect + libvirt_config_summary path invokes.
+FIXTURE_DIR="$fixture_dir"
+SHIMEOF
+    cat >> "$tmpd/virsh" <<'SHIMEOF'
+case "$1" in
+    list)
+        echo " Id   Name           State"
+        echo "----------------------------"
+        echo " 1    macos-vm-test  running"
+        ;;
+    dominfo)
+        echo "Id:             1"
+        echo "Name:           $2"
+        echo "UUID:           e4686d2c-6e8d-4335-b8fd-81bee22f4814"
+        echo "State:          running"
+        ;;
+    domstate)
+        echo "running"
+        ;;
+    dumpxml)
+        cat "$FIXTURE_DIR/dumpxml.xml"
+        ;;
+    qemu-agent-command)
+        # verify.sh's main test pipeline issues these for ping / get-osinfo /
+        # network-get-interfaces / info / etc. Returning a minimal success
+        # envelope keeps the verifier moving past the config check so we can
+        # assert on the libvirt-specific block (the only thing this fixture
+        # is actually validating).
+        echo '{"return":{}}'
+        ;;
+    *)
+        echo "shim: unknown subcommand $*" >&2
+        exit 1
+        ;;
+esac
+SHIMEOF
+    chmod +x "$tmpd/virsh"
+}
+
+# --- Pass case: ISA serial target present ---
+LV_PASS_DIR="$TMPDIR/libvirt-pass"
+LV_PASS_SHIM="$TMPDIR/libvirt-pass-shim"
+mkdir -p "$LV_PASS_DIR" "$LV_PASS_SHIM"
+cat > "$LV_PASS_DIR/dumpxml.xml" <<'EOF'
+<domain type='kvm'>
+  <name>macos-vm-test</name>
+  <uuid>e4686d2c-6e8d-4335-b8fd-81bee22f4814</uuid>
+  <devices>
+    <serial type='unix'>
+      <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' discard='unmap'/>
+      <source file='/var/lib/libvirt/images/macos.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+  </devices>
+</domain>
+EOF
+make_virsh_shim "$LV_PASS_SHIM" "$LV_PASS_DIR"
+
+OUT=$(PATH="$LV_PASS_SHIM:$PATH" bash "$VERIFY" --transport libvirt "$LIBVIRT_DOMAIN" --no-freeze --no-in-vm --no-env-capture --no-appendix 2>&1)
+assert_contains "libvirt PASS: detects ISA serial target" "guest-agent ISA serial target present" "$OUT"
+assert_not_contains "libvirt PASS: does NOT demand VirtIO channel" "guest-agent virtio channel" "$OUT"
+assert_not_contains "libvirt PASS: does NOT reference org.qemu.guest_agent.0 in failure text" "org.qemu.guest_agent.0" "$OUT"
+
+# --- Fail case: VirtIO channel instead of ISA serial (the misconfiguration
+# the legacy verifier was happy with — exactly the regression we want to
+# catch going forward) ---
+LV_FAIL_DIR="$TMPDIR/libvirt-fail"
+LV_FAIL_SHIM="$TMPDIR/libvirt-fail-shim"
+mkdir -p "$LV_FAIL_DIR" "$LV_FAIL_SHIM"
+cat > "$LV_FAIL_DIR/dumpxml.xml" <<'EOF'
+<domain type='kvm'>
+  <name>macos-vm-test</name>
+  <uuid>e4686d2c-6e8d-4335-b8fd-81bee22f4814</uuid>
+  <devices>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/libvirt/images/macos.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+  </devices>
+</domain>
+EOF
+make_virsh_shim "$LV_FAIL_SHIM" "$LV_FAIL_DIR"
+
+OUT=$(PATH="$LV_FAIL_SHIM:$PATH" bash "$VERIFY" --transport libvirt "$LIBVIRT_DOMAIN" --no-freeze --no-in-vm --no-env-capture --no-appendix 2>&1)
+assert_contains "libvirt FAIL: rejects VirtIO-only XML" "guest-agent ISA serial target missing" "$OUT"
+assert_contains "libvirt FAIL: failure message points at ISA serial fix" "isa-serial" "$OUT"
+assert_contains "libvirt FAIL: failure message points at the doc" "docs/LIBVIRT.md" "$OUT"
+
+# =========================================================================
 section_hdr "6. qga-socket transport, end-to-end via fake QGA server"
 
 # Spin up a minimal Perl QGA listener that handles ping, fsfreeze-freeze
