@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.5.2
+VERSION := 2.5.3
 BUILD_DIR := build
 DIST_DIR := dist
 
@@ -175,13 +175,21 @@ uninstall:
 	@sudo /usr/local/bin/$(PROGRAM_NAME) --uninstall 2>/dev/null || echo "Not installed"
 
 # Run all tests
-test: build test-unit test-proactive test-fuzz test-integration test-verify-transports
+test: build test-unit test-proactive test-fuzz test-integration test-verify-transports test-install-flags
 
 # Shell-shim integration tests for scripts/verify.sh (PVE, libvirt,
 # UTM, qga-serial). Mocks the host CLIs and a local QGA socket; no
 # real hypervisor needed.
 test-verify-transports:
 	@bash tests/test_verify_transports.sh
+
+# scripts/install.sh argument-parsing tests: --virtio + --virtio-force
+# rejection, --uninstall + --virtio rejection, --help mentions new flags,
+# --dry-run plan output for --virtio / --virtio-force / default. Does not
+# exercise live prereq checks (csrutil, lsof, launchctl); those are covered
+# by manual El Cap / Big Sur+ verification runs.
+test-install-flags:
+	@bash tests/test_install_flags.sh
 
 # Sabotage tests for scripts/verify-legacy-slices.sh — deliberately
 # produce broken universal binaries and assert the verifier rejects

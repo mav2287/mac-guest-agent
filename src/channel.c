@@ -97,16 +97,22 @@ static int log_virtio_diagnostic_if_present(void)
     for (int i = 0; legacy_virtio_devices[i]; i++) {
         if (stat(legacy_virtio_devices[i], &st) == 0 && (st.st_mode & S_IFCHR)) {
             LOG_ERROR("Found VirtIO serial device (%s) but VirtIO transport "
-                      "was removed in v2.5.0 — this agent now requires ISA "
-                      "serial. Reconfigure your hypervisor to present an "
-                      "ISA UART instead: PVE 'qm set <vmid> --agent "
-                      "enabled=1,type=isa'; libvirt isa-serial device; UTM "
-                      "Serial device with Interface=QemuGuestAgent; raw "
-                      "QEMU '-device isa-serial'. On Apple "
-                      "Virtualization.framework guests (UTM Virtualize "
-                      "mode, vz_run) ISA isn't available — switch to the "
-                      "QEMU backend or accept Apple's built-in 18-command "
-                      "agent on the VirtIO channel instead.",
+                      "was removed from auto-detect in v2.5.0 — this agent "
+                      "now requires ISA serial by default. Reconfigure your "
+                      "hypervisor to present an ISA UART: PVE 'qm set "
+                      "<vmid> --agent enabled=1,type=isa'; libvirt "
+                      "isa-serial device; UTM Serial device with "
+                      "Interface=QemuGuestAgent; raw QEMU '-device "
+                      "isa-serial'. On Apple Virtualization.framework "
+                      "guests (UTM Virtualize mode, vz_run) ISA isn't "
+                      "available — switch to the QEMU backend or accept "
+                      "Apple's built-in 18-command agent on the VirtIO "
+                      "channel instead. If your orchestrator hardcodes "
+                      "VirtIO at the libvirt-channel level (e.g., kubevirt) "
+                      "and ISA truly isn't an option on this host, see "
+                      "docs/NO_ISA_OVERRIDE.md for the gated --virtio "
+                      "install path (unsupported configuration, macOS 11+, "
+                      "requires SIP disabled).",
                       legacy_virtio_devices[i]);
             return 1;
         }

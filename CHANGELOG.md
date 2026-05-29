@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.5.3 — 2026-05-29
+
+### Added — opt-in unsupported feature
+- **`scripts/install.sh --virtio` and `--virtio-force`: gated VirtIO-transport install path for orchestrators that hardcode VirtIO at the libvirt-channel level (kubevirt today; any orchestrator with the same constraint qualifies).** Full operator-facing contract in `docs/NO_ISA_OVERRIDE.md`. ISA serial remains the only supported transport — this is an opt-in escape hatch for the small population (macOS 11+, SIP disabled, orchestrator forces VirtIO) where ISA is not an option on the host. Auto-detect behavior unchanged; no transport-mode flips; no philosophy change.
+
+  **`--virtio` (documented, safety-gated)**:
+  - Prerequisite checks: macOS >= 11, SIP disabled (`csrutil status`), `AppleQEMUGuestAgent` LaunchDaemon present at `/System/Library/LaunchDaemons/`, VirtIO guest-agent device present at `/dev/cu.org.qemu.guest_agent.0`. Every check refuses with a specific actionable message; no install actions run if any check fails.
+  - Interactive warning block + `yes/no` prompt read from `/dev/tty` (NOT stdin) — so `yes | install.sh --virtio` cannot bypass the gate.
+  - On confirmation: `launchctl unload -w` Apple's LaunchDaemon, then **verify the unload actually landed** via two probes: (a) `launchctl list` no longer shows the daemon label, (b) `lsof` on the VirtIO device shows no holder. If either probe fails, abort and attempt to reload Apple's daemon to restore the prior state.
+  - Standard agent install + write `/etc/qemu/qemu-ga.conf` with `path = /dev/cu.org.qemu.guest_agent.0` + drop marker at `/var/db/mac-guest-agent/.virtio-mode` (content: `mode=full`).
+  - Functional verification: agent process PID is non-`-` in `launchctl list`, and `/var/log/mac-guest-agent.log` shows `Opened device: /dev/cu.org.qemu.guest_agent.0` within 5 seconds. If either fails, roll back (remove our agent, remove config, remove marker, reload Apple's daemon).
+
+  **`--virtio-force` (undocumented; visible only in `--help`)**:
+  - Bypasses every prerequisite check. No SIP probe. No Apple-agent unload. No `/dev/tty` prompt.
+  - Installs the agent + writes the override config + drops marker with `mode=force`.
+  - For experts who have already configured the host manually (Apple's daemon unloaded by hand, SIP off by hand, non-standard device path, etc.) and want a one-line install without re-running the same checks the gated path imposes.
+  - Not in `README.md`, not in `docs/NO_ISA_OVERRIDE.md`. Hostile-named on purpose.
+
+  **`scripts/install.sh --uninstall`** (new): detects the marker, removes the override config, and:
+  - `mode=full` (gated install): reloads Apple's `AppleQEMUGuestAgent` LaunchDaemon to restore prior state.
+  - `mode=force` (force install): does not touch Apple's daemon (we didn't unload it; the operator did).
+  - SIP is NOT re-enabled by `--uninstall` in either mode — that's an operator action via Recovery + `csrutil enable`.
+
+  **Argument-parsing rejections** (hard errors before any side effect): `--virtio` + `--virtio-force` cannot combine; `--uninstall` cannot combine with `--virtio` / `--virtio-force` / `--dry-run`.
+
+  **`--dry-run` support**: `--dry-run --virtio` and `--dry-run --virtio-force` print the would-do plan for the override paths (including the Apple-unload + verify steps for `--virtio`, and the no-checks notice for `--virtio-force`), no side effects, no root required. Same UX as the existing standard-install dry-run.
+
+- **`docs/NO_ISA_OVERRIDE.md`**: full operator contract for `--virtio`. macOS 11+ scope stated up front; SIP-off rationale explained structurally (Apple's LaunchDaemon plist lives in `/System/Library/`, every Apple-supported override path is SIP-protected, no engineering workaround on our side); risk block; rollback instructions; explicit statement that this configuration is NOT covered by release-to-release stability promises; explicit non-decision on shipping a DriverKit System Extension to avoid the SIP-off requirement (months of engineering + paid Developer Program + notarization + user approval + ongoing IOKit-match arbitration against Apple per release, for a population this page already describes as small — explicitly not the right ROI for the project).
+
+- **`tests/test_install_flags.sh`**: 34-assertion test suite covering argument parsing, mutually-exclusive flag rejection, `--help` mentions of new flags, and dry-run plan output for `--virtio` / `--virtio-force` / default. Wired into `make test` via the new `test-install-flags` target. Does not exercise live `csrutil` / `lsof` / `launchctl` probes (those need PATH-stubbed system commands and are not worth the test-infrastructure cost for an unsupported feature) — manual verification on the El Cap and a Big Sur+ VM covers the live-probe paths.
+
+### Changed
+- **`src/channel.c log_virtio_diagnostic_if_present()`**: the "no ISA device found, but a VirtIO device is present" diagnostic message now closes with a one-sentence pointer at `docs/NO_ISA_OVERRIDE.md` for operators whose orchestrator hardcodes VirtIO and cannot expose ISA. Same diagnostic surface, no change in detection logic. Surfaces the escape hatch to anyone hitting the error without re-adding any auto-detect path.
+
+### Not changed
+- **ISA serial remains the only supported transport.** Auto-detect (`src/channel.c known_devices[]`) is unchanged — `--virtio` does not modify it. Default installs are not affected by anything in this release.
+- **No `transport = virtio` config key, no first-class VirtIO transport, no auto-detect of VirtIO devices, no DriverKit System Extension, no kext.** Every option-space entry that would erode the v2.5.0 ISA-only decision was considered and rejected — see commit messages and the discussion behind issue #7 (mav2287/mac-guest-agent) for the rationale.
+
 ## v2.5.2 — 2026-05-28
 
 ### Fixed
