@@ -2,6 +2,46 @@
 
 ## v2.5.3 — 2026-05-29
 
+### Refactor — install state machine moved into the binary
+v2.5.3's first attempt put `--virtio` / `--upgrade` / detection in `scripts/install.sh`. Review during the v2.5.3 cycle exposed the wrong-home argument: the README has documented the binary-direct install path (not install.sh) as primary since v2.4.x, so install.sh's new orchestration features were hidden behind a tool operators following the README wouldn't discover. The kubevirt audience also had to transfer two files instead of one. The refactor moves all orchestration into the binary; install.sh becomes a thin bootstrap wrapper.
+
+**`src/service.c` grows the full state machine:**
+- New `service_install(int dry_run, install_mode_t mode)` — mode is `INSTALL_MODE_STANDARD` (the existing flow), `INSTALL_MODE_VIRTIO` (gated override with SIP/macOS/Apple-agent/VirtIO-device prereq checks, interactive yes/no via `/dev/tty`, `launchctl unload -w` Apple's daemon, verify-via-launchctl-list-and-lsof, config write, marker drop, mode-aware functional verify, rollback), or `INSTALL_MODE_VIRTIO_FORCE` (no prereqs, no unload, no prompt — DIY path).
+- New `service_upgrade(const char *new_binary_path, int dry_run)` — detects state, backs up current binary to `.backup`, copies new binary, re-runs `--install` to regenerate the plist (the crucial difference from `--update`), restarts, mode-aware verify, rolls back on failure by restoring the backup and re-running its `--install` to regenerate the matching plist.
+- `service_uninstall` is now marker-aware: reads `/var/db/mac-guest-agent/.virtio-mode`, removes `/etc/qemu/qemu-ga.conf` only if a marker is present, reloads `AppleQEMUGuestAgent` if mode=full, leaves it alone if mode=force.
+- `service_update` becomes a thin deprecation wrapper that delegates to `service_upgrade` (operators using `--update` automatically get the better behavior).
+- New `detect_install_state()` / `operator_config_exists()` public API. Test hooks: `MAC_GUEST_AGENT_TEST_STATE` and `MAC_GUEST_AGENT_TEST_CONFIG_EXISTS` env vars let the test suite exercise refusal paths without privileged setup.
+- Helpers for SIP-status check (popen `csrutil status` + parse), launchctl-list parse, lsof-equivalent device-holder probe, TTY-confirmation read (`fopen("/dev/tty")`, pipe-resistant), log-tail since byte offset (avoids stale-line race on idempotent re-installs).
+
+**`src/main.c` exposes new flags:**
+- `--virtio` and `--virtio-force` as modifiers for `--install`
+- `--upgrade PATH` as a peer of `--install` / `--uninstall` / `--update`
+- Mutex enforcement (`--virtio` + `--virtio-force` rejected, `--upgrade` + `--install`/`--uninstall`/`--update` rejected, `--virtio[-force]` without `--install` rejected)
+- `--help` text expanded to describe all new flags
+
+**`scripts/install.sh` slimmed dramatically:**
+- ~770 LoC → ~256 LoC (most of the new size is the embedded `--help` text)
+- All orchestration logic removed — install.sh is now a bootstrap wrapper that fetches the binary (or uses `--local`), validates arch, and exec's the binary with the install action forwarded
+- `--virtio`, `--virtio-force`, `--upgrade` are forwarded to the binary verbatim
+- `--uninstall` exec's the already-installed binary's `--uninstall` directly (no need to download)
+- Same operator-facing UX preserved: `sudo bash install.sh --virtio` still works, just delegates to the binary
+
+**`tests/test_install_flags.sh` rewritten:**
+- Tests the binary's flag handling directly (refusals, mutex, deprecation, help text) via test-hook env vars
+- Small wrapper smoke section confirms install.sh parses + forwards correctly
+- 37 assertions, all green
+
+**Docs updated:**
+- `README.md` Quick Start mentions `--install --virtio` for kubevirt operators, plus the bootstrap-wrapper one-liner alongside the manual install
+- `docs/NO_ISA_OVERRIDE.md` rewritten to use `mac-guest-agent --install --virtio` throughout, with `--virtio-force` documented as the DIY alternative
+- `docs/CLI.md` lists `--virtio`, `--virtio-force`, `--upgrade` in the binary's options table
+
+**Net effect:**
+- Single-file install for kubevirt operators: `scp binary && sudo mac-guest-agent --install --virtio`
+- `--virtio` is discoverable via `mac-guest-agent --help` (no longer hidden in install.sh)
+- install.sh's role is now clear: bootstrap (download + copy), nothing else
+- All v2.5.3 audit closures stay in place — the refactor reshapes WHERE the logic lives, not WHAT it does
+
 ### Audit closures — second pass (2026-05-29)
 The first 9 findings (from the earlier 2026-05-29 audit) closed cleanly. A second audit against `36a7425` (post first-round closure) surfaced 5 more findings, all in adjacent surfaces. All 5 closed.
 

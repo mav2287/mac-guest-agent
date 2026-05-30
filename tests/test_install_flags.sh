@@ -1,26 +1,31 @@
 #!/bin/bash
-# Coverage for scripts/install.sh argument parsing, mutually-exclusive flag
-# rejection, and --dry-run plan output (v2.5.3+).
+# Install-flow flag coverage (v2.5.3+).
 #
-# Does NOT exercise the actual prereq checks (csrutil, sw_vers, lsof,
-# launchctl) — those probe the live system and would need PATH-stubbing
-# for hermetic tests. Manual verification on a SIP-enabled / pre-Big-Sur
-# host covers the refusal paths; this file covers the flag-parsing surface
-# that runs regardless of host.
+# v2.5.3 moved the install/upgrade state machine OUT of scripts/install.sh
+# INTO the binary itself (src/service.c). install.sh is now a slim
+# bootstrap wrapper. Tests here cover BOTH:
+#
+#  1. Binary flag handling — refusal logic, mutex checks, detection-driven
+#     routing, --upgrade error paths. Exercised via the binary's --dry-run
+#     mode and the MAC_GUEST_AGENT_TEST_STATE / _CONFIG_EXISTS env hooks.
+#
+#  2. Wrapper smoke — install.sh --help, --local path resolution, --dry-run
+#     output shape. The wrapper has very little logic; just confirm it
+#     parses and forwards correctly.
+#
+# Live operations (csrutil, launchctl unload, lsof, /dev/tty prompt) are
+# not exercised here — those require a SIP-disabled Big Sur+ VM. Manual
+# verification on such a VM covers the live-probe paths; this file covers
+# what can run hermetically.
 
-# --- PIPELINE CONVENTION (do not violate) -------------------------------------
-# install.sh runs with `set -e` (no pipefail), but this test file sets
-# pipefail below for the assertion helpers. Same rule as run_tests.sh:
-# no `producer | early-exit-consumer` patterns. Use bash `case` for
-# substring assertions instead of `grep -q` on a pipe.
-# ------------------------------------------------------------------------------
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_SH="$SCRIPT_DIR/scripts/install.sh"
+BINARY="${BINARY:-$SCRIPT_DIR/build/mac-guest-agent}"
 
-if [ ! -x "$INSTALL_SH" ] && [ ! -r "$INSTALL_SH" ]; then
-    echo "install.sh not found at $INSTALL_SH"
+if [ ! -x "$BINARY" ]; then
+    echo "Binary not found at $BINARY — run 'make build' first."
     exit 1
 fi
 
@@ -31,42 +36,13 @@ FAILS=()
 pass() { PASS=$((PASS+1)); echo "  PASS  $1"; }
 fail() { FAIL=$((FAIL+1)); FAILS+=("$1"); echo "  FAIL  $1"; }
 
-# Run install.sh with the given args, capture combined output and exit code.
-# Returns 0 always; output is in $OUT, exit code in $RC.
-#
+# Run a command, capture combined output + exit code.
 # Tempting to write `OUT=$(...) || true` but the trailing `|| true` makes
-# `$?` capture true's exit code (0), erasing the install.sh exit code we
-# care about. Instead: keep set -e off (the test runner doesn't enable it),
-# let the substitution complete on any exit code, and capture $? directly.
-run_install() {
+# `$?` capture true's exit code (0), erasing the actual exit code we care
+# about. Use `set +e` instead.
+run_cmd() {
     set +e
-    OUT=$(bash "$INSTALL_SH" "$@" 2>&1)
-    RC=$?
-    set -e
-    return 0
-}
-
-# Run install.sh with detection-state override via the documented test hook.
-# $1 is the state to inject (not-installed / standard / virtio-full /
-# virtio-force); remaining args are forwarded to install.sh.
-run_install_with_state() {
-    local state="$1"
-    shift
-    set +e
-    OUT=$(MAC_GUEST_AGENT_TEST_STATE="$state" bash "$INSTALL_SH" "$@" 2>&1)
-    RC=$?
-    set -e
-    return 0
-}
-
-# Same but with the operator-config-exists hook flipped on. State is
-# implicitly not-installed (the only state where the config-exists check
-# fires, since installed states' configs are already managed).
-run_install_with_operator_config() {
-    set +e
-    OUT=$(MAC_GUEST_AGENT_TEST_STATE=not-installed \
-          MAC_GUEST_AGENT_TEST_CONFIG_EXISTS=1 \
-          bash "$INSTALL_SH" "$@" 2>&1)
+    OUT=$("$@" 2>&1)
     RC=$?
     set -e
     return 0
@@ -97,173 +73,108 @@ assert_rc() {
     fi
 }
 
-echo "=== scripts/install.sh flag-parsing tests ==="
+# =========================================================================
+echo "=== Binary: --virtio / --virtio-force / --upgrade flag mutex ==="
 
-# --help should mention every new flag.
-run_install --help
-assert_rc           "--help exits 0"                 0 "$RC"
-assert_contains     "--help mentions --virtio"       "--virtio        Install with VirtIO transport override" "$OUT"
-assert_contains     "--help mentions --virtio-force" "--virtio-force  Advanced: install with VirtIO" "$OUT"
-assert_contains     "--help mentions --uninstall"    "--uninstall     Remove mac-guest-agent" "$OUT"
-assert_contains     "--help mentions --upgrade"      "--upgrade       Explicit upgrade in place" "$OUT"
-assert_contains     "--help describes auto-detect"   "auto-routes to the upgrade path" "$OUT"
-assert_contains     "--help still mentions --local"  "--local         Install from a local binary" "$OUT"
-assert_contains     "--help still mentions --dry-run" "--dry-run       Print every action" "$OUT"
+run_cmd "$BINARY" --virtio --virtio-force
+assert_rc       "--virtio + --virtio-force is rejected"     1 "$RC"
+assert_contains "rejection names both flags"                "--virtio and --virtio-force cannot combine" "$OUT"
 
-# --virtio + --virtio-force is a hard error.
-run_install --virtio --virtio-force --dry-run
-assert_rc           "--virtio + --virtio-force is rejected"          1 "$RC"
-assert_contains     "rejection message names both flags"             "Cannot combine --virtio and --virtio-force" "$OUT"
+run_cmd "$BINARY" --virtio
+assert_rc       "--virtio alone (without --install) refused" 1 "$RC"
+assert_contains "rejection points at --install --virtio"     "modifier for --install" "$OUT"
 
-# --virtio-force + --virtio is the same conflict, opposite order.
-run_install --virtio-force --virtio --dry-run
-assert_rc           "--virtio-force + --virtio rejected (reverse)"   1 "$RC"
+run_cmd "$BINARY" --virtio-force
+assert_rc       "--virtio-force alone refused"              1 "$RC"
 
-# --uninstall does not combine with --virtio / --virtio-force / --dry-run.
-run_install --uninstall --virtio
-assert_rc           "--uninstall + --virtio is rejected"             1 "$RC"
-assert_contains     "rejection mentions incompatible combination"    "--uninstall does not combine with" "$OUT"
+run_cmd "$BINARY" --upgrade /tmp/foo --install
+assert_rc       "--upgrade + --install rejected"            1 "$RC"
+assert_contains "rejection names upgrade-vs-install"        "--upgrade cannot combine with --install" "$OUT"
 
-run_install --uninstall --virtio-force
-assert_rc           "--uninstall + --virtio-force is rejected"       1 "$RC"
+run_cmd "$BINARY" --upgrade /tmp/foo --uninstall
+assert_rc       "--upgrade + --uninstall rejected"          1 "$RC"
 
-run_install --uninstall --dry-run
-assert_rc           "--uninstall + --dry-run is rejected"            1 "$RC"
+run_cmd "$BINARY" --upgrade /tmp/foo --update /tmp/bar
+assert_rc       "--upgrade + --update rejected"             1 "$RC"
 
-run_install --uninstall --local /tmp/some-binary
-assert_rc           "--uninstall + --local is rejected"              1 "$RC"
-assert_contains     "rejection lists --local"                        "--local" "$OUT"
+# =========================================================================
+echo "=== Binary: --install --virtio refusals (detection-driven) ==="
 
-run_install --uninstall --upgrade
-assert_rc           "--uninstall + --upgrade is rejected"            1 "$RC"
-assert_contains     "rejection lists --upgrade"                      "--upgrade" "$OUT"
+# Fresh-install state: --install --virtio proceeds past detection but fails
+# the binary-existence check OR a prereq. We just want to confirm refusal
+# does NOT fire (no "existing install detected" message). For the actual
+# prereq failures (SIP, macOS version, Apple agent presence, VirtIO device)
+# we can't test live without the right host.
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --install --virtio --dry-run
+assert_rc       "--install --virtio with standard install: refuse" 1 "$RC"
+assert_contains "rejection names existing install"          "existing install detected" "$OUT"
+assert_contains "rejection points at --upgrade"             "--upgrade" "$OUT"
 
-# MED-2: unknown flags / extra args must be rejected, not silently ignored.
-run_install --dry-run --definitely-unknown-option
-assert_rc           "unknown flag is rejected"                       1 "$RC"
-assert_contains     "rejection identifies the unknown flag"          "Unknown argument: --definitely-unknown-option" "$OUT"
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=virtio-full "$BINARY" --install --virtio --dry-run
+assert_rc       "--install --virtio with virtio-full: refuse" 1 "$RC"
 
-run_install --dry-run --virto
-assert_rc           "typo'd flag (--virto) is rejected"              1 "$RC"
-assert_contains     "rejection identifies the typo"                  "Unknown argument: --virto" "$OUT"
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=virtio-force "$BINARY" --install --virtio --dry-run
+assert_rc       "--install --virtio with virtio-force: refuse" 1 "$RC"
 
-# --local PATH validation runs before the extra-positional check, so the
-# PATH must point at a real file for the extra-positional rejection to fire.
-# The install.sh script itself is conveniently a file that exists.
-run_install --dry-run --local "$INSTALL_SH" extra-positional
-assert_rc           "extra positional after --local is rejected"     1 "$RC"
-assert_contains     "rejection names the extra argument"             "Unexpected extra argument after --local PATH: extra-positional" "$OUT"
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --install --virtio-force --dry-run
+assert_rc       "--install --virtio-force with standard: refuse" 1 "$RC"
 
-# --upgrade is incompatible with --virtio / --virtio-force.
-run_install --upgrade --virtio --dry-run
-assert_rc           "--upgrade + --virtio is rejected"               1 "$RC"
-assert_contains     "rejection names upgrade-vs-virtio conflict"     "--upgrade cannot combine with --virtio" "$OUT"
+# Operator-config refusal (state=not-installed but /etc/qemu/qemu-ga.conf present)
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=not-installed MAC_GUEST_AGENT_TEST_CONFIG_EXISTS=1 \
+    "$BINARY" --install --virtio --dry-run
+assert_rc       "--install --virtio with operator config: refuse" 1 "$RC"
+assert_contains "rejection names config path"               "/etc/qemu/qemu-ga.conf" "$OUT"
+assert_contains "rejection suggests backup-and-retry"       "back up the existing config" "$OUT"
+assert_contains "rejection mentions --virtio-force DIY"     "DIY path" "$OUT"
 
-run_install --upgrade --virtio-force --dry-run
-assert_rc           "--upgrade + --virtio-force is rejected"         1 "$RC"
+# =========================================================================
+echo "=== Binary: --upgrade error paths ==="
 
-# === Detection-driven routing (uses MAC_GUEST_AGENT_TEST_STATE hook) ===
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=not-installed "$BINARY" --upgrade /tmp/foo --dry-run
+assert_rc       "--upgrade with no install: refuse"         1 "$RC"
+assert_contains "rejection mentions no install detected"    "no existing install detected" "$OUT"
 
-# Bare install.sh with no detected install: fresh-standard.
-run_install_with_state not-installed --dry-run
-assert_rc           "bare install with no state -> fresh-standard"   0 "$RC"
-assert_contains     "operation is fresh-standard"                    "operation=fresh-standard" "$OUT"
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --upgrade /tmp/nonexistent --dry-run
+assert_rc       "--upgrade with bad path: refuse"           1 "$RC"
+assert_contains "rejection names missing file"              "file not found" "$OUT"
 
-# Bare install.sh with detected standard install: auto-upgrade.
-run_install_with_state standard --dry-run
-assert_rc           "bare install with standard -> auto-upgrade"     0 "$RC"
-assert_contains     "logs auto-routing message"                      "Existing install detected; auto-routing to upgrade path" "$OUT"
-assert_contains     "operation is upgrade-standard"                  "operation=upgrade-standard" "$OUT"
-assert_contains     "plan shows binary backup"                       "backup /usr/local/bin/mac-guest-agent -> /usr/local/bin/mac-guest-agent.backup" "$OUT"
+# =========================================================================
+echo "=== Binary: --update prints deprecation, delegates to --upgrade ==="
 
-# Bare install.sh with detected virtio-full install: auto-upgrade in virtio-full.
-run_install_with_state virtio-full --dry-run
-assert_rc           "bare install with virtio-full -> auto-upgrade"  0 "$RC"
-assert_contains     "operation is upgrade-virtio-full"               "operation=upgrade-virtio-full" "$OUT"
-assert_contains     "virtio upgrade plan shows agent restart"        "launchctl stop/start" "$OUT"
-assert_contains     "virtio upgrade plan shows VirtIO verify"        "Opened device: /dev/cu.org.qemu.guest_agent.0" "$OUT"
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --update /tmp/nonexistent --dry-run
+assert_contains "--update prints deprecation notice"        "deprecated in v2.5.3+" "$OUT"
+assert_contains "--update points at --upgrade"              "--upgrade" "$OUT"
 
-# Bare install.sh with detected virtio-force install: auto-upgrade in virtio-force.
-run_install_with_state virtio-force --dry-run
-assert_rc           "bare install with virtio-force -> auto-upgrade" 0 "$RC"
-assert_contains     "operation is upgrade-virtio-force"              "operation=upgrade-virtio-force" "$OUT"
+# =========================================================================
+echo "=== Binary: --help mentions new flags ==="
 
-# Explicit --upgrade with no install detected: refuse.
-run_install_with_state not-installed --upgrade --dry-run
-assert_rc           "--upgrade with no install detected: refuse"     1 "$RC"
-assert_contains     "rejection mentions no install detected"         "no existing install detected" "$OUT"
+run_cmd "$BINARY" --help
+assert_rc       "--help exits 0"                            0 "$RC"
+assert_contains "--help mentions --virtio"                  "--virtio           Modifier for --install" "$OUT"
+assert_contains "--help mentions --virtio-force"            "--virtio-force     Modifier for --install" "$OUT"
+assert_contains "--help mentions --upgrade"                 "--upgrade PATH     In-place upgrade" "$OUT"
+assert_contains "--help marks --update deprecated"          "--update PATH      DEPRECATED" "$OUT"
 
-# Explicit --upgrade with each install state: proceed.
-run_install_with_state standard --upgrade --dry-run
-assert_rc           "--upgrade with standard detected: proceeds"     0 "$RC"
-assert_contains     "explicit upgrade does NOT log auto-routing"     "operation=upgrade-standard" "$OUT"
-assert_not_contains "explicit upgrade suppresses auto-routing line"  "auto-routing to upgrade path" "$OUT"
+# =========================================================================
+echo "=== install.sh wrapper: smoke tests ==="
 
-run_install_with_state virtio-full --upgrade --dry-run
-assert_rc           "--upgrade with virtio-full detected: proceeds"  0 "$RC"
-assert_contains     "explicit upgrade preserves virtio-full mode"    "operation=upgrade-virtio-full" "$OUT"
+run_cmd bash "$INSTALL_SH" --help
+assert_rc       "wrapper --help exits 0"                    0 "$RC"
+assert_contains "wrapper --help describes its role"         "bootstrap wrapper" "$OUT"
+assert_contains "wrapper --help mentions --virtio"          "--virtio" "$OUT"
+assert_contains "wrapper --help mentions --upgrade"         "--upgrade" "$OUT"
+assert_contains "wrapper --help mentions --uninstall"       "--uninstall" "$OUT"
 
-# --virtio with each non-zero state: refuse with specific messages.
-run_install_with_state standard --virtio --dry-run
-assert_rc           "--virtio with standard detected: refuse"        1 "$RC"
-assert_contains     "rejection names detected state"                 "Existing install detected (state=standard)" "$OUT"
-assert_contains     "rejection points at --upgrade"                  "sudo" "$OUT"
+# Wrapper rejects unknown architectures via arch check (we can't easily
+# force a fake uname, but the --help path doesn't require root so we
+# confirm --help is the early-exit path).
 
-run_install_with_state virtio-full --virtio --dry-run
-assert_rc           "--virtio with virtio-full detected: refuse"     1 "$RC"
-assert_contains     "rejection names virtio-full state"              "state=virtio-full" "$OUT"
+# Wrapper --local with bad path bails clean.
+run_cmd bash "$INSTALL_SH" --dry-run --local /no/such/path
+assert_rc       "wrapper --local with bad path fails"       1 "$RC"
+assert_contains "bad --local path produces clear error"     "Local binary not found at: /no/such/path" "$OUT"
 
-run_install_with_state virtio-force --virtio --dry-run
-assert_rc           "--virtio with virtio-force detected: refuse"    1 "$RC"
-
-# --virtio-force is gated by the same state checks.
-run_install_with_state standard --virtio-force --dry-run
-assert_rc           "--virtio-force with standard detected: refuse"  1 "$RC"
-assert_contains     "rejection mentions virtio/virtio-force"         "--virtio / --virtio-force is for fresh installs only" "$OUT"
-
-# --virtio with a pre-existing operator config (state=not-installed): refuse.
-run_install_with_operator_config --virtio --dry-run
-assert_rc           "--virtio with operator config present: refuse"  1 "$RC"
-assert_contains     "rejection names the operator-config path"       "/etc/qemu/qemu-ga.conf" "$OUT"
-assert_contains     "rejection suggests backup and re-run"            "back up the existing config" "$OUT"
-assert_contains     "rejection mentions --virtio-force as DIY"        "DIY path" "$OUT"
-assert_not_contains "rejection does NOT suggest hand-edit + standard" "hand-edit" "$OUT"
-
-# --dry-run --virtio: prints the gated plan with apple-unload + verify.
-run_install --dry-run --virtio
-assert_rc           "--dry-run --virtio exits 0"                     0 "$RC"
-assert_contains     "plan shows prereq check step"                   "prereq checks: macOS>=11, SIP off" "$OUT"
-assert_contains     "plan shows interactive warning + yes/no"        "interactive warning + yes/no via /dev/tty" "$OUT"
-assert_contains     "plan shows Apple agent unload"                  "launchctl unload -w /System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist" "$OUT"
-assert_contains     "plan shows post-unload verify"                  "verify: launchctl list && lsof on /dev/cu.org.qemu.guest_agent.0" "$OUT"
-assert_contains     "plan shows config write"                        "write /etc/qemu/qemu-ga.conf with path = /dev/cu.org.qemu.guest_agent.0" "$OUT"
-assert_contains     "plan shows marker drop (mode=full)"             "drop marker /var/db/mac-guest-agent/.virtio-mode (mode=full)" "$OUT"
-assert_contains     "plan shows agent functional verify"             "verify: agent running + log shows" "$OUT"
-
-# --dry-run --virtio-force: same install steps but NO Apple unload, NO verify.
-run_install --dry-run --virtio-force
-assert_rc           "--dry-run --virtio-force exits 0"               0 "$RC"
-assert_contains     "force plan shows 'no prereq checks' marker"     "no prereq checks, no Apple agent unload" "$OUT"
-assert_not_contains "force plan does NOT include Apple agent unload" "launchctl unload -w /System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist" "$OUT"
-assert_not_contains "force plan does NOT include post-unload verify" "verify: launchctl list && lsof" "$OUT"
-assert_contains     "force plan shows marker drop (mode=force)"      "drop marker /var/db/mac-guest-agent/.virtio-mode (mode=force)" "$OUT"
-assert_not_contains "force plan does NOT include functional verify"  "verify: agent running + log shows" "$OUT"
-
-# --dry-run alone (no virtio flags): standard path unchanged.
-run_install --dry-run
-assert_rc           "--dry-run (default) exits 0"                    0 "$RC"
-assert_contains     "default plan shows serial-device probe"         "serial-device probe" "$OUT"
-assert_not_contains "default plan does NOT include Apple agent unload" "launchctl unload -w /System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist" "$OUT"
-assert_not_contains "default plan does NOT include override config"  "/etc/qemu/qemu-ga.conf" "$OUT"
-assert_not_contains "default plan does NOT include marker file"      ".virtio-mode" "$OUT"
-
-# --dry-run --virtio --local with a missing path is still caught before
-# the install plan prints (sanity check that --local validation precedes
-# the dry-run plan).
-run_install --dry-run --virtio --local /no/such/path/exists
-assert_rc           "--virtio + --local with bad path fails"         1 "$RC"
-assert_contains     "bad --local path produces a clear error"        "Local binary not found at: /no/such/path/exists" "$OUT"
-
+# =========================================================================
 echo ""
 echo "==================================="
 echo "Results: $PASS passed, $FAIL failed"

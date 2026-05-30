@@ -49,6 +49,9 @@ typedef struct {
     int         safetest_json;
     int         dump_conf;
     const char *update_path;
+    const char *upgrade_path;  /* v2.5.3+: --upgrade PATH (peer of --update; proper plist-regen) */
+    int         install_virtio;       /* v2.5.3+: --virtio modifier for --install */
+    int         install_virtio_force; /* v2.5.3+: --virtio-force modifier for --install */
     int         dry_run;
     const char *path;
     const char *logfile;
@@ -201,24 +204,48 @@ static void print_usage(const char *prog)
     printf("  -t, --test             Test mode (stdin/stdout)\n");
     printf("  -h, --help             Show this help\n");
     printf("\nmacOS-specific:\n");
-    printf("      --install          Install as LaunchDaemon service\n");
-    printf("      --uninstall        Uninstall LaunchDaemon service\n");
-    printf("      --update PATH      Update binary from local file (DEPRECATED in v2.5.3+;\n");
-    printf("                         prefer: scripts/install.sh --local PATH --upgrade)\n");
+    printf("      --install          Install as LaunchDaemon service. Combinable with\n");
+    printf("                         --virtio or --virtio-force (see below).\n");
+    printf("      --virtio           Modifier for --install: gated VirtIO override install\n");
+    printf("                         (macOS 11+, SIP disabled, unloads AppleQEMUGuestAgent,\n");
+    printf("                         drops marker for marker-aware --uninstall). Refuses\n");
+    printf("                         if an existing install or operator config is present.\n");
+    printf("                         Interactive yes/no via /dev/tty. Unsupported config —\n");
+    printf("                         see docs/NO_ISA_OVERRIDE.md.\n");
+    printf("      --virtio-force     Modifier for --install: VirtIO install with NO safety\n");
+    printf("                         checks (no SIP probe, no Apple-agent unload, no prompt).\n");
+    printf("                         For experts who have already configured the host\n");
+    printf("                         manually. Unsupported.\n");
+    printf("      --uninstall        Uninstall LaunchDaemon service. If a VirtIO marker is\n");
+    printf("                         present, also removes the override config and reloads\n");
+    printf("                         AppleQEMUGuestAgent (mode=full) or leaves it alone\n");
+    printf("                         (mode=force). SIP is not re-enabled (operator action).\n");
+    printf("      --upgrade PATH     In-place upgrade from a local binary. Detects current\n");
+    printf("                         install mode, backs up current binary, copies new,\n");
+    printf("                         regenerates plist, restarts, verifies. On failure\n");
+    printf("                         restores the backup.\n");
+    printf("      --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade. Will be\n");
+    printf("                         removed in a future release.\n");
     printf("      --self-test        Check environment and report readiness\n");
     printf("      --self-test-json   Same as --self-test but output JSON\n");
     printf("      --safe-test        Validate read-only commands work correctly\n");
     printf("      --safe-test-json   Same as --safe-test but output JSON\n");
-    printf("      --dry-run          Combined with --install / --uninstall / --update:\n");
-    printf("                         print every action the operation would take without\n");
-    printf("                         touching the filesystem or calling launchctl. Root\n");
-    printf("                         is also skipped (no privileged ops execute).\n");
+    printf("      --dry-run          Combined with --install / --uninstall / --update /\n");
+    printf("                         --upgrade: print every action the operation would take\n");
+    printf("                         without touching the filesystem or calling launchctl.\n");
+    printf("                         Root is also skipped (no privileged ops execute).\n");
     printf("\nConfig file format (%s):\n", DEFAULT_CONFIG_PATH);
     printf("  [general]\n");
     printf("  path = /dev/cu.serial1\n");
     printf("  logfile = %s\n", LOG_PATH);
     printf("  verbose = 0\n");
 }
+
+/* Long-only sentinels (no short alias). Values >255 so they don't collide
+ * with any single-char short option. */
+#define OPT_VIRTIO        0x100
+#define OPT_VIRTIO_FORCE  0x101
+#define OPT_UPGRADE       0x102
 
 static struct option long_options[] = {
     {"daemonize",  no_argument,       NULL, 'd'},
@@ -243,6 +270,10 @@ static struct option long_options[] = {
     /* Long-form only; no short alias. Gates side-effects in
      * service_install / _uninstall / _update (v2.5.1+). */
     {"dry-run",    no_argument,       NULL, 'n'},
+    /* v2.5.3+: VirtIO override modifiers for --install + proper --upgrade. */
+    {"virtio",         no_argument,       NULL, OPT_VIRTIO},
+    {"virtio-force",   no_argument,       NULL, OPT_VIRTIO_FORCE},
+    {"upgrade",        required_argument, NULL, OPT_UPGRADE},
     /* Legacy long-form aliases */
     {"daemon",     no_argument,       NULL, 'd'},
     {"device",     required_argument, NULL, 'p'},
@@ -289,15 +320,42 @@ int main(int argc, char *argv[])
         case 'T': cfg.do_safetest = 1; break;
         case 'K': cfg.do_safetest = 1; cfg.safetest_json = 1; break;
         case 'n': cfg.dry_run = 1; break;  /* --dry-run, gates service.c side-effects */
+        case OPT_VIRTIO:       cfg.install_virtio = 1; break;
+        case OPT_VIRTIO_FORCE: cfg.install_virtio_force = 1; break;
+        case OPT_UPGRADE:      cfg.upgrade_path = optarg; break;
         default:  print_usage(argv[0]); return 1;
         }
+    }
+
+    /* v2.5.3+: --virtio and --virtio-force are mutually exclusive. */
+    if (cfg.install_virtio && cfg.install_virtio_force) {
+        fprintf(stderr, "Error: --virtio and --virtio-force cannot combine\n");
+        return 1;
+    }
+    /* --virtio[-force] is a modifier for --install only. */
+    if ((cfg.install_virtio || cfg.install_virtio_force) && !cfg.do_install) {
+        fprintf(stderr, "Error: --virtio / --virtio-force is a modifier for --install. "
+                        "Run: sudo %s --install --virtio\n", argv[0]);
+        return 1;
+    }
+    /* --upgrade is its own operation; can't combine with --install or
+     * --uninstall or --update. */
+    if (cfg.upgrade_path && (cfg.do_install || cfg.do_uninstall || cfg.update_path)) {
+        fprintf(stderr, "Error: --upgrade cannot combine with --install / --uninstall / --update\n");
+        return 1;
     }
 
     if (cfg.dump_conf) { dump_config(&cfg); return 0; }
     if (cfg.do_selftest) return selftest_run(cfg.selftest_json);
     if (cfg.do_safetest) return safetest_run(cfg.safetest_json);
+    if (cfg.upgrade_path) return service_upgrade(cfg.upgrade_path, cfg.dry_run);
     if (cfg.update_path) return service_update(cfg.update_path, cfg.dry_run);
-    if (cfg.do_install) return service_install(cfg.dry_run);
+    if (cfg.do_install) {
+        install_mode_t mode = INSTALL_MODE_STANDARD;
+        if (cfg.install_virtio)       mode = INSTALL_MODE_VIRTIO;
+        else if (cfg.install_virtio_force) mode = INSTALL_MODE_VIRTIO_FORCE;
+        return service_install(cfg.dry_run, mode);
+    }
     if (cfg.do_uninstall) return service_uninstall(cfg.dry_run);
 
     /* Initialize logging */

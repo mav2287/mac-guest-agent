@@ -17,19 +17,34 @@ Compatible with the Linux `qemu-ga`:
   -D, --dump-conf        Print effective configuration
   -t, --test             Test mode (stdin/stdout, no QEMU needed)
   -h, --help             Show help
-      --install          Install as LaunchDaemon
-      --uninstall        Uninstall LaunchDaemon
+      --install          Install as LaunchDaemon. Combinable with --virtio
+                         or --virtio-force (v2.5.3+).
+      --virtio           Modifier for --install: gated VirtIO override
+                         install (macOS 11+, SIP off, unloads
+                         AppleQEMUGuestAgent, drops marker). Refuses if an
+                         existing install or operator config is present.
+                         Interactive yes/no via /dev/tty. Unsupported — see
+                         docs/NO_ISA_OVERRIDE.md. v2.5.3+.
+      --virtio-force     Modifier for --install: VirtIO install with no
+                         safety checks (no SIP probe, no Apple-agent
+                         unload, no prompt). For operators who configured
+                         the host manually. Unsupported. v2.5.3+.
+      --uninstall        Uninstall LaunchDaemon. Marker-aware (v2.5.3+):
+                         removes the override config and reloads
+                         AppleQEMUGuestAgent if installed via --virtio
+                         (mode=full). SIP not re-enabled (operator action).
+      --upgrade PATH     In-place upgrade. Detects current install mode,
+                         backs up current binary, copies new, regenerates
+                         plist, restarts, verifies. On failure: restores
+                         backup. v2.5.3+.
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
-      --update PATH      Update binary from local file (DEPRECATED in v2.5.3+;
-                         use `install.sh --local PATH --upgrade` instead — it
-                         regenerates the LaunchDaemon plist and has proper
-                         rollback semantics. --update still works for backward
-                         compatibility but prints a deprecation notice.)
-      --dry-run          Combined with --install/--uninstall/--update: print
-                         every action without touching the filesystem or
-                         calling launchctl. Root check is also skipped
-                         (no privileged operations execute). v2.5.1+.
+      --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade
+                         internally. Will be removed in a future release.
+      --dry-run          Combined with --install/--uninstall/--update/
+                         --upgrade: print every action without touching the
+                         filesystem or calling launchctl. Root check also
+                         skipped (no privileged operations execute). v2.5.1+.
 ```
 
 ## Configuration File

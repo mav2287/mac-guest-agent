@@ -58,15 +58,17 @@ For kubevirt, this is automatic — every VMI gets a `<channel type='unix'><targ
 After SIP is off and the VM is back up:
 
 ```bash
-# On the guest
-sudo ./install.sh --virtio
+# On the guest, after copying the binary to /usr/local/bin/mac-guest-agent
+sudo /usr/local/bin/mac-guest-agent --install --virtio
 ```
 
-The installer will:
+(Or, equivalently, via the bootstrap wrapper:  `sudo bash install.sh --virtio` — same end result; the wrapper just downloads the binary first.)
+
+The binary will:
 
 1. Run the prerequisite checks. Any failure prints a specific message and exits — no changes made.
 2. Print the warning block. Read it. The risks listed there are real.
-3. Prompt `Proceed? [yes/no]:` reading from `/dev/tty`. Type `yes` to continue, anything else (including no input) aborts. Cannot be bypassed with `yes | ./install.sh --virtio`.
+3. Prompt `Proceed? [yes/no]:` reading from `/dev/tty`. Type `yes` to continue, anything else (including no input) aborts. Cannot be bypassed with `yes | mac-guest-agent --install --virtio`.
 4. Unload Apple's daemon and verify it released the channel.
 5. Install `mac-guest-agent` as usual.
 6. Write `/etc/qemu/qemu-ga.conf` with the explicit `path =` override.
@@ -74,20 +76,31 @@ The installer will:
 
 A marker file at `/var/db/mac-guest-agent/.virtio-mode` (content: `mode=full`) is dropped on success so `--uninstall` knows to restore Apple's daemon.
 
+### DIY path (`--virtio-force`)
+
+For operators who've already arranged for Apple's daemon to not own the channel (SIP off by hand, AppleQEMUGuestAgent unloaded by hand, possibly a non-standard device path) and want a one-line install without re-running the same checks:
+
+```bash
+sudo /usr/local/bin/mac-guest-agent --install --virtio-force
+```
+
+`--virtio-force` bypasses every prereq check, doesn't unload Apple's daemon, doesn't print the warning, doesn't prompt. It just writes the override config and drops the marker with `mode=force` so `--uninstall` knows NOT to touch Apple's daemon (since we didn't).
+
 ## Rolling back
 
 ```bash
-sudo ./install.sh --uninstall
+sudo /usr/local/bin/mac-guest-agent --uninstall
 ```
 
-**Use the script, not the binary's `--uninstall`.** The binary's `--uninstall` only removes the LaunchDaemon and binary; it does NOT know about the marker, the override config, or Apple's daemon. The script's `--uninstall` reads the marker and orchestrates the full restoration:
+The binary's `--uninstall` is marker-aware (v2.5.3+). It reads `/var/db/mac-guest-agent/.virtio-mode` and:
 
-- Stops and removes mac-guest-agent (calls the binary's `--uninstall` internally if the binary is still present)
-- Removes `/etc/qemu/qemu-ga.conf`
-- Reloads `/System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist`
+- Stops and removes the agent (LaunchDaemon plist + binary)
+- Removes `/etc/qemu/qemu-ga.conf` (only when a marker is present — operator's pre-existing config is left alone)
+- Reloads `/System/Library/LaunchDaemons/com.apple.AppleQEMUGuestAgent.plist` if marker mode is `full`
+- Leaves AppleQEMUGuestAgent alone if marker mode is `force` (since we didn't unload it at install time)
 - Removes the marker file
 
-If the install was done with `--virtio-force` (no Apple-daemon unload at install time), the uninstall skips the Apple-daemon reload — only the agent and override config are removed.
+SIP is not re-enabled automatically — that's an operator action via Recovery + `csrutil enable`.
 
 SIP is not re-enabled automatically. To restore SIP, reboot to Recovery and run `csrutil enable`.
 

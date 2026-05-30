@@ -29,6 +29,15 @@ sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
 
+Or use the bootstrap wrapper (does the same thing, plus VirtIO override and upgrade orchestration):
+```bash
+curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
+```
+
+**Updates:** `sudo /usr/local/bin/mac-guest-agent --upgrade /tmp/new-binary` (in-place, regenerates plist, mode-aware verify, rolls back on failure).
+
+**VirtIO override (unsupported):** if your orchestrator hardcodes VirtIO (kubevirt-style) and ISA isn't available, see [`docs/NO_ISA_OVERRIDE.md`](docs/NO_ISA_OVERRIDE.md) — `sudo /usr/local/bin/mac-guest-agent --install --virtio` runs the gated override path (macOS 11+ only, requires SIP disabled).
+
 **3. Verify:**
 ```bash
 # From PVE host
