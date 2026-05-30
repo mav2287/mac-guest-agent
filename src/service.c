@@ -815,7 +815,7 @@ int service_install(int dry_run, install_mode_t mode)
     }
 
     if (mode == INSTALL_MODE_VIRTIO || mode == INSTALL_MODE_VIRTIO_FORCE) {
-        printf("\nmac-guest-agent installed in VirtIO override mode (%s).\n",
+        printf("\nmac-guest-agent installed and running (VirtIO override mode, %s).\n",
                mode == INSTALL_MODE_VIRTIO ? "managed" : "force");
         printf("  Marker:    %s (mode=%s)\n",
                VIRTIO_MARKER_FILE,
@@ -827,15 +827,15 @@ int service_install(int dry_run, install_mode_t mode)
                mode == INSTALL_MODE_VIRTIO ? "   (restores AppleQEMUGuestAgent)"
                                            : "   (does NOT touch AppleQEMUGuestAgent)");
     } else {
-        printf("macOS Guest Agent installed successfully.\n");
-        printf("  Binary:  %s\n", BINARY_PATH);
-        printf("  Config:  %s\n", PLIST_PATH);
-        printf("  Log:     %s\n", LOG_PATH);
-        printf("\nService commands:\n");
+        printf("macOS Guest Agent installed and running.\n");
+        printf("  Binary:    %s\n", BINARY_PATH);
+        printf("  Plist:     %s\n", PLIST_PATH);
+        printf("  Log:       %s\n", LOG_PATH);
         printf("  Status:    sudo launchctl list %s\n", SERVICE_NAME);
-        printf("  Log:       tail -f %s\n", LOG_PATH);
-        printf("  Stop:      sudo launchctl stop %s\n", SERVICE_NAME);
-        printf("  Start:     sudo launchctl start %s\n", SERVICE_NAME);
+        printf("\nService management (only needed for troubleshooting / removal):\n");
+        printf("  Tail log:  tail -f %s\n", LOG_PATH);
+        printf("  Restart:   sudo launchctl stop %s && sudo launchctl start %s\n",
+               SERVICE_NAME, SERVICE_NAME);
         printf("  Uninstall: sudo %s --uninstall\n", BINARY_PATH);
     }
     return 0;
