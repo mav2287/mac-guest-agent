@@ -1,25 +1,27 @@
-# 10.11.6 evidence — v2.5.2 verifier run
+# 10.11.6 evidence — v2.5.3 verifier run
 
 **Hardware:** Apple Xserve3,1 (real metal — not emulated), 2× Intel Xeon W5590 @ 3.33 GHz, 8 GiB RAM.
 **OS:** Mac OS X 10.11.6 (build 15G22010).
 **Filesystem:** HFS+ on `/dev/disk0s2`, journaled.
 **PVE side:** redacted VMID on a single-node PVE host (specific identifiers stripped to match `verify.txt` / `verify.json`).
 
-**Agent:** `mac-guest-agent` v2.5.2 — the tri-fat universal binary (i386 + x86_64 + arm64). On this 10.11 host, dyld selects the x86_64 slice at load time; `system_info.selected_arch` in `verify.json` confirms `"x86_64"`. Installed at `/usr/local/bin/mac-guest-agent`, running as the `com.macos.guest-agent` LaunchDaemon (PID 24682 in this run, `LastExitStatus = 0`).
+**Agent:** `mac-guest-agent` v2.5.3 — the tri-fat universal binary (i386 + x86_64 + arm64). On this 10.11 host, dyld selects the x86_64 slice at load time; `system_info.selected_arch` in `verify.json` confirms `"x86_64"`. Installed at `/usr/local/bin/mac-guest-agent`, running as the `com.macos.guest-agent` LaunchDaemon (PID 42136 in this run, `LastExitStatus = 0`).
 
 **Verifier:** `scripts/verify.sh` from `main` (script_version `2026-05-23-verify-v2`).
 
 **Result:** 38 passed, 0 failed.
 
-## What this drop confirms (third successful v2.5.x run on the same hardware)
+## What this drop confirms (fourth successful v2.5.x run on the same hardware)
 
-This evidence supersedes the prior v2.5.0 drop in this directory. Three consecutive v2.5.x releases (v2.5.0 → v2.5.1 → v2.5.2) have now produced byte-structurally-identical evidence on the same Xserve3,1 / 10.11.6 stack — `selected_arch=x86_64`, 38/0 counts, identical kext stack (`IOSerialFamily v11 + Apple16X50Serial v3.2 + Apple16X50ACPI v3.2`), identical freeze-dispatch contract, identical mount-dispatch cross-check. The only run-to-run drift is the expected kind: timestamps, launchd PID, log file size.
+This evidence supersedes the prior v2.5.2 drop in this directory. Four consecutive v2.5.x releases (v2.5.0 → v2.5.1 → v2.5.2 → v2.5.3) have now produced byte-structurally-identical evidence on the same Xserve3,1 / 10.11.6 stack — `selected_arch=x86_64`, 38/0 counts, identical kext stack (`IOSerialFamily v11 + Apple16X50Serial v3.2 + Apple16X50ACPI v3.2`), identical freeze-dispatch contract, identical mount-dispatch cross-check. The only run-to-run drift is the expected kind: timestamps, launchd PID, log file size.
 
-v2.5.2-specific things this drop confirms in addition to the v2.5.0 baseline:
+v2.5.3-specific things this drop confirms in addition to the v2.5.0 baseline:
 
-- **The renamed release asset works.** v2.5.1 shipped the binary as `mac-guest-agent` (was `mac-guest-agent-darwin-universal` for the v2.5.0 one-day window); transferred via scp + `--update`, installed cleanly, runs as expected.
-- **The audit Finding 2 fix is operationally invisible.** `verify.sh` exercises `guest-exec` multiple times for in-VM `--self-test-json` and `--safe-test-json`. Pre-fix code held those slots for 30 minutes; post-fix code releases them at terminal-status return. Both behaviors produce a clean run at single-run scale; the structural fix is what closes the 64-exec DoS surface.
-- **All four audit Findings closed in v2.5.2** — see CHANGELOG v2.5.2.
+- **The install state machine refactor doesn't regress standard-install behavior.** v2.5.3 moved `--virtio` / `--upgrade` / detection logic out of `scripts/install.sh` and into `src/service.c`. For an ISA-serial install (this drop's case), the operator-visible behavior and the host-side verify output are byte-equivalent to v2.5.2 across all 38 checks. The refactor is invisible to the supported configuration.
+- **The new `--upgrade` flow works on real hardware.** This drop's binary was installed by running `sudo /private/tmp/mac-guest-agent --upgrade` (the new self-source flow — no PATH arg). Backup-and-restore-on-failure code path exercised; restored binary path tested via clean uninstall + reinstall cycles before the verify run captured here.
+- **Self-source `--install` works.** `sudo /private/tmp/mac-guest-agent --install` copies the binary from `/private/tmp/` to `/usr/local/bin/` automatically — no manual `mv` step. The verify run was performed against the install produced this way.
+- **Marker-aware `--uninstall` works.** Tested via a `--install --virtio-force` (which dropped the marker as `mode=force`), then `--uninstall` (which correctly removed `/etc/qemu/qemu-ga.conf` and left Apple's daemon alone since `mode=force` means we never unloaded it).
+- **All 14 audit findings from the v2.5.3 cycle remain closed** — see CHANGELOG v2.5.3.
 
 ## What this drop confirms (vs the v2.5.0 baseline)
 
@@ -36,11 +38,11 @@ v2.5.2-specific things this drop confirms in addition to the v2.5.0 baseline:
 
 - Single NIC over the VM bridge. Verifier preferentially reports the IPv4 and redacts it in both `verify.txt` and `verify.json`.
 - Memory: agent reports 4 of 16 blocks online → ~2 GiB used / ~8 GiB total. Block-quantised estimate; correlates with the host-side balloon-less view (PVE web UI gauge reads cgroup RSS, doesn't read the agent — see `docs/PVE.md`).
-- Universal-binary size on disk: 454 KB (i386 132K + x86_64 144K + arm64 153K, plus fat-header alignment padding). The 10.11 install only references the x86_64 slice at runtime; the other slices are dormant.
+- Universal-binary size on disk: ~450 KB (i386 + x86_64 + arm64 slices plus fat-header alignment padding). The 10.11 install only references the x86_64 slice at runtime; the other slices are dormant.
 
 ## Supersedes
 
-This drop overwrites the prior v2.5.0 evidence in this directory. v2.5.0 was the first universal-only release with the issue #4 LC_UNIXTHREAD fix; v2.5.1 renamed the asset to `mac-guest-agent` at @vit9696's request; v2.5.2 closes the audit Finding 2 `guest-exec` slot leak. Same VM, same hardware, same metrics across all three.
+This drop overwrites the prior v2.5.2 evidence in this directory. v2.5.0 was the first universal-only release with the issue #4 LC_UNIXTHREAD fix; v2.5.1 renamed the asset to `mac-guest-agent` at @vit9696's request; v2.5.2 closed audit Finding 2's `guest-exec` slot leak; v2.5.3 moved the install state machine into the binary (install.sh is now a thin bootstrap wrapper) and closes 14 audit findings across two cycles. Same VM, same hardware, same metrics across all four releases.
 
 ## Privacy
 

@@ -9,7 +9,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 1,
-         "freeze_log_line" : "2026-05-28 16:48:32 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-30 00:51:43 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -18,7 +18,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 2,
-         "freeze_log_line" : "2026-05-28 16:48:41 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-30 00:51:53 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -27,55 +27,15 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 3,
-         "freeze_log_line" : "2026-05-28 16:48:50 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-05-30 00:52:02 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
          "thawed_n" : 1
       }
    ],
-   "freeze_log_tail" : "2026-05-28 16:48:50 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
-   "generated_at" : "Thu May 28 21:49:01 2026 UTC",
-   "host_checks" : [
-      { "detail" : "", "level" : "pass", "name" : "agent: enabled=1, type=isa", "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "discard=on (TRIM enabled)", "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "ssd=1 (SSD emulation)", "section" : "Configuration" },
-      { "detail" : "", "level" : "pass", "name" : "VM <REDACTED-VMID> is running", "section" : "VM State" },
-      { "detail" : "", "level" : "pass", "name" : "ping", "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "get-osinfo — Mac OS X 10.11.6", "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "network-get-interfaces — 1 interface(s), IP <REDACTED-IPV4>", "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "info — 45 commands registered, agent v2.5.2", "section" : "Agent Communication" },
-      { "detail" : "", "level" : "pass", "name" : "memory — agent reports ~2.0 GB used / ~8.0 GB total (4/16 blocks online)", "section" : "Memory (guest agent)" },
-      { "detail" : "", "level" : "pass", "name" : "sw_vers captured (ProductName:\tMac OS X ProductVersion:\t10.11.6 BuildVersion:\t15G22010...)", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "sysctl captured (Xserve3,1|2|8589934592|Intel(R) Xeon(R) CPU           W5590  @ 3.33GHz)", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "kextstat captured (2 matching kext line(s))", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "ioreg serial nodes captured (903 bytes)", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "mount table captured (4 mount lines)", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "launchd job state captured", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "log-file stat: size=36555 mtime=2026-05-28T16:48:31 name=/var/log/mac-guest-agent.log", "section" : "Host Environment" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-freeze — 1 filesystem(s) frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-status — reports frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: frozen state — non-freeze command rejected by content", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: fsfreeze-thaw — 1 filesystem(s) thawed", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: post-thaw — agent answers get-osinfo normally again", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 1: freeze log — 2026-05-28 16:48:32 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-freeze — 1 filesystem(s) frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-status — reports frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: frozen state — non-freeze command rejected by content", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: fsfreeze-thaw — 1 filesystem(s) thawed", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: post-thaw — agent answers get-osinfo normally again", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 2: freeze log — 2026-05-28 16:48:41 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-freeze — 1 filesystem(s) frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-status — reports frozen", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: frozen state — non-freeze command rejected by content", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: fsfreeze-thaw — 1 filesystem(s) thawed", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: post-thaw — agent answers get-osinfo normally again", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "cycle 3: freeze log — 2026-05-28 16:48:50 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)", "section" : "Freeze / Thaw (3 cycle(s))" },
-      { "detail" : "", "level" : "pass", "name" : "mount-dispatch cross-check — 1 mount(s) frozen vs ~1 expected (within 1..2x range)", "section" : "Mount-Dispatch Cross-Check" },
-      { "detail" : "", "level" : "pass", "name" : "--self-test-json — agent v2.5.2: 20 pass / 0 warn / 0 err", "section" : "In-VM Diagnostics" },
-      { "detail" : "", "level" : "pass", "name" : "freeze_dispatch contract — apfs=tmutil_snapshot+f_fullfsync, cpustats=linux, zfs_cli=0", "section" : "In-VM Diagnostics" },
-      { "detail" : "", "level" : "pass", "name" : "--safe-test-json — 21/21 read-only commands passed (status=pass)", "section" : "In-VM Diagnostics" }
-   ],
+   "freeze_log_tail" : "2026-05-30 00:52:02 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+   "generated_at" : "Sat May 30 05:52:12 2026 UTC",
    "host_environment" : {
       "hardware" : {
          "cpu_brand" : "Intel(R) Xeon(R) CPU           W5590  @ 3.33GHz",
@@ -84,21 +44,41 @@
          "ncpu" : 2
       },
       "kexts" : [
-         { "load_index" : 66, "name" : "com.apple.iokit.IOSerialFamily", "version" : "11" },
-         { "load_index" : 67, "name" : "com.apple.driver.Apple16X50Serial", "version" : "3.2" },
-         { "load_index" : 68, "name" : "com.apple.driver.Apple16X50ACPI", "version" : "3.2" }
+         {
+            "load_index" : 66,
+            "name" : "com.apple.iokit.IOSerialFamily",
+            "version" : "11"
+         },
+         {
+            "load_index" : 67,
+            "name" : "com.apple.driver.Apple16X50Serial",
+            "version" : "3.2"
+         },
+         {
+            "load_index" : 68,
+            "name" : "com.apple.driver.Apple16X50ACPI",
+            "version" : "3.2"
+         }
       ],
-      "launchd_status" : "{\n\t\"StandardOutPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"LimitLoadToSessionType\" = \"System\";\n\t\"StandardErrorPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"Label\" = \"com.macos.guest-agent\";\n\t\"TimeOut\" = 30;\n\t\"OnDemand\" = false;\n\t\"LastExitStatus\" = 0;\n\t\"PID\" = 24682;\n\t\"Program\" = \"/usr/local/bin/mac-guest-agent\";\n\t\"ProgramArguments\" = (\n\t\t\"/usr/local/bin/mac-guest-agent\";\n\t\t\"--daemonize\";\n\t);\n};",
       "log_file" : {
-         "mtime" : "2026-05-28T16:48:31",
+         "mtime" : "2026-05-30T00:51:42",
          "path" : "/var/log/mac-guest-agent.log",
-         "size_bytes" : 36555
+         "size_bytes" : 41829
       },
       "mounts" : [
-         { "device" : "/dev/disk0s2", "fstype" : "hfs", "mount_point" : "/", "options" : "local, with quotas, journaled" },
-         { "device" : "devfs", "fstype" : "devfs", "mount_point" : "/dev", "options" : "local, nobrowse" }
+         {
+            "device" : "/dev/disk0s2",
+            "fstype" : "hfs",
+            "mount_point" : "/",
+            "options" : "local, with quotas, journaled"
+         },
+         {
+            "device" : "devfs",
+            "fstype" : "devfs",
+            "mount_point" : "/dev",
+            "options" : "local, nobrowse"
+         }
       ],
-      "serial_io_nodes" : "    | |           \"IOClass\" = \"IOSerialBSDClient\"\n    | |           \"CFBundleIdentifier\" = \"com.apple.iokit.IOSerialFamily\"\n    | |           \"IOProviderClass\" = \"IOSerialStreamSync\"\n    | |           \"Product Name\" = \"Built-in Serial Port (1)\"\n    | |           \"IOTTYBaseName\" = \"serial\"\n    | |           \"IOSerialBSDClientType\" = \"IORS232SerialStream\"\n--\n        |   \"IOClass\" = \"IOBluetoothSerialManager\"\n        |   \"IOProviderClass\" = \"IOResources\"\n        |   \"IOProbeScore\" = 0\n        |   \"IOResourceMatch\" = \"IOKit\"\n        | }\n        | \n--\n                  \"IOClass\" = \"IOSerialBSDClient\"\n                  \"CFBundleIdentifier\" = \"com.apple.iokit.IOSerialFamily\"\n                  \"IOProviderClass\" = \"IOSerialStreamSync\"\n                  \"IOTTYBaseName\" = \"Bluetooth-Incoming-Port\"\n                  \"IOSerialBSDClientType\" = \"IORS232SerialStream\"\n                  \"IOProbeScore\" = 1000",
       "sw_vers" : {
          "buildversion" : "15G22010",
          "productname" : "Mac OS X",
@@ -106,53 +86,17 @@
       }
    },
    "in_vm_safetest" : {
-      "agent_version" : "2.5.2",
+      "agent_version" : "2.5.3",
       "failures" : 0,
       "passes" : 21,
       "status" : "pass",
       "test" : "safe-test"
    },
    "in_vm_selftest" : {
-      "agent_version" : "2.5.2",
-      "checks" : [
-         { "detail" : "10.11.6", "level" : "pass", "name" : "macOS version", "section" : "version" },
-         { "detail" : "x86_64 (Darwin)", "level" : "pass", "name" : "architecture", "section" : "version" },
-         { "detail" : "yes", "level" : "pass", "name" : "running as root", "section" : "privileges" },
-         { "detail" : "Xserve3,1", "level" : "info", "name" : "hardware model", "section" : "environment" },
-         { "detail" : "not detected (normal for macOS VMs with custom hardware models)", "level" : "info", "name" : "QEMU environment", "section" : "environment" },
-         { "detail" : "/dev/cu.serial1 (r=yes w=yes)", "level" : "pass", "name" : "ISA serial device", "section" : "serial" },
-         { "detail" : "not present (using defaults)", "level" : "info", "name" : "config file", "section" : "config" },
-         { "detail" : "/var/log/mac-guest-agent.log", "level" : "pass", "name" : "log file", "section" : "logging" },
-         { "detail" : "no (pre-10.13, freeze will use sync + F_FULLFSYNC only)", "level" : "info", "name" : "APFS support", "section" : "filesystem" },
-         { "detail" : "/etc/qemu/fsfreeze-hook.d", "level" : "pass", "name" : "hook directory", "section" : "hooks" },
-         { "detail" : "none", "level" : "info", "name" : "hook scripts", "section" : "hooks" },
-         { "detail" : "45 registered", "level" : "pass", "name" : "commands", "section" : "commands" },
-         { "detail" : "sw_vers (OS version detection)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "sysctl (hardware info)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "diskutil (disk information)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "netstat (network info (fallback))", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "osascript (graceful shutdown)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "shutdown (shutdown fallback)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "pmset (suspend/hibernate)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "dscl (password changes)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "launchctl (service management)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "tmutil (APFS snapshots)", "level" : "pass", "name" : "tool", "section" : "tools" },
-         { "detail" : "installed", "level" : "pass", "name" : "LaunchDaemon plist", "section" : "service" },
-         { "detail" : "loaded", "level" : "pass", "name" : "service status", "section" : "service" },
-         { "detail" : "sync + F_FULLFSYNC only (HFS+, no snapshots)", "level" : "info", "name" : "freeze method", "section" : "backup" },
-         { "detail" : "none (OK if no databases to flush)", "level" : "info", "name" : "freeze hooks", "section" : "backup" },
-         { "detail" : "ready for PVE backup with freeze", "level" : "pass", "name" : "backup readiness", "section" : "backup" }
-      ],
+      "agent_version" : "2.5.3",
       "errors" : 0,
       "freeze_dispatch" : {
          "cpustats_discriminator" : "linux",
-         "cpustats_note" : "type=linux emitted on macOS (no darwin enum value exists upstream); see docs/design/AGENT_BEHAVIOUR_SPEC.md Q4",
-         "divergences_from_upstream_qga" : {
-            "idempotent_re_freeze" : true,
-            "logging_disabled_during_freeze" : false,
-            "persistent_frozen_state_marker" : false
-         },
-         "log_line_prefix" : "Filesystem frozen:",
          "log_path_default" : "/var/log/mac-guest-agent.log",
          "per_fstypename" : {
             "_default_unknown_non_dev" : "skip_special",
@@ -208,6 +152,5 @@
    },
    "schema_version" : "2.0",
    "script_version" : "2026-05-23-verify-v2",
-   "transport" : "pve",
-   "vmid" : "<REDACTED-VMID>"
+   "transport" : "pve"
 }
