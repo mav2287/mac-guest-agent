@@ -607,8 +607,12 @@ int service_install(int dry_run, install_mode_t mode)
 {
     /* Root check: skipped in dry-run because no privileged operations run. */
     if (!dry_run && geteuid() != 0) {
+        char self_path[1024];
+        const char *suggest = self_path;
+        if (get_self_executable_path(self_path, sizeof(self_path)) != 0)
+            suggest = BINARY_PATH;
         fprintf(stderr, "Error: root privileges required for installation\n");
-        fprintf(stderr, "Usage: sudo %s --install\n", BINARY_PATH);
+        fprintf(stderr, "Usage: sudo %s --install\n", suggest);
         return 1;
     }
 
@@ -617,6 +621,16 @@ int service_install(int dry_run, install_mode_t mode)
      * whether the binary has been copied yet — refusal-based exits should
      * fire predictably regardless of binary placement. */
     if (mode == INSTALL_MODE_VIRTIO || mode == INSTALL_MODE_VIRTIO_FORCE) {
+        /* Resolve the running binary's path so error messages point operators
+         * at THIS binary, not at the existing one in /usr/local/bin. If the
+         * operator just transferred the new binary to /tmp/, the right
+         * remediation is `sudo /tmp/mac-guest-agent --upgrade`, not telling
+         * them to invoke /usr/local/bin/mac-guest-agent. */
+        char self_msg[1024];
+        const char *self_path = self_msg;
+        if (get_self_executable_path(self_msg, sizeof(self_msg)) != 0)
+            self_path = BINARY_PATH;  /* harmless fallback */
+
         /* Refusal logic: --install --virtio[-force] is fresh-install-only.
          * Existing install or operator config means refuse with a remediation
          * pointer. The check fires regardless of dry-run (we want the refusal
@@ -626,9 +640,9 @@ int service_install(int dry_run, install_mode_t mode)
             fprintf(stderr,
                 "Error: existing install detected. --install --virtio / --virtio-force "
                 "is for fresh installs only.\n"
-                "  To update in place:        sudo %s --upgrade /path/to/new/binary\n"
+                "  To update in place:        sudo %s --upgrade\n"
                 "  To switch modes:           sudo %s --uninstall, then sudo %s --install --virtio\n",
-                BINARY_PATH, BINARY_PATH, BINARY_PATH);
+                self_path, self_path, self_path);
             return 1;
         }
         if (operator_config_exists()) {
@@ -647,7 +661,7 @@ int service_install(int dry_run, install_mode_t mode)
                 "  DIY path (advanced; you take responsibility for the gates this skips):\n"
                 "      sudo %s --install --virtio-force\n",
                 VIRTIO_CONFIG_PATH, VIRTIO_CONFIG_PATH, VIRTIO_CONFIG_PATH,
-                VIRTIO_CONFIG_PATH, BINARY_PATH, VIRTIO_CONFIG_PATH, BINARY_PATH);
+                VIRTIO_CONFIG_PATH, self_path, VIRTIO_CONFIG_PATH, self_path);
             return 1;
         }
     }
@@ -952,9 +966,11 @@ int service_upgrade(const char *new_binary_path, int dry_run)
 
     install_state_t state = detect_install_state();
     if (state == INSTALL_STATE_NOT_INSTALLED) {
+        /* Point operators at THIS binary, not the installed location (which
+         * doesn't exist yet — that's the whole reason for the error). */
         fprintf(stderr,
             "Error: --upgrade requested but no existing install detected. "
-            "Run sudo %s --install for a fresh install.\n", BINARY_PATH);
+            "Run sudo %s --install for a fresh install.\n", new_binary_path);
         return 1;
     }
 
