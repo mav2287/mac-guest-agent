@@ -39,7 +39,7 @@ jobs:
     # limited (queued 8+ minutes without allocation).
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Manpage freshness (regenerate from template, fail on diff)
         run: |
@@ -147,7 +147,7 @@ jobs:
           ./scripts/gen-command-table.sh ./build/mac-guest-agent
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: mac-guest-agent-binaries
           path: |
@@ -165,7 +165,7 @@ jobs:
         os: [macos-14, macos-15, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build
         run: make build
@@ -203,7 +203,7 @@ jobs:
   asan:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build with AddressSanitizer
         run: |
@@ -272,7 +272,7 @@ jobs:
     name: Canary build on macos-latest (required)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download legacy SDK
         run: |
           curl -fL -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz
@@ -305,7 +305,7 @@ jobs:
     name: 32-bit portable code surrogate (Linux -m32)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install 32-bit toolchain
         run: |
           sudo apt-get update -qq
