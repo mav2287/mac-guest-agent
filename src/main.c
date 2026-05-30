@@ -273,9 +273,18 @@ static struct option long_options[] = {
     /* Long-form only; no short alias. Gates side-effects in
      * service_install / _uninstall / _update (v2.5.1+). */
     {"dry-run",    no_argument,       NULL, 'n'},
-    /* v2.5.3+: VirtIO override modifiers for --install + proper --upgrade. */
+    /* v2.5.3+: VirtIO override modifiers for --install + proper --upgrade.
+     * The canonical form is lowercase (`--virtio`, matching Linux qemu-ga
+     * convention and QEMU docs), but "VirtIO" / "virtIO" capitalization is
+     * common in technical writing (the "I/O" in the middle gets emphasized),
+     * so accept both case variants as aliases rather than greet the typo
+     * with an unrecognized-option error. */
     {"virtio",         no_argument,       NULL, OPT_VIRTIO},
+    {"virtIO",         no_argument,       NULL, OPT_VIRTIO},
+    {"VirtIO",         no_argument,       NULL, OPT_VIRTIO},
     {"virtio-force",   no_argument,       NULL, OPT_VIRTIO_FORCE},
+    {"virtIO-force",   no_argument,       NULL, OPT_VIRTIO_FORCE},
+    {"VirtIO-force",   no_argument,       NULL, OPT_VIRTIO_FORCE},
     {"upgrade",        no_argument,       NULL, OPT_UPGRADE},
     /* Legacy long-form aliases */
     {"daemon",     no_argument,       NULL, 'd'},
@@ -326,7 +335,16 @@ int main(int argc, char *argv[])
         case OPT_VIRTIO:       cfg.install_virtio = 1; break;
         case OPT_VIRTIO_FORCE: cfg.install_virtio_force = 1; break;
         case OPT_UPGRADE:      cfg.do_upgrade = 1; break;
-        default:  print_usage(argv[0]); return 1;
+        case '?':
+        default:
+            /* Unknown option. getopt has already printed its own error
+             * ("invalid option -- 'i'" or "unrecognized option `--xyz'").
+             * Don't dump full usage — it scrolls the actionable error off
+             * the top of the screen. Print a short hint instead. */
+            fprintf(stderr, "Try '%s --help' for the full option list.\n", argv[0]);
+            fprintf(stderr, "Common typo: --virtio takes TWO dashes. Single-dash "
+                            "'-virtio' is parsed as short-option chaining (-v -i -r -t -i -o).\n");
+            return 1;
         }
     }
 
