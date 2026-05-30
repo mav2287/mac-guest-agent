@@ -1,6 +1,6 @@
 # VirtIO Override — When ISA Isn't an Option
 
-> **This is an unsupported configuration.** The supported transport on macOS is ISA serial. Read this only if your orchestrator hardcodes VirtIO at the QGA-channel level and ISA truly isn't available on your host. If you have any way to expose an ISA UART to the guest, do that instead — see [`docs/PVE.md`](PVE.md), [`docs/LIBVIRT.md`](LIBVIRT.md), or [`docs/UTM.md`](UTM.md).
+> **This is an unsupported configuration.** The supported transport on macOS is ISA serial. Read this only if your orchestrator hardcodes VirtIO at the QGA-channel level and ISA truly isn't available on your host. If you have any way to expose an ISA UART to the guest, do that instead — see [`docs/PVE.md`](PVE.md), [`docs/LIBVIRT.md`](LIBVIRT.md) (ISA via the `<serial>` element + direct socket access; libvirt's `virsh qemu-agent-command` doesn't work for ISA setups because libvirt's QGA API is VirtIO-only), or [`docs/UTM.md`](UTM.md).
 
 ## Who this page is for
 
