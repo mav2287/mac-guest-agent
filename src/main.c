@@ -49,7 +49,7 @@ typedef struct {
     int         safetest_json;
     int         dump_conf;
     const char *update_path;
-    const char *upgrade_path;  /* v2.5.3+: --upgrade PATH (peer of --update; proper plist-regen) */
+    int         do_upgrade;    /* v2.5.3+: --upgrade (uses self via _NSGetExecutablePath) */
     int         install_virtio;       /* v2.5.3+: --virtio modifier for --install */
     int         install_virtio_force; /* v2.5.3+: --virtio-force modifier for --install */
     int         dry_run;
@@ -220,12 +220,15 @@ static void print_usage(const char *prog)
     printf("                         present, also removes the override config and reloads\n");
     printf("                         AppleQEMUGuestAgent (mode=full) or leaves it alone\n");
     printf("                         (mode=force). SIP is not re-enabled (operator action).\n");
-    printf("      --upgrade PATH     In-place upgrade from a local binary. Detects current\n");
-    printf("                         install mode, backs up current binary, copies new,\n");
-    printf("                         regenerates plist, restarts, verifies. On failure\n");
-    printf("                         restores the backup.\n");
-    printf("      --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade. Will be\n");
-    printf("                         removed in a future release.\n");
+    printf("      --upgrade          In-place upgrade using the running binary as source.\n");
+    printf("                         Run the NEW binary with --upgrade; it self-installs over\n");
+    printf("                         the existing one. Detects current install mode, backs up\n");
+    printf("                         current binary, regenerates plist, restarts, verifies.\n");
+    printf("                         On failure: restores backup. No PATH argument — the\n");
+    printf("                         binary knows where it lives.\n");
+    printf("      --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade. Kept for\n");
+    printf("                         operators who still need to specify a source path\n");
+    printf("                         explicitly. Will be removed in a future release.\n");
     printf("      --self-test        Check environment and report readiness\n");
     printf("      --self-test-json   Same as --self-test but output JSON\n");
     printf("      --safe-test        Validate read-only commands work correctly\n");
@@ -273,7 +276,7 @@ static struct option long_options[] = {
     /* v2.5.3+: VirtIO override modifiers for --install + proper --upgrade. */
     {"virtio",         no_argument,       NULL, OPT_VIRTIO},
     {"virtio-force",   no_argument,       NULL, OPT_VIRTIO_FORCE},
-    {"upgrade",        required_argument, NULL, OPT_UPGRADE},
+    {"upgrade",        no_argument,       NULL, OPT_UPGRADE},
     /* Legacy long-form aliases */
     {"daemon",     no_argument,       NULL, 'd'},
     {"device",     required_argument, NULL, 'p'},
@@ -322,7 +325,7 @@ int main(int argc, char *argv[])
         case 'n': cfg.dry_run = 1; break;  /* --dry-run, gates service.c side-effects */
         case OPT_VIRTIO:       cfg.install_virtio = 1; break;
         case OPT_VIRTIO_FORCE: cfg.install_virtio_force = 1; break;
-        case OPT_UPGRADE:      cfg.upgrade_path = optarg; break;
+        case OPT_UPGRADE:      cfg.do_upgrade = 1; break;
         default:  print_usage(argv[0]); return 1;
         }
     }
@@ -340,7 +343,7 @@ int main(int argc, char *argv[])
     }
     /* --upgrade is its own operation; can't combine with --install or
      * --uninstall or --update. */
-    if (cfg.upgrade_path && (cfg.do_install || cfg.do_uninstall || cfg.update_path)) {
+    if (cfg.do_upgrade && (cfg.do_install || cfg.do_uninstall || cfg.update_path)) {
         fprintf(stderr, "Error: --upgrade cannot combine with --install / --uninstall / --update\n");
         return 1;
     }
@@ -348,7 +351,7 @@ int main(int argc, char *argv[])
     if (cfg.dump_conf) { dump_config(&cfg); return 0; }
     if (cfg.do_selftest) return selftest_run(cfg.selftest_json);
     if (cfg.do_safetest) return safetest_run(cfg.safetest_json);
-    if (cfg.upgrade_path) return service_upgrade(cfg.upgrade_path, cfg.dry_run);
+    if (cfg.do_upgrade) return service_upgrade(NULL, cfg.dry_run);
     if (cfg.update_path) return service_update(cfg.update_path, cfg.dry_run);
     if (cfg.do_install) {
         install_mode_t mode = INSTALL_MODE_STANDARD;

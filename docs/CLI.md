@@ -33,10 +33,12 @@ Compatible with the Linux `qemu-ga`:
                          removes the override config and reloads
                          AppleQEMUGuestAgent if installed via --virtio
                          (mode=full). SIP not re-enabled (operator action).
-      --upgrade PATH     In-place upgrade. Detects current install mode,
-                         backs up current binary, copies new, regenerates
-                         plist, restarts, verifies. On failure: restores
-                         backup. v2.5.3+.
+      --upgrade          In-place upgrade. Run the NEW binary with
+                         --upgrade — it self-installs over the existing
+                         agent. Detects current install mode, backs up
+                         current binary, regenerates plist, restarts,
+                         verifies. On failure: restores backup. No PATH
+                         argument needed. v2.5.3+.
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
       --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade

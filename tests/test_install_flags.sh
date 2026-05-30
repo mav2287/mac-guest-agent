@@ -87,14 +87,14 @@ assert_contains "rejection points at --install --virtio"     "modifier for --ins
 run_cmd "$BINARY" --virtio-force
 assert_rc       "--virtio-force alone refused"              1 "$RC"
 
-run_cmd "$BINARY" --upgrade /tmp/foo --install
+run_cmd "$BINARY" --upgrade --install
 assert_rc       "--upgrade + --install rejected"            1 "$RC"
 assert_contains "rejection names upgrade-vs-install"        "--upgrade cannot combine with --install" "$OUT"
 
-run_cmd "$BINARY" --upgrade /tmp/foo --uninstall
+run_cmd "$BINARY" --upgrade --uninstall
 assert_rc       "--upgrade + --uninstall rejected"          1 "$RC"
 
-run_cmd "$BINARY" --upgrade /tmp/foo --update /tmp/bar
+run_cmd "$BINARY" --upgrade --update /tmp/bar
 assert_rc       "--upgrade + --update rejected"             1 "$RC"
 
 # =========================================================================
@@ -130,13 +130,15 @@ assert_contains "rejection mentions --virtio-force DIY"     "DIY path" "$OUT"
 # =========================================================================
 echo "=== Binary: --upgrade error paths ==="
 
-run_cmd env MAC_GUEST_AGENT_TEST_STATE=not-installed "$BINARY" --upgrade /tmp/foo --dry-run
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=not-installed "$BINARY" --upgrade --dry-run
 assert_rc       "--upgrade with no install: refuse"         1 "$RC"
 assert_contains "rejection mentions no install detected"    "no existing install detected" "$OUT"
 
-run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --upgrade /tmp/nonexistent --dry-run
-assert_rc       "--upgrade with bad path: refuse"           1 "$RC"
-assert_contains "rejection names missing file"              "file not found" "$OUT"
+# --upgrade with standard install: self-sources and gets to the upgrade plan.
+run_cmd env MAC_GUEST_AGENT_TEST_STATE=standard "$BINARY" --upgrade --dry-run
+assert_rc       "--upgrade with standard install: proceeds" 0 "$RC"
+assert_contains "logs self-source path"                     "using self as source" "$OUT"
+assert_contains "dry-run shows backup step"                 "backup /usr/local/bin/mac-guest-agent" "$OUT"
 
 # =========================================================================
 echo "=== Binary: --update prints deprecation, delegates to --upgrade ==="
@@ -152,7 +154,7 @@ run_cmd "$BINARY" --help
 assert_rc       "--help exits 0"                            0 "$RC"
 assert_contains "--help mentions --virtio"                  "--virtio           Modifier for --install" "$OUT"
 assert_contains "--help mentions --virtio-force"            "--virtio-force     Modifier for --install" "$OUT"
-assert_contains "--help mentions --upgrade"                 "--upgrade PATH     In-place upgrade" "$OUT"
+assert_contains "--help mentions --upgrade"                 "--upgrade          In-place upgrade using the running binary as source" "$OUT"
 assert_contains "--help marks --update deprecated"          "--update PATH      DEPRECATED" "$OUT"
 
 # =========================================================================

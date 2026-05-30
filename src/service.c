@@ -9,9 +9,38 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <mach-o/dyld.h>   /* _NSGetExecutablePath for self-source flows */
 
 /* Embedded plist data - generated at build time by xxd */
 #include "plist_data.h"
+
+/* Resolve the canonical absolute path of the currently-running binary.
+ * Writes the path into out_buf (which must be at least PATH_MAX bytes).
+ * Returns 0 on success, -1 on failure.
+ *
+ * Used by service_install (to self-copy from /tmp to BINARY_PATH when run
+ * outside the installed location) and service_upgrade (to use self as the
+ * upgrade source when no explicit path is given). v2.5.3+. */
+static int get_self_executable_path(char *out_buf, size_t buf_size)
+{
+    char raw[1024];
+    uint32_t size = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &size) != 0)
+        return -1;
+    /* Resolve symlinks and ../-style components. realpath() is safe to call
+     * with a NULL second arg on macOS 10.6+, but allocating a fixed buffer
+     * makes the lifetime clearer. */
+    char resolved[1024];
+    if (realpath(raw, resolved) == NULL) {
+        /* realpath failed — fall back to the raw path. Some edge cases
+         * (binary deleted while running, weird mount layouts) can hit this
+         * but we'd rather use the raw path than fail entirely. */
+        snprintf(out_buf, buf_size, "%s", raw);
+        return 0;
+    }
+    snprintf(out_buf, buf_size, "%s", resolved);
+    return 0;
+}
 
 /* Helpers that gate each side-effect on the dry_run flag. Used by the
  * service_* handlers below. When dry_run is set, the helper prints
@@ -641,17 +670,50 @@ int service_install(int dry_run, install_mode_t mode)
             "Unsupported.\n");
     }
 
-    /* Binary-existence check. The plist's ProgramArguments reference
-     * BINARY_PATH; the binary must be in place before --install registers
-     * the LaunchDaemon. Test hook: skip in dry-run when the test override
-     * is set, so the test suite can exercise the install plan without a
-     * real /usr/local/bin/ entry. */
+    /* Binary placement at BINARY_PATH. The plist's ProgramArguments
+     * reference BINARY_PATH, so the binary must be there before --install
+     * registers the LaunchDaemon.
+     *
+     * v2.5.3+: self-source. If the operator runs this binary from a
+     * non-BINARY_PATH location (e.g., `sudo /tmp/mac-guest-agent --install`),
+     * copy ourselves to BINARY_PATH first. Operators no longer have to do
+     * `mv binary && run binary --install` as two steps — `run binary
+     * --install` from anywhere just works.
+     *
+     * Test hook: skip the copy in dry-run when the test override is set
+     * so the test suite can exercise the install plan without a real
+     * /usr/local/bin/ entry. */
     if (!dry_run || !test_override_state()) {
-        struct stat st;
-        if (stat(BINARY_PATH, &st) != 0) {
-            fprintf(stderr, "Error: binary not found at %s\n", BINARY_PATH);
-            fprintf(stderr, "Copy the binary there first, then run --install\n");
+        char self_path[1024];
+        if (get_self_executable_path(self_path, sizeof(self_path)) != 0) {
+            fprintf(stderr, "Error: could not resolve own executable path\n");
             return 1;
+        }
+        if (strcmp(self_path, BINARY_PATH) != 0) {
+            if (dry_run) {
+                printf("DRY RUN: would self-copy %s -> %s\n", self_path, BINARY_PATH);
+            } else {
+                if (mkdir_p("/usr/local/bin", 0755) != 0 && errno != EEXIST) {
+                    fprintf(stderr, "Error: failed to create /usr/local/bin: %s\n", strerror(errno));
+                    return 1;
+                }
+                char *const cp_argv[] = { "cp", self_path, BINARY_PATH, NULL };
+                char *const chmod_argv[] = { "chmod", "755", BINARY_PATH, NULL };
+                if (run_command_v("cp", cp_argv, NULL, NULL) != 0 ||
+                    run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
+                    fprintf(stderr, "Error: failed to copy %s -> %s\n", self_path, BINARY_PATH);
+                    return 1;
+                }
+                printf("Self-installed binary: %s -> %s\n", self_path, BINARY_PATH);
+            }
+        } else {
+            /* Already at BINARY_PATH; just confirm it still exists. */
+            struct stat st;
+            if (stat(BINARY_PATH, &st) != 0) {
+                fprintf(stderr, "Error: binary not found at %s (and self path %s "
+                                "is supposedly the same)\n", BINARY_PATH, self_path);
+                return 1;
+            }
         }
     }
 
@@ -869,10 +931,23 @@ int service_upgrade(const char *new_binary_path, int dry_run)
         fprintf(stderr, "Error: root privileges required for upgrade\n");
         return 1;
     }
+
+    /* v2.5.3+: self-source. When new_binary_path is NULL (the operator
+     * ran `mac-guest-agent --upgrade` without a path argument), use the
+     * currently-running binary as the source. Operators with the new
+     * binary at /tmp/ just run `sudo /tmp/mac-guest-agent --upgrade`
+     * instead of typing the path twice. */
+    char self_path_buf[1024];
     if (!new_binary_path || !*new_binary_path) {
-        fprintf(stderr, "Error: provide path to new binary\n");
-        fprintf(stderr, "Usage: sudo %s --upgrade /path/to/new/binary\n", BINARY_PATH);
-        return 1;
+        if (get_self_executable_path(self_path_buf, sizeof(self_path_buf)) != 0) {
+            fprintf(stderr, "Error: --upgrade with no path: could not resolve "
+                            "own executable path. Pass a path explicitly: "
+                            "sudo %s --upgrade /path/to/new/binary (via --update PATH "
+                            "during the deprecation window).\n", BINARY_PATH);
+            return 1;
+        }
+        new_binary_path = self_path_buf;
+        fprintf(stderr, "[INFO] --upgrade using self as source: %s\n", new_binary_path);
     }
 
     install_state_t state = detect_install_state();
@@ -880,6 +955,19 @@ int service_upgrade(const char *new_binary_path, int dry_run)
         fprintf(stderr,
             "Error: --upgrade requested but no existing install detected. "
             "Run sudo %s --install for a fresh install.\n", BINARY_PATH);
+        return 1;
+    }
+
+    /* Guard against the degenerate case where self IS the installed binary
+     * (operator ran `sudo /usr/local/bin/mac-guest-agent --upgrade`). We
+     * can't cp a file to itself, and there's no sensible meaning to
+     * "upgrade the installed binary using itself as source" — refuse
+     * with a clear pointer. */
+    if (strcmp(new_binary_path, BINARY_PATH) == 0) {
+        fprintf(stderr,
+            "Error: --upgrade source and destination are the same (%s). "
+            "Run the NEW binary, not the already-installed one:\n"
+            "  sudo /path/to/new/mac-guest-agent --upgrade\n", BINARY_PATH);
         return 1;
     }
 
@@ -929,18 +1017,19 @@ int service_upgrade(const char *new_binary_path, int dry_run)
         return 1;
     }
 
-    /* Regenerate the LaunchDaemon plist by re-running --install on the new
-     * binary. This is the crucial difference from the legacy --update path:
-     * plist changes between releases actually land. install_mode_t doesn't
-     * matter here because the override config + marker are already in place
-     * from the original install; --install standard regenerates the plist
-     * without touching the override. */
-    printf("Refreshing LaunchDaemon plist via --install...\n");
-    if (service_install(0, INSTALL_MODE_STANDARD) != 0) {
-        fprintf(stderr, "Error: --install on new binary failed; rolling back to backup\n");
+    /* Regenerate the LaunchDaemon plist by re-running the standard install
+     * body. This is the crucial difference from the legacy --update path:
+     * plist changes between releases actually land. We call
+     * do_standard_install_body directly (not service_install) to skip the
+     * self-copy logic (we already cp'd above) and the VIRTIO refusal/prereq
+     * paths (the override config + marker are already in place from the
+     * original install and stay untouched). */
+    printf("Refreshing LaunchDaemon plist...\n");
+    if (do_standard_install_body(0) != 0) {
+        fprintf(stderr, "Error: plist regeneration failed; rolling back to backup\n");
         rename(backup, BINARY_PATH);
         run_command_v("chmod", (char *const[]){ "chmod", "755", BINARY_PATH, NULL }, NULL, NULL);
-        service_install(0, INSTALL_MODE_STANDARD);
+        do_standard_install_body(0);
         return 1;
     }
 
@@ -955,7 +1044,7 @@ int service_upgrade(const char *new_binary_path, int dry_run)
                             "device. Rolling back to backup binary.\n");
             rename(backup, BINARY_PATH);
             run_command_v("chmod", (char *const[]){ "chmod", "755", BINARY_PATH, NULL }, NULL, NULL);
-            service_install(0, INSTALL_MODE_STANDARD);
+            do_standard_install_body(0);
             return 1;
         }
     } else {
@@ -965,7 +1054,7 @@ int service_upgrade(const char *new_binary_path, int dry_run)
                             "1 second. Rolling back to backup binary.\n");
             rename(backup, BINARY_PATH);
             run_command_v("chmod", (char *const[]){ "chmod", "755", BINARY_PATH, NULL }, NULL, NULL);
-            service_install(0, INSTALL_MODE_STANDARD);
+            do_standard_install_body(0);
             return 1;
         }
     }

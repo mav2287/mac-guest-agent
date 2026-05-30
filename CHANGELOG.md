@@ -2,6 +2,16 @@
 
 ## v2.5.3 — 2026-05-29
 
+### UX polish — self-source for --install and --upgrade
+The binary now knows where it lives. Two ergonomics wins:
+
+- **`mac-guest-agent --install` from anywhere just works.** Previously: operator had to `mv binary /usr/local/bin/ && /usr/local/bin/mac-guest-agent --install` (two steps). Now: `sudo /tmp/mac-guest-agent --install` self-copies from `/tmp/` to `BINARY_PATH` and proceeds. The README's manual install still works as documented (the self-copy is a no-op when binary is already at BINARY_PATH); operators following the bootstrap wrapper or copying via scp benefit.
+- **`--upgrade` no longer takes a PATH argument.** Previously: `sudo /tmp/mac-guest-agent --upgrade /tmp/mac-guest-agent` (specify source path explicitly — operator typed the same path twice, which felt dumb). Now: `sudo /tmp/mac-guest-agent --upgrade` — the running binary uses itself as the source. The operator's mental model becomes "run the new binary, tell it to upgrade." `--update PATH` (deprecated) kept for the rare case where an operator genuinely needs to specify a separate source path.
+
+Resolved via `_NSGetExecutablePath` + `realpath()` in `src/service.c::get_self_executable_path()`. Self-copy guards against the degenerate case where source and dest are the same file (refuses with a "run the NEW binary, not the already-installed one" message).
+
+`scripts/install.sh` simplified to match: no longer inserts a path argument after `--upgrade`, no longer pre-copies the binary before `--install` (the binary self-copies). Down another handful of LoC.
+
 ### Refactor — install state machine moved into the binary
 v2.5.3's first attempt put `--virtio` / `--upgrade` / detection in `scripts/install.sh`. Review during the v2.5.3 cycle exposed the wrong-home argument: the README has documented the binary-direct install path (not install.sh) as primary since v2.4.x, so install.sh's new orchestration features were hidden behind a tool operators following the README wouldn't discover. The kubevirt audience also had to transfer two files instead of one. The refactor moves all orchestration into the binary; install.sh becomes a thin bootstrap wrapper.
 

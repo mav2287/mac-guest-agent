@@ -183,25 +183,10 @@ else
     fi
 fi
 
-# If --upgrade is in the forward args, the binary's --upgrade expects a PATH
-# argument. We need to substitute the resolved $BINARY into the forward args
-# right after --upgrade.
-for i in "${!FORWARD_ARGS[@]}"; do
-    if [ "${FORWARD_ARGS[$i]}" = "--upgrade" ]; then
-        # Insert $BINARY immediately after --upgrade.
-        FORWARD_ARGS=(
-            "${FORWARD_ARGS[@]:0:$((i+1))}"
-            "$BINARY"
-            "${FORWARD_ARGS[@]:$((i+1))}"
-        )
-        break
-    fi
-done
-
-# Determine if the user wants an upgrade vs a fresh install. If --upgrade is
-# in the forward args, we don't copy the binary to $INSTALL_PATH (the binary's
-# --upgrade handles that itself, including backup/restore). For fresh install
-# (no --upgrade), we copy to $INSTALL_PATH then exec --install.
+# Determine if the user wants an upgrade vs a fresh install. Both paths
+# now exec the BINARY at its downloaded/local location — the binary
+# self-installs to /usr/local/bin/ during --install, and --upgrade uses
+# the running binary as the source.
 IS_UPGRADE=0
 for arg in "${FORWARD_ARGS[@]}"; do
     if [ "$arg" = "--upgrade" ]; then
@@ -211,38 +196,25 @@ for arg in "${FORWARD_ARGS[@]}"; do
 done
 
 if [ "$IS_UPGRADE" -eq 1 ]; then
-    # Upgrade path: the binary at $BINARY drives the upgrade; we never copy
-    # over $INSTALL_PATH ourselves (the binary's --upgrade backs up the
-    # current $INSTALL_PATH and copies $BINARY into place).
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "DRY RUN: would exec: $INSTALL_PATH ${FORWARD_ARGS[*]}"
-        # In dry-run we can call the new binary's --upgrade --dry-run
-        # directly to surface its plan.
+        info "DRY RUN: would exec: $BINARY ${FORWARD_ARGS[*]}"
         if [ -x "$BINARY" ]; then
             exec "$BINARY" "${FORWARD_ARGS[@]}"
         fi
         exit 0
     fi
-    # Use the current $INSTALL_PATH to do the upgrade so its existing
-    # state is what's modified (the binary's --upgrade reads from
-    # detect_install_state which reads marker/binary/plist). Fall back to
-    # the new binary if the existing one is missing.
-    if [ -x "$INSTALL_PATH" ]; then
-        exec "$INSTALL_PATH" "${FORWARD_ARGS[@]}"
-    else
-        exec "$BINARY" "${FORWARD_ARGS[@]}"
+    if [ ! -x "$BINARY" ]; then
+        err "Binary not executable: $BINARY"
+        exit 1
     fi
+    exec "$BINARY" "${FORWARD_ARGS[@]}"
 fi
 
-# Fresh install path: copy binary to $INSTALL_PATH, then exec --install with
-# the user's modifiers (--virtio / --virtio-force / --dry-run).
+# Fresh install path: exec the binary with --install (and any --virtio
+# / --virtio-force / --dry-run modifiers). The binary self-copies to
+# /usr/local/bin/ as part of --install.
 if [ "$DRY_RUN" -eq 1 ]; then
-    info "DRY RUN: would mkdir -p /usr/local/bin"
-    info "DRY RUN: would cp \"$BINARY\" \"$INSTALL_PATH\""
-    info "DRY RUN: would chmod +x \"$INSTALL_PATH\""
-    info "DRY RUN: would exec: $INSTALL_PATH --install ${FORWARD_ARGS[*]}"
-    # If we have a real binary on disk (--local mode), exec its --dry-run
-    # so the binary's plan output is also shown.
+    info "DRY RUN: would exec: $BINARY --install ${FORWARD_ARGS[*]}"
     if [ -x "$BINARY" ]; then
         exec "$BINARY" --install "${FORWARD_ARGS[@]}"
     fi
@@ -250,7 +222,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-mkdir -p /usr/local/bin
-cp "$BINARY" "$INSTALL_PATH"
-chmod +x "$INSTALL_PATH"
-exec "$INSTALL_PATH" --install "${FORWARD_ARGS[@]}"
+if [ ! -x "$BINARY" ]; then
+    err "Binary not executable: $BINARY"
+    exit 1
+fi
+exec "$BINARY" --install "${FORWARD_ARGS[@]}"

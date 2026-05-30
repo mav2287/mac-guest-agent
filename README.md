@@ -34,7 +34,13 @@ Or use the bootstrap wrapper (does the same thing, plus VirtIO override and upgr
 curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
 ```
 
-**Updates:** `sudo /usr/local/bin/mac-guest-agent --upgrade /tmp/new-binary` (in-place, regenerates plist, mode-aware verify, rolls back on failure).
+**Updates:** transfer the new binary, then run it with `--upgrade`:
+```bash
+# Transfer the new binary (e.g., scp from the build machine)
+# Then on the VM:
+sudo /tmp/mac-guest-agent --upgrade
+```
+The running binary self-sources — no need to specify a path. Backs up the current binary, regenerates the plist, restarts, and verifies. Rolls back to the backup on verify failure.
 
 **VirtIO override (unsupported):** if your orchestrator hardcodes VirtIO (kubevirt-style) and ISA isn't available, see [`docs/NO_ISA_OVERRIDE.md`](docs/NO_ISA_OVERRIDE.md) — `sudo /usr/local/bin/mac-guest-agent --install --virtio` runs the gated override path (macOS 11+ only, requires SIP disabled).
 
