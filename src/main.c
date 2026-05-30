@@ -203,7 +203,8 @@ static void print_usage(const char *prog)
     printf("\nmacOS-specific:\n");
     printf("      --install          Install as LaunchDaemon service\n");
     printf("      --uninstall        Uninstall LaunchDaemon service\n");
-    printf("      --update PATH      Update binary from local file\n");
+    printf("      --update PATH      Update binary from local file (DEPRECATED in v2.5.3+;\n");
+    printf("                         prefer: scripts/install.sh --local PATH --upgrade)\n");
     printf("      --self-test        Check environment and report readiness\n");
     printf("      --self-test-json   Same as --self-test but output JSON\n");
     printf("      --safe-test        Validate read-only commands work correctly\n");
