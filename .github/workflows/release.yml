@@ -50,7 +50,13 @@ jobs:
         run: ./tests/run_tests.sh ./build/mac-guest-agent-universal
 
       - name: Install-flags tests (scripts/install.sh)
-        run: make test-install-flags
+        # The release build produces `build/mac-guest-agent-universal` (via
+        # `make build-all`), not `build/mac-guest-agent` (which `make build`
+        # produces and `tests/test_install_flags.sh` defaults to). Point the
+        # test at the universal artifact via the documented BINARY override.
+        env:
+          BINARY: ${{ github.workspace }}/build/mac-guest-agent-universal
+        run: bash tests/test_install_flags.sh
 
       - name: Verify-transports tests (scripts/verify.sh)
         run: make test-verify-transports
