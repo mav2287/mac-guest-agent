@@ -12,6 +12,7 @@ ___stdoutp
 ___tolower
 __DefaultRuneLocale
 __exit
+__NSGetExecutablePath
 _access
 _alarm
 _atoi
@@ -49,6 +50,7 @@ _fread
 _free
 _freeifaddrs
 _fseek
+_fseeko
 _fstat$INODE64
 _fsync
 _ftell
@@ -102,7 +104,9 @@ _puts
 _read
 _readdir$INODE64
 _realloc
+_realpath$DARWIN_EXTSN
 _rename
+_rmdir
 _select$1050
 _setenv
 _setsid
@@ -126,6 +130,7 @@ _strncpy
 _strrchr
 _strstr
 _strtod
+_strtok
 _strtok_r
 _strtol
 _strtoll
