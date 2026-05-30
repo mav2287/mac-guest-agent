@@ -58,7 +58,7 @@ The cost is requiring users to present an ISA UART to the guest. `Apple16X50Seri
 | 13.0 Ventura | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
 | 14.0 Sonoma | 3 | arm64 + x86_64 | Untested | Untested | Untested | Untested | Untested | Installer present. SharedSupport payload format — cannot deep-verify without VM. |
 | **15.7 Sequoia** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **Yes (PVE)** | **ISA serial** | Untested | **External user confirmed on 15.7.5: self-test pass, PVE integration, VirtIO disk + ISA serial (pgcudahy, PR #1)** |
-| **26.3 Tahoe** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **No (test mode only)** | **Kext v3.2** | **Yes (APFS, dry-run)** | **48 unit + 31 proactive + 62 integration tests** |
+| **26.3 Tahoe** | **1** | **arm64 + x86_64** | **Yes** | **Yes** | **No (test mode only)** | **Kext v3.2** | **Yes (APFS, dry-run)** | **Full test suite passes (unit + proactive + fuzz + integration + verify-transports + install-flags)** |
 
 ## Sub-Evidence Matrix
 
@@ -263,4 +263,4 @@ External contributors: paste the `verify.sh` text output and the JSON appendix i
 | Fuzz testing (ASAN, 210k rounds) | 0 crashes |
 | Linux qemu-ga command parity | 45 registered. 1 Linux-side command not implemented: guest-get-devices (Windows-only). guest-network-get-route now implemented. |
 | Code coverage | 55.88% line, 80.95% function (remainder requires root, real hardware, or destructive operations) |
-| Test suite | 48 unit + 31 proactive + 210k fuzz + 63 integration |
+| Test suite | unit + proactive + fuzz (210k rounds) + integration + verify-transports + install-flags (current counts in `make test` output) |

@@ -225,7 +225,9 @@ assert_contains     "rejection mentions virtio/virtio-force"         "--virtio /
 run_install_with_operator_config --virtio --dry-run
 assert_rc           "--virtio with operator config present: refuse"  1 "$RC"
 assert_contains     "rejection names the operator-config path"       "/etc/qemu/qemu-ga.conf" "$OUT"
-assert_contains     "rejection suggests backup or manual add"        "back it up first" "$OUT"
+assert_contains     "rejection suggests backup and re-run"            "back up the existing config" "$OUT"
+assert_contains     "rejection mentions --virtio-force as DIY"        "DIY path" "$OUT"
+assert_not_contains "rejection does NOT suggest hand-edit + standard" "hand-edit" "$OUT"
 
 # --dry-run --virtio: prints the gated plan with apple-unload + verify.
 run_install --dry-run --virtio

@@ -21,7 +21,11 @@ Compatible with the Linux `qemu-ga`:
       --uninstall        Uninstall LaunchDaemon
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
-      --update PATH      Update binary from local file
+      --update PATH      Update binary from local file (DEPRECATED in v2.5.3+;
+                         use `install.sh --local PATH --upgrade` instead — it
+                         regenerates the LaunchDaemon plist and has proper
+                         rollback semantics. --update still works for backward
+                         compatibility but prints a deprecation notice.)
       --dry-run          Combined with --install/--uninstall/--update: print
                          every action without touching the filesystem or
                          calling launchctl. Root check is also skipped

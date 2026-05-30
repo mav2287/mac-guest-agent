@@ -76,113 +76,105 @@ curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/script
 
 How the libvirt transport works:
 
-- **QGA over `virsh qemu-agent-command`.** All host-driven commands round-trip through `virsh qemu-agent-command <domain> '{...}'`. The `{return: ...}` envelope is unwrapped so the same check pipeline used for PVE / UTM / qga-socket transports works without per-transport branching. Error envelopes pass through unchanged so the freeze-behavioural check still sees `error.desc`.
-- **guest-exec polling.** `verify.sh` issues `guest-exec` via virsh, then polls `guest-exec-status` at 250ms granularity until `exited == true`, base64-decodes `out-data`/`err-data`, and returns the same envelope shape PVE's `qm guest exec --output-format json` produces. The script's in-VM diagnostics section calls into this primitive without caring which transport is bound.
+- **Direct socket I/O, not `virsh qemu-agent-command`.** libvirt's QGA infrastructure only discovers a guest agent from a `<channel type='virtio' target name='org.qemu.guest_agent.0'>` element. On macOS Big Sur+ that VirtIO channel is claimed by Apple's built-in `AppleQEMUGuestAgent` — we use ISA serial precisely to step outside libvirt's QGA convention and avoid the conflict. Which means `virsh qemu-agent-command` cannot reach our agent for our documented configuration. `verify.sh --transport libvirt` therefore **uses `virsh` for discovery only** — it parses `virsh dumpxml` to find the unix socket path bound by the `<serial type='unix'>` element, then talks to that socket directly using the same machinery the UTM and qga-socket transports use.
+- **Socket discovery.** Preflight runs `virsh dumpxml <domain>`, walks `<serial type='unix'>` blocks, requires one with a `<target type='isa-serial'>` child (disambiguates our agent from any other unix-typed serial like a console), and extracts the `path` from its `<source>` element. Attribute order is not significant — both `type='isa-serial' port='0'` and `port='0' type='isa-serial'` are accepted (per XML 1.0 / Relax NG, libvirt doesn't constrain attribute order).
+- **guest-exec polling.** Once the socket is bound, `verify.sh` issues `guest-exec` directly over the socket, polls `guest-exec-status` at 250ms granularity until `exited == true`, base64-decodes `out-data`/`err-data`, and returns the same envelope shape PVE's `qm guest exec --output-format json` produces. The script's in-VM diagnostics section calls into this primitive without caring which transport is bound.
 - **Auto-detection.** With no `--transport` flag, `verify.sh` tries `virsh dominfo <identifier>` and binds the libvirt transport when it exits 0.
-- **Privilege.** `virsh qemu-agent-command` needs root or `libvirt`-group membership on the host — the script's preflight runs `virsh list --all` and fails clean with the three standard remediations (run as root, join the `libvirt` group, or set `LIBVIRT_DEFAULT_URI`) if the libvirtd socket isn't reachable.
-- **Channel prereq.** The agent's [Domain XML Configuration](#domain-xml-configuration) section above adds the documented `<serial type='unix'><target type='isa-serial' port='0'/></serial>` element (with `<source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>`). Without it the in-guest agent has nothing to talk to and `verify.sh`'s configuration check flags it as FAIL before any real test runs. Note: this is ISA serial — VirtIO is claimed by Apple's built-in `AppleQEMUGuestAgent` on Big Sur+, so we use ISA instead. See `docs/COMPATIBILITY.md` for the rationale.
+- **Privilege.** `virsh dominfo` / `virsh dumpxml` need root or `libvirt`-group membership on the host — the script's preflight runs `virsh list --all` and fails clean with the three standard remediations (run as root, join the `libvirt` group, or set `LIBVIRT_DEFAULT_URI`) if the libvirtd socket isn't reachable. The unix socket itself is created with `mode='bind'` by libvirt when the domain starts and inherits libvirt's filesystem permissions.
+- **Configuration prereq.** The agent's [Domain XML Configuration](#domain-xml-configuration) section above adds the documented `<serial type='unix'><source mode='bind' path='...'/><target type='isa-serial' port='0'/></serial>` element. Without it the in-guest agent has nothing to talk to AND preflight cannot discover a socket path — verify.sh fails clean at preflight rather than running an inconsistent check pipeline. Note: this is ISA serial — VirtIO is claimed by Apple's built-in `AppleQEMUGuestAgent` on Big Sur+, so we use ISA instead. See `docs/COMPATIBILITY.md` for the rationale.
 
 `verify.sh --help` lists the rest of the flags (`--no-freeze`, `--no-in-vm`, `--no-env-capture`, `--no-appendix`, `--no-redact`, `--freeze-cycles N`, `--agent-path`, `--log-path`, `--exec-timeout`). PII (IPv4, MAC, supplied identifier) is redacted by default.
 
-## Guest Agent Commands via virsh
+## Guest Agent Commands — Direct Socket Access
 
-### Basic Commands
+**`virsh qemu-agent-command` does NOT work with this configuration.** libvirt's QGA API only sees `<channel type='virtio' name='org.qemu.guest_agent.0'>` elements, not `<serial type='isa-serial'>` ones. Calling `virsh qemu-agent-command` against our ISA-configured domain returns `"QEMU guest agent is not configured"`. This is structural — there is no libvirt-side workaround for it. Either:
+
+- **Use direct socket access** (recommended; documented below) — talk to the unix socket on the host filesystem that the `<serial type='unix'>` element binds.
+- **Use the `--virtio` install path** if you specifically need libvirt's native QGA API. That path requires SIP disabled, unloads Apple's `AppleQEMUGuestAgent`, and is not a supported configuration; see [`docs/NO_ISA_OVERRIDE.md`](NO_ISA_OVERRIDE.md). After running `--virtio`, `virsh qemu-agent-command` works because the domain XML carries the VirtIO channel libvirt's QGA layer expects.
+
+The rest of this section assumes the supported (ISA serial) path.
+
+### Find the socket path
+
+It's the `<source path='...'/>` from the `<serial type='unix'>` element in your domain XML — exactly what you wrote when you configured the agent. To rediscover it from a running domain:
 
 ```bash
+virsh dumpxml macos-vm | perl -ne 'print $1 if m{<source[^>]+path=['"'"'"]([^'"'"'"]+)['"'"'"][^>]*/>}'
+```
+
+(or just `grep '<source' | grep path=` if you only have one socket-bound element).
+
+### Basic commands
+
+```bash
+SOCK=/var/lib/libvirt/qemu/macos-agent.sock
+
 # Ping the agent
-virsh qemu-agent-command macos-vm '{"execute":"guest-ping"}'
+echo '{"execute":"guest-ping"}' | socat - UNIX-CONNECT:"$SOCK"
 
 # Get OS info
-virsh qemu-agent-command macos-vm '{"execute":"guest-get-osinfo"}'
-
-# Get hostname
-virsh qemu-agent-command macos-vm '{"execute":"guest-get-host-name"}'
+echo '{"execute":"guest-get-osinfo"}' | socat - UNIX-CONNECT:"$SOCK"
 
 # Get network interfaces (IP addresses)
-virsh qemu-agent-command macos-vm '{"execute":"guest-network-get-interfaces"}'
-
-# Get routing table
-virsh qemu-agent-command macos-vm '{"execute":"guest-network-get-route"}'
+echo '{"execute":"guest-network-get-interfaces"}' | socat - UNIX-CONNECT:"$SOCK"
 
 # Get system load
-virsh qemu-agent-command macos-vm '{"execute":"guest-get-load"}'
+echo '{"execute":"guest-get-load"}' | socat - UNIX-CONNECT:"$SOCK"
 ```
 
-### Shutdown and Reboot
+Each invocation opens a fresh connection, sends one QGA JSON frame, reads one response, closes. The agent is line-delimited so any tool that can write a JSON line and read a JSON line works (`socat`, `nc -U`, Python with `socket.AF_UNIX`, Perl with `IO::Socket::UNIX`).
+
+### Shutdown and reboot
 
 ```bash
-# Graceful shutdown
-virsh qemu-agent-command macos-vm '{"execute":"guest-shutdown","arguments":{"mode":"powerdown"}}'
-
-# Reboot
-virsh qemu-agent-command macos-vm '{"execute":"guest-shutdown","arguments":{"mode":"reboot"}}'
-
-# Halt
-virsh qemu-agent-command macos-vm '{"execute":"guest-shutdown","arguments":{"mode":"halt"}}'
+echo '{"execute":"guest-shutdown","arguments":{"mode":"powerdown"}}' | socat - UNIX-CONNECT:"$SOCK"
+echo '{"execute":"guest-shutdown","arguments":{"mode":"reboot"}}'    | socat - UNIX-CONNECT:"$SOCK"
+echo '{"execute":"guest-shutdown","arguments":{"mode":"halt"}}'      | socat - UNIX-CONNECT:"$SOCK"
 ```
 
-### File Operations
+### Filesystem freeze / thaw
 
 ```bash
-# Read a file from the guest
-HANDLE=$(virsh qemu-agent-command macos-vm '{"execute":"guest-file-open","arguments":{"path":"/etc/hosts","mode":"r"}}' | python3 -c "import json,sys; print(json.load(sys.stdin)['return'])")
-virsh qemu-agent-command macos-vm "{\"execute\":\"guest-file-read\",\"arguments\":{\"handle\":$HANDLE,\"count\":4096}}"
-virsh qemu-agent-command macos-vm "{\"execute\":\"guest-file-close\",\"arguments\":{\"handle\":$HANDLE}}"
+echo '{"execute":"guest-fsfreeze-freeze"}' | socat - UNIX-CONNECT:"$SOCK"
+echo '{"execute":"guest-fsfreeze-status"}' | socat - UNIX-CONNECT:"$SOCK"
 
-# Execute a command in the guest
-PID=$(virsh qemu-agent-command macos-vm '{"execute":"guest-exec","arguments":{"path":"/bin/hostname"}}' | python3 -c "import json,sys; print(json.load(sys.stdin)['return']['pid'])")
-sleep 1
-virsh qemu-agent-command macos-vm "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$PID}}"
+# (Take your snapshot here while the filesystem is frozen.)
+
+echo '{"execute":"guest-fsfreeze-thaw"}'   | socat - UNIX-CONNECT:"$SOCK"
 ```
 
-## Snapshots with Quiesced Freeze
-
-libvirt supports `--quiesce` flag on snapshots, which automatically calls `guest-fsfreeze-freeze` before the snapshot and `guest-fsfreeze-thaw` after.
-
-### Create a Quiesced Snapshot
+### Verify freeze support
 
 ```bash
-# Disk-only snapshot with filesystem quiesce
-virsh snapshot-create-as macos-vm snap1 --disk-only --quiesce
-
-# Full snapshot with quiesce
-virsh snapshot-create-as macos-vm snap1 --quiesce
-```
-
-If the agent is running and responds to ping, `--quiesce` will:
-1. Call `guest-fsfreeze-freeze` (runs hooks, creates APFS snapshot, syncs)
-2. Take the VM snapshot
-3. Call `guest-fsfreeze-thaw` (cleans up, runs thaw hooks)
-
-### Manual Freeze/Thaw
-
-```bash
-# Freeze
-virsh qemu-agent-command macos-vm '{"execute":"guest-fsfreeze-freeze"}'
-
-# Check status
-virsh qemu-agent-command macos-vm '{"execute":"guest-fsfreeze-status"}'
-
-# Take snapshot while frozen
-virsh snapshot-create-as macos-vm backup-snap --disk-only
-
-# Thaw
-virsh qemu-agent-command macos-vm '{"execute":"guest-fsfreeze-thaw"}'
-```
-
-### Verify Freeze Support
-
-```bash
-# Check if agent supports freeze
-virsh qemu-agent-command macos-vm '{"execute":"guest-info"}' | python3 -c "
+echo '{"execute":"guest-info"}' | socat - UNIX-CONNECT:"$SOCK" | python3 -c "
 import json, sys
 info = json.load(sys.stdin)['return']
 cmds = {c['name']: c['enabled'] for c in info['supported_commands']}
-freeze = cmds.get('guest-fsfreeze-freeze', False)
-print(f'Freeze supported: {freeze}')
-print(f'Agent version: {info[\"version\"]}')
+print(f'Freeze supported: {cmds.get(\"guest-fsfreeze-freeze\", False)}')
+print(f'Agent version:    {info[\"version\"]}')
 "
 ```
+
+## Snapshots — `virsh --quiesce` does NOT work
+
+libvirt's `virsh snapshot-create-as ... --quiesce` flag calls `guest-fsfreeze-freeze` / `guest-fsfreeze-thaw` through libvirt's QGA API. That API can't see our agent (per the section above), so `--quiesce` returns `"QEMU guest agent is not configured"` and the snapshot is taken without filesystem quiesce — i.e., the snapshot may be inconsistent.
+
+The quiesce workflow under our ISA configuration is a three-step sequence the operator drives manually:
+
+```bash
+SOCK=/var/lib/libvirt/qemu/macos-agent.sock
+
+# 1. Freeze
+echo '{"execute":"guest-fsfreeze-freeze"}' | socat - UNIX-CONNECT:"$SOCK"
+
+# 2. Take the snapshot (no --quiesce — we've already quiesced)
+virsh snapshot-create-as macos-vm snap1 --disk-only
+
+# 3. Thaw
+echo '{"execute":"guest-fsfreeze-thaw"}' | socat - UNIX-CONNECT:"$SOCK"
+```
+
+If a backup tool needs the libvirt `--quiesce` API to work — e.g., a Velero plugin that doesn't expose hooks — your options are (a) wrap the snapshot operation in a script that does the manual freeze sequence before/after, or (b) use the `--virtio` install path so libvirt's QGA layer can reach the agent. Option (a) keeps the supported configuration; option (b) is documented in `docs/NO_ISA_OVERRIDE.md` with its caveats.
 
 ## Complete Domain XML Example
 

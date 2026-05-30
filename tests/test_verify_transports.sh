@@ -446,25 +446,81 @@ assert_contains "UTM: rejects when utmctl missing" "utmctl' not found" "$OUT"
 assert_contains "UTM: suggests --qga-socket override" "--qga-socket PATH to skip discovery" "$OUT"
 
 # =========================================================================
-# MED-5 (audit 2026-05-29): test_verify_transports.sh historically claimed
-# libvirt coverage in its file header but had no virsh shim block — so the
-# libvirt_config_summary regression (MED-3, where the verifier was looking
-# for the wrong channel type) survived undetected. This block adds the
-# minimum coverage to catch the same class of regression: virsh shims that
-# return the documented ISA serial XML (pass case) and a misconfigured XML
-# (fail case), and assertions that the verifier produces the right verdict.
-section_hdr "5b. libvirt transport (virsh shim) — config check covers MED-3"
+# v2.5.3+: libvirt transport tests cover the direct-socket rewrite. The
+# transport no longer uses `virsh qemu-agent-command` (which requires
+# libvirt's QGA infrastructure, which is VirtIO-only and conflicts with
+# Apple's daemon on Big Sur+). Instead it parses the domain XML to
+# discover the unix socket path from a `<serial type='unix'>` element
+# and talks to that socket directly via the shared _qga_socket_* helpers.
+#
+# These tests spawn a perl QGA listener bound to a real socket, have the
+# virsh shim return XML pointing at that socket, and assert that
+# verify.sh discovers it and runs end-to-end against it.
+section_hdr "5b. libvirt transport (virsh shim + perl QGA listener) — direct-socket model"
 
 LIBVIRT_DOMAIN="macos-vm-test"
+LV_SOCK="$TMPDIR/libvirt-qga.sock"
+LV_SERVER_PID=""
+
+# Spawn a perl QGA listener at $LV_SOCK. Same response surface as the
+# section-6 listener, scoped to this test block. Killed at the end of
+# the libvirt block so it doesn't leak into section 6.
+perl - "$LV_SOCK" <<'PERLEOF' &
+use strict; use warnings;
+use IO::Socket::UNIX;
+use JSON::PP;
+use MIME::Base64;
+my $sock_path = $ARGV[0];
+unlink $sock_path;
+my $listener = IO::Socket::UNIX->new(
+    Local  => $sock_path,
+    Type   => SOCK_STREAM,
+    Listen => 8,
+) or die "listen $sock_path: $!";
+chmod 0600, $sock_path;
+sub respond_to {
+    my ($req) = @_;
+    my $cmd = $req->{execute} // "";
+    if    ($cmd eq "guest-ping")                  { return { return => {} }; }
+    elsif ($cmd eq "guest-sync")                  { return { return => $req->{arguments}->{id} // 1 }; }
+    elsif ($cmd eq "guest-get-osinfo")            { return { return => { "pretty-name" => "macOS Test 26.5", name => "macOS", version => "26.5" } }; }
+    elsif ($cmd eq "guest-network-get-interfaces"){ return { return => [ { name => "en0", "hardware-address" => "00:11:22:33:44:66", "ip-addresses" => [ { "ip-address" => "10.0.0.43", "ip-address-type" => "ipv4", prefix => 24 } ] } ] }; }
+    elsif ($cmd eq "guest-info")                  { return { return => { version => "2.5.3", supported_commands => [ map { "cmd$_" } 1..45 ] } }; }
+    elsif ($cmd eq "guest-get-memory-block-info") { return { return => { size => 1073741824 } }; }
+    elsif ($cmd eq "guest-get-memory-blocks")     { return { return => [ { "phys-index" => 0, online => JSON::PP::true, "can-offline" => JSON::PP::false } ] }; }
+    return { error => { class => "GenericError", desc => "unknown command $cmd" } };
+}
+while (my $client = $listener->accept) {
+    while (defined(my $line = <$client>)) {
+        chomp $line;
+        next unless length $line;
+        my $req = eval { decode_json($line) };
+        if ($@) { print $client encode_json({ error => { desc => "bad JSON" } }), "\n"; next; }
+        print $client encode_json(respond_to($req)), "\n";
+    }
+    close $client;
+}
+PERLEOF
+LV_SERVER_PID=$!
+# Wait up to 2 seconds for the socket to appear.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -S "$LV_SOCK" ] && break
+    sleep 0.1
+done
+if [ ! -S "$LV_SOCK" ]; then
+    fail "libvirt fixture: perl QGA listener failed to start at $LV_SOCK"
+else
 
 make_virsh_shim() {
     local tmpd="$1"
     local fixture_dir="$2"
     cat > "$tmpd/virsh" <<SHIMEOF
 #!/bin/bash
-# Mock virsh for libvirt-transport verifier tests.
+# Mock virsh for libvirt-transport verifier tests (v2.5.3+ direct-socket).
 # Returns canned responses for the subcommands verify.sh's libvirt
-# auto-detect + libvirt_config_summary path invokes.
+# preflight (list, dominfo, dumpxml, domstate) invokes. qemu-agent-command
+# is intentionally NOT mocked — the new transport never calls it (it
+# would only work for VirtIO QGA setups, which we don't use).
 FIXTURE_DIR="$fixture_dir"
 SHIMEOF
     cat >> "$tmpd/virsh" <<'SHIMEOF'
@@ -487,12 +543,12 @@ case "$1" in
         cat "$FIXTURE_DIR/dumpxml.xml"
         ;;
     qemu-agent-command)
-        # verify.sh's main test pipeline issues these for ping / get-osinfo /
-        # network-get-interfaces / info / etc. Returning a minimal success
-        # envelope keeps the verifier moving past the config check so we can
-        # assert on the libvirt-specific block (the only thing this fixture
-        # is actually validating).
-        echo '{"return":{}}'
+        # Intentionally fail loud if the verifier tries to call this.
+        # v2.5.3+ libvirt transport must not use virsh qemu-agent-command;
+        # if this shim ever returns success, a future regression has
+        # reintroduced the wrong path.
+        echo "shim: virsh qemu-agent-command must NOT be invoked by v2.5.3+ libvirt transport" >&2
+        exit 1
         ;;
     *)
         echo "shim: unknown subcommand $*" >&2
@@ -503,17 +559,17 @@ SHIMEOF
     chmod +x "$tmpd/virsh"
 }
 
-# --- Pass case: ISA serial target present ---
+# --- Pass case: documented type-first attribute order ---
 LV_PASS_DIR="$TMPDIR/libvirt-pass"
 LV_PASS_SHIM="$TMPDIR/libvirt-pass-shim"
 mkdir -p "$LV_PASS_DIR" "$LV_PASS_SHIM"
-cat > "$LV_PASS_DIR/dumpxml.xml" <<'EOF'
+cat > "$LV_PASS_DIR/dumpxml.xml" <<EOF
 <domain type='kvm'>
   <name>macos-vm-test</name>
   <uuid>e4686d2c-6e8d-4335-b8fd-81bee22f4814</uuid>
   <devices>
     <serial type='unix'>
-      <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
+      <source mode='bind' path='$LV_SOCK'/>
       <target type='isa-serial' port='0'/>
     </serial>
     <disk type='file' device='disk'>
@@ -527,13 +583,38 @@ EOF
 make_virsh_shim "$LV_PASS_SHIM" "$LV_PASS_DIR"
 
 OUT=$(PATH="$LV_PASS_SHIM:$PATH" bash "$VERIFY" --transport libvirt "$LIBVIRT_DOMAIN" --no-freeze --no-in-vm --no-env-capture --no-appendix 2>&1)
-assert_contains "libvirt PASS: detects ISA serial target" "guest-agent ISA serial target present" "$OUT"
-assert_not_contains "libvirt PASS: does NOT demand VirtIO channel" "guest-agent virtio channel" "$OUT"
-assert_not_contains "libvirt PASS: does NOT reference org.qemu.guest_agent.0 in failure text" "org.qemu.guest_agent.0" "$OUT"
+assert_contains "libvirt PASS: discovers QGA socket from domain XML"  "QGA socket discovered from domain XML: $LV_SOCK" "$OUT"
+assert_contains "libvirt PASS: detects ISA serial target"             "guest-agent ISA serial target present" "$OUT"
+assert_contains "libvirt PASS: end-to-end agent communication works"  "PASS  ping" "$OUT"
 
-# --- Fail case: VirtIO channel instead of ISA serial (the misconfiguration
-# the legacy verifier was happy with — exactly the regression we want to
-# catch going forward) ---
+# --- Reordered-attributes case: <target port='0' type='isa-serial'/>
+# (defense for audit MED-3 — XML attribute order isn't significant per
+# XML 1.0 / Relax NG, and operators editing via virsh edit / external
+# tools can produce non-canonical order that libvirt still accepts). ---
+LV_REORDER_DIR="$TMPDIR/libvirt-reorder"
+LV_REORDER_SHIM="$TMPDIR/libvirt-reorder-shim"
+mkdir -p "$LV_REORDER_DIR" "$LV_REORDER_SHIM"
+cat > "$LV_REORDER_DIR/dumpxml.xml" <<EOF
+<domain type='kvm'>
+  <name>macos-vm-test</name>
+  <uuid>e4686d2c-6e8d-4335-b8fd-81bee22f4814</uuid>
+  <devices>
+    <serial type='unix'>
+      <source path='$LV_SOCK' mode='bind'/>
+      <target port='0' type='isa-serial'/>
+    </serial>
+  </devices>
+</domain>
+EOF
+make_virsh_shim "$LV_REORDER_SHIM" "$LV_REORDER_DIR"
+
+OUT=$(PATH="$LV_REORDER_SHIM:$PATH" bash "$VERIFY" --transport libvirt "$LIBVIRT_DOMAIN" --no-freeze --no-in-vm --no-env-capture --no-appendix 2>&1)
+assert_contains "libvirt REORDER: tolerates port-first attribute order" "QGA socket discovered from domain XML: $LV_SOCK" "$OUT"
+assert_contains "libvirt REORDER: ISA target detected with type-second" "guest-agent ISA serial target present" "$OUT"
+assert_contains "libvirt REORDER: end-to-end ping works"                "PASS  ping" "$OUT"
+
+# --- Fail case: VirtIO channel only, no ISA serial. The new transport
+# refuses at preflight (cannot discover a socket), not at config-check. ---
 LV_FAIL_DIR="$TMPDIR/libvirt-fail"
 LV_FAIL_SHIM="$TMPDIR/libvirt-fail-shim"
 mkdir -p "$LV_FAIL_DIR" "$LV_FAIL_SHIM"
@@ -545,20 +626,21 @@ cat > "$LV_FAIL_DIR/dumpxml.xml" <<'EOF'
     <channel type='unix'>
       <target type='virtio' name='org.qemu.guest_agent.0'/>
     </channel>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
-      <source file='/var/lib/libvirt/images/macos.qcow2'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
   </devices>
 </domain>
 EOF
 make_virsh_shim "$LV_FAIL_SHIM" "$LV_FAIL_DIR"
 
 OUT=$(PATH="$LV_FAIL_SHIM:$PATH" bash "$VERIFY" --transport libvirt "$LIBVIRT_DOMAIN" --no-freeze --no-in-vm --no-env-capture --no-appendix 2>&1)
-assert_contains "libvirt FAIL: rejects VirtIO-only XML" "guest-agent ISA serial target missing" "$OUT"
-assert_contains "libvirt FAIL: failure message points at ISA serial fix" "isa-serial" "$OUT"
-assert_contains "libvirt FAIL: failure message points at the doc" "docs/LIBVIRT.md" "$OUT"
+assert_contains "libvirt FAIL: preflight refuses VirtIO-only XML"  "could not discover QGA unix socket" "$OUT"
+assert_contains "libvirt FAIL: failure points at expected element" "type='isa-serial'" "$OUT"
+assert_contains "libvirt FAIL: failure points at the doc"          "docs/LIBVIRT.md" "$OUT"
+
+# Tear down the libvirt section's perl listener so it doesn't compete
+# with section 6's listener (which binds a different socket path but
+# we want the process tree clean).
+{ kill "$LV_SERVER_PID" 2>/dev/null; wait "$LV_SERVER_PID" 2>/dev/null; } 2>/dev/null
+fi  # end of "perl listener started" guard
 
 # =========================================================================
 section_hdr "6. qga-socket transport, end-to-end via fake QGA server"

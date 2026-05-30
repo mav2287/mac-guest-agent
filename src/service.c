@@ -220,6 +220,33 @@ int service_uninstall(int dry_run)
 
 int service_update(const char *new_binary_path, int dry_run)
 {
+    /* v2.5.3+: deprecation notice. The binary-side --update path predates
+     * install.sh's state-aware --upgrade flow (v2.5.3). It does the bare
+     * minimum (swap binary + restart) and does NOT:
+     *   - regenerate the LaunchDaemon plist from the new binary
+     *     (so plist changes between releases don't land)
+     *   - reload the service if the restored backup binary fails to launch
+     *     after a copy-or-verify failure (leaves the agent stopped)
+     *   - perform the mode-aware functional verify install.sh --upgrade does
+     *
+     * install.sh --local PATH --upgrade is the canonical upgrade path in
+     * v2.5.3+. We keep --update working so existing automation doesn't
+     * break in this release, but surface the deprecation notice on every
+     * invocation. A future release will remove --update entirely.
+     *
+     * Audit 2026-05-29 finding "binary --update is now a stale and unsafe
+     * upgrade path" closes via this deprecation + install.sh --upgrade as
+     * the replacement. */
+    fprintf(stderr,
+        "Notice: mac-guest-agent --update is deprecated in v2.5.3+.\n"
+        "        Prefer: sudo /path/to/install.sh --local %s --upgrade\n"
+        "        (state-aware upgrade: regenerates plist, mode-aware verify,\n"
+        "         restores prior binary on verify failure.)\n"
+        "        --update remains functional for backwards compatibility but\n"
+        "        does not regenerate the LaunchDaemon plist and has weaker\n"
+        "        rollback semantics than install.sh --upgrade.\n\n",
+        new_binary_path ? new_binary_path : "/tmp/mac-guest-agent");
+
     if (!dry_run && geteuid() != 0) {
         fprintf(stderr, "Error: root privileges required for update\n");
         return 1;
@@ -230,10 +257,10 @@ int service_update(const char *new_binary_path, int dry_run)
     if (!new_binary_path || !*new_binary_path) {
         fprintf(stderr, "Error: provide path to new binary\n");
         fprintf(stderr, "Usage: sudo mac-guest-agent --update /path/to/new/binary\n");
-        fprintf(stderr, "\nTo update from another machine:\n");
+        fprintf(stderr, "\nRecommended (v2.5.3+): use install.sh --upgrade instead:\n");
         fprintf(stderr, "  1. Download the new binary on a machine with internet\n");
         fprintf(stderr, "  2. scp mac-guest-agent user@vm-ip:/tmp/\n");
-        fprintf(stderr, "  3. sudo mac-guest-agent --update /tmp/mac-guest-agent\n");
+        fprintf(stderr, "  3. sudo /path/to/install.sh --local /tmp/mac-guest-agent --upgrade\n");
         return 1;
     }
 

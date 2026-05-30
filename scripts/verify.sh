@@ -634,13 +634,41 @@ pve_guest_exec_json() {
 }
 
 # --- Transport: libvirt ---------------------------------------------------
+#
+# v2.5.3+: libvirt transport uses DIRECT UNIX SOCKET I/O, not `virsh
+# qemu-agent-command`. Rationale:
+#
+# libvirt's QGA infrastructure (qemu_agent.c) only discovers a guest agent
+# from a `<channel type='virtio' target name='org.qemu.guest_agent.0'>`
+# element. On macOS Big Sur+ that VirtIO channel is claimed by Apple's
+# built-in AppleQEMUGuestAgent — we use ISA serial (via `<serial
+# type='unix'>`) precisely to step OUTSIDE libvirt's QGA convention and
+# avoid the conflict. Which means `virsh qemu-agent-command` cannot reach
+# our agent for our documented configuration.
+#
+# The supported path for libvirt operators is the unix socket on the host
+# filesystem that the `<serial type='unix'>` element binds. We discover it
+# via `virsh dumpxml`, then talk to it using the same socket I/O
+# machinery (_qga_socket_cmd / _qga_socket_guest_exec_json) the UTM and
+# qga-socket transports use. Same shape as UTM: orchestrator-aware
+# discovery + direct socket I/O.
+#
+# Operators who want libvirt's native `virsh qemu-agent-command` to work
+# must use the VirtIO channel + the --virtio install path (SIP off, Apple
+# daemon unloaded). That's the docs/NO_ISA_OVERRIDE.md territory.
+
+LIBVIRT_RESOLVED_SOCKET=""
 
 libvirt_describe() {
-    printf 'libvirt (virsh qemu-agent-command); domain=%s' "$VMID"
+    if [ -n "$LIBVIRT_RESOLVED_SOCKET" ]; then
+        printf 'libvirt (domain=%s; socket=%s)' "$VMID" "$LIBVIRT_RESOLVED_SOCKET"
+    else
+        printf 'libvirt (domain=%s; socket=<not-yet-discovered>)' "$VMID"
+    fi
 }
 
 libvirt_preflight() {
-    # 1. virsh and perl on PATH.
+    # 1. virsh and perl on PATH. base64 used by the shared socket helpers.
     for tool in virsh perl base64; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             fail "preflight — '$tool' not found"
@@ -659,6 +687,63 @@ libvirt_preflight() {
     # 3. Domain exists.
     if ! virsh dominfo "$VMID" >/dev/null 2>&1; then
         fail "preflight — libvirt domain '$VMID' not found (try: virsh list --all)"
+        return 1
+    fi
+
+    # 4. Discover the QGA unix socket from the domain XML. We look for a
+    # `<serial type='unix'>` element that also contains a
+    # `<target type='isa-serial'>` (so we don't accidentally grab some
+    # other unix serial like a console). Attribute order and quote style
+    # are both tolerated (XML 1.0 doesn't constrain attribute order, and
+    # libvirt's RNG schema follows suit).
+    local xml
+    xml=$(virsh dumpxml "$VMID" 2>/dev/null)
+    if [ -z "$xml" ]; then
+        fail "preflight — virsh dumpxml '$VMID' returned no output"
+        return 1
+    fi
+
+    # Perl script for socket discovery. Written to a tempfile via a
+    # quoted heredoc so the embedded apostrophes in regex character
+    # classes (e.g., ['"]) don't terminate the shell single-quoted
+    # string — they're treated as literal heredoc content.
+    local _libvirt_perl_script
+    _libvirt_perl_script=$(mktemp -t libvirt_socket_discover.XXXXXX)
+    cat > "$_libvirt_perl_script" <<'PERL_EOF'
+my $xml = $ENV{LV_XML};
+# Walk <serial type="unix"> blocks. XML attribute order is not
+# significant per XML 1.0 / Relax NG, so we look for type=unix anywhere
+# in the <serial> tag's attribute list.
+while ($xml =~ m{<serial\s+([^>]*)>(.*?)</serial>}gs) {
+    my ($attrs, $body) = ($1, $2);
+    next unless $attrs =~ m{type=['"]unix['"]};
+    # Require an isa-serial target inside this block — disambiguates
+    # our agent serial from any other unix-typed serial the operator
+    # might have (e.g., a console). Attribute order is again not
+    # significant inside the <target> tag.
+    next unless $body =~ m{<target\s+[^>]*type=['"]isa-serial['"]};
+    # Extract the source path. Attribute order is not significant in
+    # <source> either, so match path=... anywhere in the tag.
+    if ($body =~ m{<source\s+[^>]*\bpath=['"]([^'"]+)['"]}) {
+        print $1;
+        exit 0;
+    }
+}
+exit 1;
+PERL_EOF
+    LIBVIRT_RESOLVED_SOCKET=$(LV_XML="$xml" perl "$_libvirt_perl_script" 2>/dev/null) || true
+    rm -f "$_libvirt_perl_script"
+
+    if [ -z "$LIBVIRT_RESOLVED_SOCKET" ]; then
+        fail "preflight — could not discover QGA unix socket from domain XML. Expected a <serial type='unix'><source path='...'/><target type='isa-serial'/></serial> element. See docs/LIBVIRT.md."
+        return 1
+    fi
+
+    # 5. Socket must actually exist on the host filesystem. libvirt creates
+    # it when the domain starts; if it's missing the domain is either
+    # stopped or the chardev failed to bind.
+    if [ ! -S "$LIBVIRT_RESOLVED_SOCKET" ]; then
+        fail "preflight — discovered socket path is not a Unix socket: $LIBVIRT_RESOLVED_SOCKET (start the domain, or check libvirt logs for chardev bind errors)"
         return 1
     fi
 
@@ -683,25 +768,16 @@ libvirt_config_summary() {
         fail "domain config not retrievable via virsh dumpxml"
         return
     fi
-    # MED-3 (audit 2026-05-29): pre-v2.5.3 this checked for the VirtIO QGA
-    # channel `org.qemu.guest_agent.0` — exactly the opposite of the
-    # project's documented requirement. v2.5.0+ requires ISA serial on
-    # macOS (Apple's built-in AppleQEMUGuestAgent claims the VirtIO channel
-    # on Big Sur+; ISA is the only transport our agent can reliably use).
-    #
-    # Correct libvirt config per docs/LIBVIRT.md:
-    #   <serial type='unix'>
-    #     <source mode='bind' path='/var/lib/libvirt/qemu/macos-agent.sock'/>
-    #     <target type='isa-serial' port='0'/>
-    #   </serial>
-    # Pass on isa-serial detection. Single-quoted and double-quoted
-    # attribute forms both accepted (libvirt normalizes on output but the
-    # verifier shouldn't depend on which).
-    if printf '%s' "$xml" | grep -qE "target type=['\"]isa-serial['\"]"; then
-        pass "guest-agent ISA serial target present (target type='isa-serial')"
+    # Sanity check on ISA serial target. This is informational — preflight
+    # has already found the socket and bound it via LIBVIRT_RESOLVED_SOCKET.
+    # The regex matches `type='isa-serial'` in any attribute position
+    # within the <target> tag (XML attribute order is not significant).
+    if printf '%s' "$xml" | grep -qE "<target[^>]*type=['\"]isa-serial['\"]"; then
+        pass "guest-agent ISA serial target present in domain XML"
     else
-        fail "guest-agent ISA serial target missing — add <serial type='unix'><target type='isa-serial' port='0'/></serial> to the domain XML; see docs/LIBVIRT.md"
+        fail "domain XML has no <target type='isa-serial'> — preflight resolved a socket but the config-check regex did not find the expected element"
     fi
+    pass "QGA socket discovered from domain XML: $LIBVIRT_RESOLVED_SOCKET"
     # discard / SSD emulation hints (best-effort grep — libvirt's disk XML
     # is structured but a string grep is enough for an evidence check).
     if printf '%s' "$xml" | grep -q "discard='unmap'\|discard=\"unmap\""; then
@@ -716,96 +792,16 @@ libvirt_config_summary() {
     fi
 }
 
-# libvirt_qga_cmd <command-suffix> [json-args]
-# Issues `guest-<command-suffix>` via `virsh qemu-agent-command` and prints
-# the unwrapped response body so downstream `json_query` calls work with
-# the same `$d->{field}` shape PVE produces. virsh's envelope is
-# `{"return": <body>}` or `{"error": ...}`; we strip `return` if present
-# and pass error envelopes through unchanged so the freeze-behavioural
-# check can still see the "Command not allowed while filesystem is
-# frozen" string in $d->{error}->{desc}.
+# libvirt_qga_cmd / libvirt_guest_exec_json: thin delegations to the
+# shared socket helpers. Same call shape as utm_qga_cmd /
+# utm_guest_exec_json — discover the socket in preflight, then everything
+# downstream uses the same socket-I/O machinery.
 libvirt_qga_cmd() {
-    local cmd="$1"; shift
-    local frame
-    if [ $# -gt 0 ] && [ -n "$1" ]; then
-        frame=$(printf '{"execute":"guest-%s","arguments":%s}' "$cmd" "$1")
-    else
-        frame=$(printf '{"execute":"guest-%s"}' "$cmd")
-    fi
-    local raw
-    raw=$(virsh qemu-agent-command --timeout "$EXEC_TIMEOUT" "$VMID" "$frame" 2>/dev/null)
-    [ -z "$raw" ] && return
-    printf '%s' "$raw" | perl -MJSON::PP -e '
-        local $/;
-        my $d = eval { decode_json(scalar <STDIN>) };
-        exit 1 if $@ || !defined $d;
-        if (ref $d eq "HASH" && exists $d->{return}) {
-            print encode_json($d->{return});
-        } else {
-            print encode_json($d);
-        }
-    ' 2>/dev/null
+    _qga_socket_cmd "$LIBVIRT_RESOLVED_SOCKET" "$@"
 }
 
-# libvirt_guest_exec_json <path> [args...]
-# Drives `guest-exec` + `guest-exec-status` via `virsh qemu-agent-command`,
-# base64-decodes out-data/err-data, returns a PVE-shaped envelope
-# ({exited, exitcode, "out-data": <text>, "err-data": <text>}) so the
-# downstream check code is transport-agnostic.
-#
-# Polls exec-status until exited=true, capped at EXEC_TIMEOUT seconds.
-# Sleep granularity is 250ms (Perl select() — no `sleep 0.25` portability
-# issue with /bin/sleep on older BSDs).
 libvirt_guest_exec_json() {
-    local path="$1"; shift
-    LV_DOMAIN="$VMID" LV_PATH="$path" LV_TIMEOUT="$EXEC_TIMEOUT" LV_ARGS_JSON=$(
-        perl -MJSON::PP -e 'print encode_json([@ARGV])' -- "$@"
-    ) perl -MJSON::PP -MMIME::Base64 -e '
-        my $domain  = $ENV{LV_DOMAIN};
-        my $timeout = $ENV{LV_TIMEOUT} + 0;
-        my $args    = decode_json($ENV{LV_ARGS_JSON});
-        my $exec_req = encode_json({
-            execute   => "guest-exec",
-            arguments => {
-                path             => $ENV{LV_PATH},
-                arg              => $args,
-                "capture-output" => JSON::PP::true,
-            },
-        });
-        my $exec_raw = `virsh qemu-agent-command --timeout $timeout \Q$domain\E \Q$exec_req\E 2>/dev/null`;
-        exit 1 unless length $exec_raw;
-        my $exec = eval { decode_json($exec_raw) };
-        exit 1 if $@ || !$exec || !$exec->{return} || !defined $exec->{return}->{pid};
-        my $pid = $exec->{return}->{pid};
-
-        my $status_req = encode_json({
-            execute   => "guest-exec-status",
-            arguments => { pid => $pid + 0 },
-        });
-        my $deadline = time() + $timeout;
-        my $status;
-        while (time() < $deadline) {
-            my $status_raw = `virsh qemu-agent-command --timeout 5 \Q$domain\E \Q$status_req\E 2>/dev/null`;
-            if (length $status_raw) {
-                $status = eval { decode_json($status_raw) };
-                last if $status && $status->{return} && $status->{return}->{exited};
-            }
-            select(undef, undef, undef, 0.25);
-        }
-        exit 1 unless $status && $status->{return} && $status->{return}->{exited};
-
-        my $r = $status->{return};
-        my $out = defined $r->{"out-data"} ? decode_base64($r->{"out-data"}) : "";
-        my $err = defined $r->{"err-data"} ? decode_base64($r->{"err-data"}) : "";
-        print encode_json({
-            exited       => JSON::PP::true,
-            exitcode     => $r->{exitcode} // 0,
-            "out-data"   => $out,
-            "err-data"   => $err,
-            "out-truncated" => $r->{"out-truncated"} ? JSON::PP::true : JSON::PP::false,
-            "err-truncated" => $r->{"err-truncated"} ? JSON::PP::true : JSON::PP::false,
-        });
-    ' 2>/dev/null
+    _qga_socket_guest_exec_json "$LIBVIRT_RESOLVED_SOCKET" "$@"
 }
 
 # --- Shared: QGA over a Unix socket ---------------------------------------

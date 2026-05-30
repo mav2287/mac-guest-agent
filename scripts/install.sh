@@ -730,11 +730,31 @@ main() {
         exit 1
     fi
     if [ -n "$VIRTIO_MODE" ] && operator_config_exists; then
+        # Audit 2026-05-29 LOW-1: the prior message offered a "hand-edit +
+        # standard install" remediation that was operationally wrong — the
+        # standard install does not unload AppleQEMUGuestAgent, does not
+        # verify the VirtIO device released, and does not drop the marker
+        # that uninstall consults to restore Apple state. Following that
+        # remediation produced a setup with our config pointing at VirtIO
+        # while Apple's daemon still owned the channel, and no marker for
+        # uninstall to do the right thing. Removed.
         err "Pre-existing $VIRTIO_CONFIG_PATH detected (operator state). --virtio refuses to overwrite it."
-        err "  Either back it up first and retry, or hand-edit the file to add:"
-        err "      [general]"
-        err "      path = $VIRTIO_DEVICE"
-        err "  and run the standard install (no --virtio flag)."
+        err ""
+        err "  Recommended: back up the existing config, then re-run --virtio:"
+        err "      sudo cp $VIRTIO_CONFIG_PATH ${VIRTIO_CONFIG_PATH}.bak"
+        err "      sudo rm $VIRTIO_CONFIG_PATH"
+        err "      sudo $0 --virtio    # idempotent re-run with the gated install path"
+        err ""
+        err "  After install, restore your customizations (allow-rpcs, block-rpcs, etc.)"
+        err "  to the new $VIRTIO_CONFIG_PATH and SIGHUP/restart the LaunchDaemon."
+        err ""
+        err "  DIY path (advanced; you take responsibility for the gates this skips):"
+        err "      sudo $0 --virtio-force"
+        err "  --virtio-force bypasses the SIP check, the AppleQEMUGuestAgent unload,"
+        err "  and the device-release verification. It writes the marker as mode=force"
+        err "  so --uninstall will NOT touch Apple's daemon (because we never did)."
+        err "  Only use this if you've already arranged for Apple's daemon to not own"
+        err "  the channel — otherwise the agent will fail to open the device."
         exit 1
     fi
 

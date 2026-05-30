@@ -89,11 +89,45 @@ cp configs/qemu-ga.conf "$STAGE/root/etc/qemu/qemu-ga.conf.default"
 # sources might have left behind in the staging tree:
 find "$STAGE/root" -name '._*' -delete 2>/dev/null || true
 
-# Post-install script: register the LaunchDaemon and start the service
+# Post-install script: register the LaunchDaemon and start the service.
+#
+# Audit 2026-05-29 finding MED-2: previously this script suppressed
+# --install errors (`2>/dev/null || true`) and always exited 0, so a
+# package installation could report success even if:
+#   - the binary couldn't execute on the host architecture
+#   - --install failed to write the LaunchDaemon plist
+#   - launchctl load/start failed
+# That hid real installation failures behind a "macOS Guest Agent installed."
+# message. v2.5.3+: --install errors surface to stderr, postinstall exits
+# non-zero on failure so Installer.app (or `installer` CLI) reports the
+# package as failed. uname -m gate added so unsupported architectures fail
+# with the same clear message scripts/install.sh produces.
 cat > "$STAGE/scripts/postinstall" << 'POSTEOF'
 #!/bin/bash
-# Post-install: register LaunchDaemon and start service
-/usr/local/bin/mac-guest-agent --install 2>/dev/null || true
+# Post-install: register LaunchDaemon and start service.
+set -e
+
+# Architecture gate (matches scripts/install.sh's validate_arch).
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64|i386|i486|i586|i686|arm64|arm64e)
+        ;;
+    *)
+        echo "Error: unsupported architecture: $ARCH" >&2
+        echo "This package ships i386, x86_64, and arm64 slices. PowerPC and other architectures are not supported." >&2
+        exit 1
+        ;;
+esac
+
+# Run --install. Errors surface; non-zero exit fails the package install.
+if ! /usr/local/bin/mac-guest-agent --install; then
+    echo "Error: mac-guest-agent --install failed." >&2
+    echo "       Check the output above. Common causes:" >&2
+    echo "         - LaunchDaemon plist could not be written (filesystem permissions)" >&2
+    echo "         - launchctl load/start refused the daemon (check /var/log/system.log)" >&2
+    exit 1
+fi
+
 echo "macOS Guest Agent installed."
 echo ""
 echo "IMPORTANT: Set ISA serial mode on the Proxmox VE host:"
