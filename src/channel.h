@@ -43,4 +43,21 @@ int channel_is_open(channel_t *ch);
 /* Get device path */
 const char *channel_get_path(channel_t *ch);
 
+/* v2.5.4 diagnostic (issue #10 hardening per Codex review):
+ * dump per-channel counters via LOG_INFO. Designed to be triggered
+ * from a deferred signal handler (set flag in handler, call from main
+ * loop). Safe to call when ch is NULL. See channel.c for output format. */
+void channel_dump_status(channel_t *ch);
+
+/* Increment the watchdog reconnect counter (called by agent.c watchdog
+ * branch). Decoupled from channel_open/close so EIO-driven reconnects
+ * and watchdog reconnects are accounted separately. */
+void channel_note_reconnect(channel_t *ch);
+
+/* Increment the EIO-driven reconnect counter (called by agent.c when
+ * an EIO from channel_read_message triggers the reconnect ladder).
+ * Split from `reconnects` so the SIGUSR1 dump can distinguish
+ * "watchdog had to step in" from "transient channel error recovered". */
+void channel_note_eio_reconnect(channel_t *ch);
+
 #endif
