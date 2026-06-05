@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <mach-o/dyld.h>   /* _NSGetExecutablePath for self-source flows */
 
 /* Embedded plist data - generated at build time by xxd */
@@ -21,17 +22,34 @@
  * Used by service_install (to self-copy from /tmp to BINARY_PATH when run
  * outside the installed location) and service_upgrade (to use self as the
  * upgrade source when no explicit path is given). v2.5.3+. */
+/* Tiger compatibility: force the UNVERSIONED `_realpath` symbol.
+ *
+ * macOS 10.6 introduced `_realpath$DARWIN_EXTSN` (a Darwin extension that
+ * accepts a NULL second arg and malloc's the result buffer). Apple's
+ * <stdlib.h> on the modern SDK macro-expands plain `realpath()` calls to
+ * this versioned symbol via `__DARWIN_ALIAS_STARTING(__MAC_10_6, ...)`.
+ * Tiger 10.4 libSystem only exports the unversioned `_realpath`, so a
+ * binary compiled against the modern SDK fails at lazy bind time on
+ * Tiger when realpath is first called:
+ *     dyld: lazy symbol binding failed:
+ *           Symbol not found: _realpath$DARWIN_EXTSN
+ * The `__asm("_realpath")` override below forces the symbol reference to
+ * the unversioned variant regardless of what the header macros say. We
+ * always pass a non-NULL second arg, so the EXTSN flavor's NULL-buffer
+ * behavior is irrelevant to us. */
+extern char *realpath_unversioned(const char *restrict, char *restrict)
+    __asm("_realpath");
+
 static int get_self_executable_path(char *out_buf, size_t buf_size)
 {
     char raw[1024];
     uint32_t size = sizeof(raw);
     if (_NSGetExecutablePath(raw, &size) != 0)
         return -1;
-    /* Resolve symlinks and ../-style components. realpath() is safe to call
-     * with a NULL second arg on macOS 10.6+, but allocating a fixed buffer
-     * makes the lifetime clearer. */
+    /* Resolve symlinks and ../-style components. We always pass a real
+     * buffer (never NULL) so the unversioned realpath is sufficient. */
     char resolved[1024];
-    if (realpath(raw, resolved) == NULL) {
+    if (realpath_unversioned(raw, resolved) == NULL) {
         /* realpath failed — fall back to the raw path. Some edge cases
          * (binary deleted while running, weird mount layouts) can hit this
          * but we'd rather use the raw path than fail entirely. */
@@ -705,20 +723,67 @@ int service_install(int dry_run, install_mode_t mode)
         }
         if (strcmp(self_path, BINARY_PATH) != 0) {
             if (dry_run) {
-                printf("DRY RUN: would self-copy %s -> %s\n", self_path, BINARY_PATH);
+                printf("DRY RUN: would lipo-thin %s -> %s (host arch)\n", self_path, BINARY_PATH);
             } else {
                 if (mkdir_p("/usr/local/bin", 0755) != 0 && errno != EEXIST) {
                     fprintf(stderr, "Error: failed to create /usr/local/bin: %s\n", strerror(errno));
                     return 1;
                 }
-                char *const cp_argv[] = { "cp", self_path, BINARY_PATH, NULL };
+                /* v2.5.4+: lipo-thin to host arch instead of cp.
+                 *
+                 * Per @vit9696's suggestion on issue #9: the source binary
+                 * we ship is a tri-fat (i386 + x86_64 + arm64), but only
+                 * one slice is ever used at runtime on any given host.
+                 * Stripping the other two saves ~340 KB on disk in the
+                 * installed location and leaves the running binary
+                 * single-arch (`file` reports a single Mach-O, no fat
+                 * wrapper). Critical on Tiger 10.4 specifically: with
+                 * the fat binary present, dyld walks the entire fat
+                 * header on every exec. The thin install skips that.
+                 *
+                 * Falls back to plain cp if lipo is unavailable (e.g.
+                 * minimal Tiger install without Developer Tools); the
+                 * agent still works fine as a fat binary, just bigger.
+                 *
+                 * `uname -m` returns: arm64 on Apple Silicon, x86_64 on
+                 * Intel 10.5+, i386 on Tiger and (some) Leopard. lipo
+                 * accepts all three as -thin arguments. */
+                int lipo_ok = 0;
+                struct stat lipo_stat;
+                if (stat("/usr/bin/lipo", &lipo_stat) == 0) {
+                    struct utsname uts;
+                    if (uname(&uts) == 0) {
+                        char *const lipo_argv[] = {
+                            "lipo", "-thin", uts.machine,
+                            self_path, "-output", BINARY_PATH, NULL
+                        };
+                        if (run_command_v("lipo", lipo_argv, NULL, NULL) == 0) {
+                            lipo_ok = 1;
+                            printf("Self-installed binary (lipo-thin %s): %s -> %s\n",
+                                   uts.machine, self_path, BINARY_PATH);
+                        } else {
+                            fprintf(stderr,
+                                    "Warning: lipo -thin %s failed (binary may be "
+                                    "single-arch already); falling back to cp\n",
+                                    uts.machine);
+                        }
+                    }
+                }
+                if (!lipo_ok) {
+                    char *const cp_argv[] = { "cp", self_path, BINARY_PATH, NULL };
+                    if (run_command_v("cp", cp_argv, NULL, NULL) != 0) {
+                        fprintf(stderr, "Error: failed to copy %s -> %s\n",
+                                self_path, BINARY_PATH);
+                        return 1;
+                    }
+                    printf("Self-installed binary (cp, fat): %s -> %s\n",
+                           self_path, BINARY_PATH);
+                }
                 char *const chmod_argv[] = { "chmod", "755", BINARY_PATH, NULL };
-                if (run_command_v("cp", cp_argv, NULL, NULL) != 0 ||
-                    run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
-                    fprintf(stderr, "Error: failed to copy %s -> %s\n", self_path, BINARY_PATH);
+                if (run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
+                    fprintf(stderr, "Error: chmod 755 %s failed\n", BINARY_PATH);
                     return 1;
                 }
-                printf("Self-installed binary: %s -> %s\n", self_path, BINARY_PATH);
             }
         } else {
             /* Already at BINARY_PATH; just confirm it still exists. */

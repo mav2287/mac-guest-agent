@@ -12,6 +12,7 @@ SRCS := src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c \
         src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
         src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
         src/util.c src/log.c src/compat.c src/service.c src/selftest.c \
+        src/relauncher.c \
         src/third_party/cJSON.c
 
 INCLUDES := -Isrc -Isrc/third_party
@@ -81,20 +82,99 @@ build-i386: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 
-# x86_64 targeting 10.6+ (LC_UNIXTHREAD via legacy SDK + explicit min-version
-# + ld-classic linker). Xcode 15-16's new ld-prime linker hardcodes LC_MAIN
-# for x86_64 regardless of -mmacosx-version-min; Apple kept the older
-# ld-classic as a fallback that DOES honor the min-flag for entry-point
-# selection. `-Wl,-ld_classic` invokes it. Layered signals (env var + flag
-# + explicit platform_version directive + ld-classic) for belt-and-suspenders.
+# x86_64 targeting 10.5+ (issue #9 fix).
+#
+# v2.5.4 lowered the x86_64 target from 10.6 to 10.5 to fix the legacy-macOS
+# load path. When the XNU kernel reports a 64-bit-capable host (10.5.x
+# natively, or 10.4.11 under OpenCore which patches ml_is64bit()), grade_binary
+# selects the x86_64 slice from our tri-fat. The old min=10.6 build emitted
+# `LC_DYLD_INFO_ONLY` (with the required bit set), which dyld on 10.5.x and
+# below cannot parse — the binary fails to load with
+#     dyld: unknown required load command 0x80000022
+# (see GitHub issue #9). Lowering the target to 10.5 with ld_classic +
+# crt1.10.5.o (shipped with the legacy SDK) causes the linker to fall back to
+# classic LC_SYMTAB / LC_DYSYMTAB binding instead of dyld-info; that load
+# command shape is what every dyld from 10.5 onwards understands.
+#
+# Additionally, CoreFoundation and IOKit are linked as weak frameworks. On
+# 10.4 Tiger those frameworks ship as i386-only, so a strong link from the
+# x86_64 slice would abort the load (`no matching architecture in universal
+# wrapper`). Weak-linking makes their absence non-fatal: dyld leaves the
+# function pointers NULL and continues. The relauncher in src/relauncher.c
+# (called as the first line of main) then detects Darwin < 10 and re-execs
+# the i386 slice via lipo, so we never actually call CF/IOKit through NULL.
+#
+# On 10.6 Snow Leopard onwards, the classic-bind slice still loads fine (dyld
+# kept LC_SYMTAB support), CF/IOKit resolve normally (not NULL), and the
+# relauncher is a no-op. So the same x86_64 slice covers 10.5 through current
+# Intel macOS with no operator-visible change.
+#
+# Compatibility flags for the x86_64 slice when running on Tiger 10.4:
+#
+# -mmacosx-version-min=10.4:
+#   Tiger 10.4's libSystem.B.dylib x86_64 slice (yes, Tiger 10.4.7+ ships
+#   an x86_64 libSystem) exports UNVERSIONED symbol names — e.g. `_select`,
+#   `_realpath`. Building with -mmacosx-version-min=10.5 makes the
+#   Darwin headers macroexpand POSIX function calls into VERSIONED variants
+#   (`_select$1050`, `_realpath$DARWIN_EXTSN`) that only exist in 10.5+
+#   libSystem. On Tiger those symbols don't exist; dyld bind fails before
+#   main() runs and the process SIGSEGVs in startup. Targeting 10.4
+#   suppresses the version suffix and emits references that resolve
+#   against Tiger's libSystem cleanly.
+#
+# -D_FORTIFY_SOURCE=0:
+#   Disables the _FORTIFY_SOURCE compile-time function variants
+#   (`___memcpy_chk`, `___sprintf_chk`, etc.). These were added in 10.5
+#   libSystem; Tiger has none of them. Clang at -O2 enables FORTIFY by
+#   default on modern toolchains even when targeting older platforms.
+#
+# -fno-stack-protector:
+#   Disables `-fstack-protector`, which emits an undefined reference to
+#   `___stack_chk_guard`. That symbol was added to libSystem in 10.5;
+#   Tiger doesn't export it. (Belt-and-suspenders — with min=10.4 clang
+#   already auto-disables stack protector — but explicit is safer for
+#   defensive maintenance.)
+#
+# -Wl,-platform_version,macos,10.4,10.13:
+#   Mirrors -mmacosx-version-min=10.4 at the linker layer. The 10.13
+#   second arg is the SDK version. Stamps LC_VERSION_MIN_MACOSX with
+#   the correct 10.4 minimum so dyld doesn't gate-check us higher.
+#
+# -Wl,-ld_classic:
+#   Forces classic LC_SYMTAB / LC_DYSYMTAB symbol-table binding instead
+#   of LC_DYLD_INFO_ONLY. Tiger and Leopard's dyld (<10.5/10.6 vintage)
+#   cannot parse LC_DYLD_INFO_ONLY and abort with
+#       dyld: unknown required load command 0x80000022
+#   This is the original issue #9 trigger.
+#
+# -Wl,-weak_framework,CoreFoundation -Wl,-weak_framework,IOKit:
+#   Tiger 10.4 ships CF/IOKit as i386-only. The x86_64 slice's strong
+#   references would abort the load with "no matching architecture in
+#   universal wrapper." Weak-linking makes them resolve to NULL at load
+#   time; functions that actually call CF/IOKit must guard against NULL
+#   pointers (or be on the relauncher's i386 fallback path).
+#
+# Defense in depth: the relauncher in src/relauncher.c executes as a
+# constructor + first thing in main(). On Tiger it tries to extract and
+# re-exec the i386 slice via `lipo`. If that succeeds, the full-featured
+# i386 agent takes over. If lipo is missing (no Developer Tools installed)
+# or i386 slice extraction fails, the x86_64 slice continues — with the
+# compatibility flags above, the x86_64 agent itself runs natively on
+# Tiger to the extent that it doesn't need CF/IOKit (sysctl-backed code
+# paths work; weak NULL pointers must be guarded by the caller).
+#
+# On 10.6 Snow Leopard onwards, the x86_64 slice runs normally as the
+# real agent; the relauncher detects Darwin >= 10 and returns as a no-op.
 build-x86_64: plist-header
-	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.6+, LC_UNIXTHREAD via ld-classic + legacy SDK)..."
+	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.4+, Tiger-compatible classic bind + weak frameworks + relauncher)..."
 	@if [ ! -d "$(LEGACY_SDK)" ]; then echo "Error: legacy SDK not found at $(LEGACY_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
-	MACOSX_DEPLOYMENT_TARGET=10.6 $(CC) $(CFLAGS) -mmacosx-version-min=10.6 \
+	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) $(CFLAGS) -mmacosx-version-min=10.4 \
+		-fno-stack-protector -D_FORTIFY_SOURCE=0 \
 		-Wno-deprecated-declarations $(INCLUDES) -arch x86_64 -isysroot $(LEGACY_SDK) \
-		-Wl,-ld_classic -Wl,-platform_version,macos,10.6,10.13 \
-		-o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(SRCS) $(LDFLAGS)
+		-Wl,-ld_classic -Wl,-platform_version,macos,10.4,10.13 \
+		-Wl,-weak_framework,CoreFoundation -Wl,-weak_framework,IOKit \
+		-o $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64 $(SRCS)
 	@echo "x86_64 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-x86_64"
 
 # arm64 targeting 11.0+

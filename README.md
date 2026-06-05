@@ -23,11 +23,23 @@ qm stop <vmid> && sleep 5 && qm start <vmid>
 # transfer the file (scp / shared folder / USB).
 curl -fLO https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
 
-# Install
+# Install — thin to host arch with lipo, then install
+# (saves ~340 KB on disk vs the fat binary; per @vit9696's suggestion in
+# issue #9. The download stays fat so one URL covers every host.)
+sudo lipo -thin "$(uname -m)" mac-guest-agent -output /usr/local/bin/mac-guest-agent
+sudo chmod +x /usr/local/bin/mac-guest-agent
+sudo /usr/local/bin/mac-guest-agent --install
+```
+
+If you'd rather keep the fat binary on disk (e.g. for testing the relauncher
+path on Tiger 10.4 explicitly), the original `mv` recipe still works:
+```bash
 sudo mv mac-guest-agent /usr/local/bin/
 sudo chmod +x /usr/local/bin/mac-guest-agent
 sudo /usr/local/bin/mac-guest-agent --install
 ```
+The agent is byte-for-byte identical at runtime either way — the lipo-thin
+version just doesn't keep the slices your kernel will never choose.
 
 Or use the bootstrap wrapper (does the same thing, plus VirtIO override and upgrade orchestration):
 ```bash

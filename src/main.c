@@ -3,6 +3,7 @@
 #include "commands.h"
 #include "compat.h"
 #include "log.h"
+#include "relauncher.h"
 #include "selftest.h"
 #include "service.h"
 #include "util.h"
@@ -64,9 +65,28 @@ typedef struct {
 static agent_t *g_agent = NULL;
 static volatile sig_atomic_t g_stop_requested = 0;
 
+/* v2.5.4 diagnostic (issue #10 hardening per Codex review): set by SIGUSR1
+ * handler, polled by the agent main loop. The actual `channel_dump_status`
+ * call happens from main-loop context (not the handler) so it can safely
+ * use stdio/syslog/file I/O — none of which are async-signal-safe.
+ *
+ * Usage from PVE host or inside Tiger:
+ *     sudo kill -USR1 $(pgrep mac-guest-agent)
+ * Agent log gets a one-line dump like:
+ *     channel_status fd=5 open=1 select=1200/1198/2 read=84/12 msgs=2 ...
+ * If `kill -USR1` produces NO output and `sample <pid>` shows the agent
+ * stuck in `select`, that's real syscall-level blockage (a bug in Tiger's
+ * BSD serial driver, not in our code). If the dump DOES appear, the
+ * process is alive and looping — the counters tell you which stage of
+ * the read pipeline is stalled. */
+volatile sig_atomic_t g_dump_status_requested = 0;
+
 static void signal_handler(int sig)
 {
-    (void)sig;
+    if (sig == SIGUSR1) {
+        g_dump_status_requested = 1;
+        return;
+    }
     g_stop_requested = 1;
 }
 
@@ -294,6 +314,12 @@ static struct option long_options[] = {
 
 int main(int argc, char *argv[])
 {
+    /* First-thing-in-main: on x86_64 + Darwin < 10 (pre-10.6 Snow Leopard),
+     * re-exec the i386 slice. No-op on i386, arm64, and 10.6+. See
+     * src/relauncher.c for the full rationale. Must be before anything
+     * that touches CoreFoundation/IOKit (weak-linked, NULL on Tiger). */
+    relaunch_as_i386_if_legacy_macos(argc, argv);
+
     config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.config_path = DEFAULT_CONFIG_PATH;
@@ -439,6 +465,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGUSR1, signal_handler);  /* on-demand channel status dump */
 
     int rc = agent_run(g_agent, &g_stop_requested);
 
