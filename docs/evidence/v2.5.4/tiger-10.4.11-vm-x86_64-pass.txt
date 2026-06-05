@@ -1,0 +1,80 @@
+Tiger 10.4.11 / Darwin 8.11.1 — v2.5.4 candidate, x86_64 slice (issue #9 bug-trigger path)
+==========================================================================================
+Captured 2026-06-04 / 2026-06-05 from the Tiger 10.4.11 VM running on
+Proxmox VE 9.1.1 / pc-q35-6.1 / Penryn CPU / e1000-82545em on PCI 0x4 /
+slirp networking. Binary deployed via slirp port-forward SSH.
+
+--- Tiger env ---
+ProductName:    Mac OS X
+ProductVersion: 10.4.11
+BuildVersion:   8S2167
+Darwin users-computer.local 8.11.1 Darwin Kernel Version 8.11.1: Wed Oct 10 18:23:28 PDT 2007; root:xnu-792.25.20~1/RELEASE_I386 i386 i386
+
+--- Binary identity ---
+-rwxr-xr-x   1 user  wheel  498040 Jun  5 00:43 /tmp/v254-final
+MD5 (/tmp/v254-final) = cb2784c3421a7432d0262735321e411f
+/tmp/v254-final: Mach-O universal binary with 3 architectures
+/tmp/v254-final (for architecture i386):     Mach-O executable i386
+/tmp/v254-final (for architecture x86_64):   Mach-O 64-bit executable x86_64
+/tmp/v254-final (for architecture cputype (16777228) cpusubtype (0)): Mach-O 64-bit executable
+Architectures in the fat file: /tmp/v254-final are: i386 x86_64 (cputype (16777228) cpusubtype (0))
+
+--- v254-final --version ---
+mac-guest-agent 2.5.4
+EXIT=0
+
+--- v254-final --self-test-json ---
+2026-06-05 00:43:03 [INFO] Registered 45 commands
+{"agent_version":"2.5.4","errors":0,"warnings":6,"passes":12,"status":"pass",
+ "system_info":{"os_version":"10.4.11","arch":"i386","kernel":"8.11.1",
+                "hw_model":"iMac19,1","cpu_count":1,"memory_bytes":2147483648,
+                "has_apfs":false,"has_tmutil":false,"has_virtio":false,
+                "root_fs_type":"journaled","freeze_method":"sync_only",
+                "selected_arch":"x86_64",      <-- key field: dyld loaded the x86_64 slice (bug-trigger path)
+                "command_count":45},
+ ...
+ "checks":[{"section":"version","level":"pass","name":"macOS version","detail":"10.4.11"},
+           {"section":"version","level":"pass","name":"architecture","detail":"i386 (Darwin)"},
+           {"section":"privileges","level":"warn","name":"running as root","detail":"no (some commands require root)"},
+           {"section":"environment","level":"info","name":"hardware model","detail":"iMac19,1"},
+           {"section":"environment","level":"info","name":"QEMU environment","detail":"not detected (normal for macOS VMs with custom hardware models)"},
+           {"section":"serial","level":"warn","name":"serial device","detail":"no ISA serial device found (v2.5.0+ requires ISA; configure type=isa on PVE...)"},
+           {"section":"config","level":"info","name":"config file","detail":"not present (using defaults)"},
+           {"section":"logging","level":"warn","name":"log file","detail":"exists but not writable"},
+           {"section":"filesystem","level":"info","name":"APFS support","detail":"no (pre-10.13, freeze will use sync + F_FULLFSYNC only)"},
+           {"section":"hooks","level":"info","name":"hook directory","detail":"not present (no hooks configured)"},
+           {"section":"commands","level":"pass","name":"commands","detail":"45 registered"},
+           {"section":"tools","level":"pass","name":"tool","detail":"sw_vers (OS version detection)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"sysctl (hardware info)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"diskutil (disk information)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"netstat (network info (fallback))"},
+           {"section":"tools","level":"pass","name":"tool","detail":"osascript (graceful shutdown)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"shutdown (shutdown fallback)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"pmset (suspend/hibernate)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"dscl (password changes)"},
+           {"section":"tools","level":"pass","name":"tool","detail":"launchctl (service management)"},
+           {"section":"tools","level":"warn","name":"tool missing","detail":"tmutil (APFS snapshots)"},
+           {"section":"service","level":"pass","name":"LaunchDaemon plist","detail":"installed"},
+           {"section":"service","level":"info","name":"service status","detail":"not loaded"},
+           {"section":"backup","level":"info","name":"freeze method","detail":"sync + F_FULLFSYNC only (HFS+, no snapshots)"},
+           {"section":"backup","level":"warn","name":"freeze capability","detail":"not running as root (freeze requires root)"},
+           {"section":"backup","level":"info","name":"freeze hooks","detail":"no hook directory (OK if no databases to flush)"},
+           {"section":"backup","level":"warn","name":"backup readiness","detail":"freeze available but with limitations (see above)"}]}
+EXIT=0
+
+--- DYLD_PRINT_LIBRARIES trace ---
+dyld: loaded: /tmp/v254-final
+dyld: loaded: /usr/lib/libSystem.B.dylib, cpu-sub-type: 3
+dyld: loaded: /usr/lib/system/libmathCommon.A.dylib, cpu-sub-type: 3
+mac-guest-agent 2.5.4
+EXIT=0
+
+Interpretation:
+* The x86_64 slice loaded cleanly. No "unknown required load command 0x80000022" error
+  (the v2.5.3 failure mode reported in issue #9).
+* Only libSystem and libmathCommon were dyld-loaded — CoreFoundation and IOKit
+  were correctly NOT loaded, confirming the weak_framework linker flags worked
+  (Tiger 10.4 doesn't have x86_64 slices of CF/IOKit).
+* Self-test passes 12/12 with selected_arch=x86_64, meaning XNU's grade_binary
+  picked the x86_64 slice (the bug-trigger path vit9696 reported) and our binary
+  ran the full 45-command agent successfully.

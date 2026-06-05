@@ -1,0 +1,54 @@
+Real iMac5,1 — Tiger 10.4.5 / Darwin 8.5.3 — v2.5.4 candidate, i386 slice
+=========================================================================
+Captured 2026-06-04 from a real Late-2006 iMac5,1 (Intel Core 2 Duo T7200,
+4 GB RAM) running Mac OS X 10.4.5 stock install. Test harness:
+`SSHPASS=password /tmp/tiger-test/run-capture.sh user@192.168.33.5 build/mac-guest-agent-universal v254-final-2`
+
+Hardware confirms this is real (not virtualized): hw_model=iMac5,1, cpu_count=2,
+4 GB RAM, /dev/disk0 with multiple HFS+ partitions including a separate "Leopard"
+volume — a real dual-boot dev machine.
+
+--- Tiger env ---
+ProductName:    Mac OS X
+ProductVersion: 10.4.5
+BuildVersion:   8H1619
+Darwin users-computer.local 8.5.3 Darwin Kernel Version 8.5.3: Fri Feb 17 15:59:40 PST 2006; root:xnu-792.9.11.obj~1/RELEASE_I386 i386 i386
+Hardware: iMac5,1 (Intel Core 2 Duo T7200 @ 2.00 GHz, 4 GB RAM)
+
+--- Run: bare exec (no args) ---
+2026-06-04 23:11:19 [INFO] macOS Guest Agent v2.5.4 starting...
+exit: 1  <-- expected (no daemonize flag, no test mode, no ISA serial → exits with usage error)
+
+--- Run: --version ---
+mac-guest-agent 2.5.4
+exit: 0
+
+--- Run: --self-test-json (truncated) ---
+{"agent_version":"2.5.4","errors":0,"warnings":6,"passes":13,"status":"pass",
+ "system_info":{"os_version":"10.4.5","arch":"i386","kernel":"8.5.3",
+                "hw_model":"iMac5,1","cpu_count":2,"memory_bytes":4294967296,
+                "has_apfs":false,"has_tmutil":false,"has_virtio":false,
+                "root_fs_type":"journaled","freeze_method":"sync_only",
+                "selected_arch":"i386",       <-- key: 10.4.5 picks the i386 slice
+                "command_count":45},
+ ...
+ "checks":[{"section":"version","level":"pass","name":"macOS version","detail":"10.4.5"},
+           {"section":"version","level":"pass","name":"architecture","detail":"i386 (Darwin)"},
+           ...
+           {"section":"service","level":"pass","name":"LaunchDaemon plist","detail":"installed"}
+          ]}
+exit: 0
+
+Interpretation:
+* Real iMac5,1 hardware picks the i386 slice. selected_arch=i386 in self-test
+  confirms this from the compile-time __i386__ macro.
+* Why i386 and not x86_64 despite EM64T-capable Core 2 Duo? Tiger 10.4.5 PREDATES
+  the addition of x86_64 USERLAND support (added in 10.4.7). With no x86_64
+  userland infrastructure, XNU's grade_binary scores x86_64=0 and falls through
+  to i386. The bug-trigger path is unreachable on 10.4.5.
+* Self-test passes 13/13. The i386 slice is unchanged in v2.5.4 from prior
+  versions; v2.5.4 fixes don't touch the i386 build line (no relauncher needed,
+  no weak frameworks, default 10.4 deployment).
+* Confirms v2.5.4 is REGRESSION-FREE on real Tiger Intel hardware that doesn't
+  trigger the bug-trigger code path. Real hardware vs. emulated CPU is a
+  meaningful distinction here — proves the fix isn't an emulation artifact.

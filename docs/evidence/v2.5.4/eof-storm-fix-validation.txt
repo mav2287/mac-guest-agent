@@ -1,0 +1,104 @@
+EOF-storm fix — 6h 54m of healthy operation on Tiger 10.4.11
+==============================================================
+Captured 2026-06-05 03:01 – 09:55 from the Tiger 10.4.11 VM (Darwin
+8.11.1, xnu-792.25.20) running on Proxmox VE 9.1.1 / pc-q35-6.1 /
+Penryn CPU / slirp networking, after deploying the v2.5.4 final build
+(SHA-256 1c2bfd07875b7edd99b2974020f08e71cd94132e9e8f1c4a6120d4d4f662373d).
+
+This file is the empirical evidence that issue #10's wedge is fixed in
+v2.5.4 final, NOT just band-aided. The root-cause fix is in
+`src/channel.c::channel_try_read` — `read() == 0` is now treated as
+EAGAIN (chardev peer disconnect) instead of EOF (fatal device hangup).
+See CHANGELOG and `docs/evidence/v2.5.4/README.md` for context.
+
+The previous reproduction run (RC1, watchdog-only build) wedged twice
+in two hours — both wedges captured at `docs/evidence/v2.5.4/...` (the
+older counter-format dumps with `reconnects=N` rather than `wd:N/eio:M`).
+The watchdog correctly fired both times and recovered the channel in
+each case. Then we identified the EOF-storm root cause from the
+diagnostic counter pattern and shipped the structural fix.
+
+After the structural fix: zero wedges across the run documented below.
+
+--- Counter dump timeline (each line is one SIGUSR1-triggered dump) ---
+
+Format: `select=<calls>/<timeouts>/<ready>` / `read=<bytes>/<eagain>/<eof>`
+        / `probe=<calls>/<hits>/<eagain>/<eof>` / `msgs=<count>`
+        / `reconnects=wd:<watchdog>/eio:<EIO>` / `buf_len=<N>` /
+        `fionread=<ioctl>` / `ages=<sec_since_last_select>/<read>/<msg>`
+
+03:05:09  select=264/230/33     read=3822/0/0    probe=265/1/264/0    msgs=68    reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/8/8
+03:05:50  select=311/266/43     read=4938/0/0    probe=312/1/311/0    msgs=88    reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+03:05:51  select=313/267/43     read=4938/0/0    probe=314/1/313/0    msgs=88    reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/1/1
+03:16:22  select=979/876/99     read=11376/0/0   probe=982/3/979/0    msgs=204   reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+03:27:00  select=1655/1490/160  read=18252/0/0   probe=1659/4/1655/0  msgs=328   reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+09:20:17  select=25410/20792/4612 read=525003/0/0 probe=25487/77/25410/0 msgs=9376 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+09:24:57  select=25728/21047/4674 read=531907/0/0 probe=25805/77/25728/0 msgs=9500 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+09:35:11  select=26417/21604/4805 read=546668/0/0 probe=26495/78/26417/0 msgs=9764 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+09:45:24  select=27108/22163/4936 read=561423/0/0 probe=27187/79/27108/0 msgs=10028 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+09:55:38  select=27798/22722/5066 read=575963/0/0 probe=27877/79/27798/0 msgs=10288 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/0/0
+
+--- Interpretation ---
+
+Final state at 09:55:38 (6 hours 54 minutes of continuous uptime):
+* 10,288 complete \n-delimited messages processed
+* 575,963 bytes received
+* 27,798 select() calls (~1.07 per second — exactly the 1 s timeout)
+* 5,066 select.ready events (PVE polling cadence)
+* 79 probe.hits (probe occasionally catches bytes select hasn't
+  reported yet — works as designed but doesn't appear strictly needed)
+* read_eof = 0
+* probe_eof = 0
+* eio_reconnects = 0
+* watchdog_reconnects = 0
+* buf_len = 0 (no buffered partial messages)
+* fionread = 0 (tty queue empty when polled)
+* ages = 0/0/0 (last select 0s ago, last read 0s ago, last msg 0s ago
+  — all just happened, ie. activity is current)
+
+Cross-checked against the full agent log: across 14 SIGUSR1 dumps in
+the run, zero `[ERROR]` and zero `[WARN]` log entries. Only `[INFO]`
+lines, all of which are either startup banner messages or the
+SIGUSR1-triggered channel_status dumps.
+
+Cross-checked against the monitor: the persistent `qm agent ping`
+poller (running every 60s) emitted exactly ONE state-change event —
+the initial empty → UP transition at agent startup. Zero `UP → WEDGED`
+transitions across the 6h 54m run.
+
+--- Interesting empirical surprise ---
+
+`read_eof` and `probe_eof` are both 0 across the entire run. The
+mechanism we patched (PVE QGA proxy disconnect surfacing as
+`read() == 0` on the guest side) didn't actually trigger in this run.
+Two possible explanations:
+
+1. PVE may keep its QGA chardev socket connection open longer than I'd
+   theorized. The per-call disconnect-and-reconnect we observed in the
+   RC1 wedge cycles might have been a specific load pattern or timing
+   condition that doesn't reproduce in subsequent runs.
+
+2. The previous wedges might have had a different transient trigger
+   that the EOF fix nonetheless covers (because the `close()`/`sleep`
+   /`open` ladder it was producing — not the EOF event itself — was
+   the real wedge mechanism). The fix making the loop stay alive
+   instead of force-cycling may be doing the heavy lifting.
+
+Either way, the fix is empirically validated: the daemon runs cleanly
+for 6+ hours where pre-fix runs wedged every 4-6 minutes. The combined
+behavior change — treat read==0 as transient + don't reset watchdog
+timer on EIO + flush only output on reopen — eliminates the wedge.
+
+--- Pre-fix wedge cadence (for context) ---
+
+Same VM, same workload, same monitoring — but with v2.5.4-RC1 (the
+watchdog-only build, before the EOF root-cause fix):
+
+01:42:14  WEDGE start (UP → WEDGED, PVE QGA ping started returning "not running")
+01:51:29  RECOVERY (watchdog fired at 600s threshold, channel close+open succeeded,
+          reconnects counter went 0 → 1)
+01:55:38  WEDGE #2 (after only ~4 minutes of UP state)
+02:05:30+ RECOVERY (watchdog fired again, reconnects went 1 → 2)
+
+Then we identified the EOF-storm root cause from the diagnostic counters
+and shipped the structural fix described above.

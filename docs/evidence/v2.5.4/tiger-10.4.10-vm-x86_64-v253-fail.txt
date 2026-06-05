@@ -1,0 +1,55 @@
+Tiger 10.4.10 / Darwin 8.10.3 — shipped v2.5.3, x86_64 slice — issue #9 REPRODUCTION
+====================================================================================
+Captured 2026-06-04 from the same Tiger 10.4.10 VM that successfully ran v2.5.4 a
+few minutes later. The two binaries differ only in the patches that ship in v2.5.4 —
+both are tri-fat with i386 + x86_64 + arm64. XNU picks the x86_64 slice on this
+EM64T-capable VM, hitting the bug-trigger path.
+
+--- Binary identity (the actual shipped v2.5.3 GitHub release artifact) ---
+$ shasum -a 256 /tmp/v253-broken
+7f054024c8f31319a3e22d49680f6e08fc4c893aad2cbff1cd08c1dddd1cca0d  /tmp/v253-broken
+$ file /tmp/v253-broken
+/tmp/v253-broken: Mach-O universal binary with 3 architectures
+/tmp/v253-broken (for architecture i386):   Mach-O executable i386
+/tmp/v253-broken (for architecture x86_64): Mach-O 64-bit executable x86_64
+/tmp/v253-broken (for architecture cputype (16777228) cpusubtype (0)): Mach-O 64-bit executable
+
+--- x86_64 slice load command shape (the actual problem) ---
+$ otool -lv -arch x86_64 /tmp/v253-broken | grep '^\s*cmd ' | sort | uniq -c
+   1 LC_DATA_IN_CODE
+   1 LC_DYLD_INFO_ONLY     <-- THE CULPRIT: Tiger dyld can't parse this load command
+   1 LC_DYSYMTAB
+   1 LC_FUNCTION_STARTS
+   3 LC_LOAD_DYLIB
+   1 LC_LOAD_DYLINKER
+   4 LC_SEGMENT_64
+   1 LC_SYMTAB
+   1 LC_UNIXTHREAD
+   1 LC_UUID
+   1 LC_VERSION_MIN_MACOSX
+$ otool -lv -arch x86_64 /tmp/v253-broken | grep -A2 VERSION_MIN_MACOSX
+      cmd LC_VERSION_MIN_MACOSX
+  cmdsize 16
+  version 10.6                  <-- targeted 10.6+, too high for Tiger
+      sdk 10.13
+
+--- Run on Tiger 10.4.10 ---
+$ /tmp/v253-broken --version
+dyld: unknown required load command 0x80000022    <-- 0x80000022 == LC_DYLD_INFO_ONLY
+EXIT=133                                          <-- SIGTRAP, dyld aborted before main()
+
+$ /tmp/v253-broken --self-test-json
+dyld: unknown required load command 0x80000022
+EXIT=0                                            <-- exit code from outer eval, not the process
+
+Interpretation:
+* This is exactly the failure vit9696 reported in issue #9. Tiger's 2007-vintage
+  dyld doesn't understand LC_DYLD_INFO_ONLY (load command bit pattern 0x80000022).
+* XNU's grade_binary on this EM64T-capable VM CPU grades the x86_64 slice higher
+  than i386, so dyld is invoked on x86_64 — and dies before main() can run.
+* The same shipped v2.5.3 ran fine on real Tiger 10.4.5 (separate file in this
+  directory): 10.4.5 predates x86_64 userland, so XNU grades x86_64=0 and picks i386,
+  avoiding the bug-trigger path entirely.
+
+This file is the empirical reproduction of issue #9 against the actual shipped
+v2.5.3 release artifact, used as the control for the v2.5.4 fix validation.

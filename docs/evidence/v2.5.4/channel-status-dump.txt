@@ -1,0 +1,84 @@
+SIGUSR1 channel-status dump — Tiger 10.4.11, v2.5.4 (issue #10 diagnostic)
+==========================================================================
+Captured 2026-06-05 from the Tiger 10.4.11 VM with the v2.5.4 hardened
+build installed and running as a LaunchDaemon. The channel-status dump
+is a new diagnostic tool added in v2.5.4 per Codex review's
+recommendation (Codex was prompted with the full issue #10 description
+and our initial watchdog patch; it called out four blind spots that this
+dump helps diagnose).
+
+Triggered via: `sudo kill -USR1 <agent_pid>`. The daemon's SIGUSR1
+handler sets a `volatile sig_atomic_t` flag that the main loop polls,
+then calls `channel_dump_status()` from main-loop context (signal-safe).
+
+--- Format ---
+channel_status fd=<fd> open=<0|1> test=<0|1>
+               select=<calls>/<timeouts>/<ready>
+               read=<bytes>/<eagain_count>
+               msgs=<complete_lines_extracted>
+               reconnects=<watchdog_or_EIO_reconnect_count>
+               buf_len=<bytes_in_buffer_awaiting_newline>
+               ages=<sec_since_last_select_return>/
+                    <sec_since_last_successful_read>/
+                    <sec_since_last_complete_message>
+
+--- Snapshot 1: shortly after daemon start ---
+$ sudo kill -USR1 482 ; sleep 1 ; sudo tail -3 /var/log/mac-guest-agent.log
+2026-06-05 01:30:17 [INFO] channel_status fd=5 open=1 test=0 \
+                            select=46/35/10 read=1056/0 msgs=20 reconnects=0 \
+                            buf_len=0 ages=0/5/5
+
+--- Snapshot 2: ~4 seconds later, after one explicit qm agent ping from host ---
+$ qm agent 111 ping        # from PVE host
+$ sudo kill -USR1 482 ; sleep 1 ; sudo tail -3 /var/log/mac-guest-agent.log
+2026-06-05 01:30:21 [INFO] channel_status fd=5 open=1 test=0 \
+                            select=53/37/14 read=1488/0 msgs=28 reconnects=0 \
+                            buf_len=0 ages=0/0/0
+
+--- Snapshot 3: ~6 minutes later (long-run monitor first dump) ---
+2026-06-05 01:36:29 [INFO] channel_status fd=5 open=1 test=0 \
+                            select=509/386/120 read=13126/0 msgs=240 reconnects=0 \
+                            buf_len=0 ages=0/0/0
+
+--- Snapshot 4: ~30 seconds after snapshot 3 (immediately after another ping) ---
+2026-06-05 01:37:01 [INFO] channel_status fd=5 open=1 test=0 \
+                            select=549/416/128 read=14010/0 msgs=256 reconnects=0 \
+                            buf_len=0 ages=0/0/0
+
+--- Reading the dump ---
+* read=14010/0 — 0 EAGAINs from read() despite the fd being O_NONBLOCK.
+  This proves the nonblocking change (Codex hardening #1) doesn't introduce
+  spurious EAGAIN spinning in healthy operation — read() only ever returns
+  data when select() reported readiness, as expected.
+* reconnects=0 — the watchdog has NOT fired. Either the bug doesn't manifest
+  in this environment, or the elapsed uptime (so far) hasn't reached
+  the 600-second idle threshold.
+* buf_len=0 — no partial messages stuck in the buffer.
+* select counters (calls/timeouts/ready) climb linearly with time. The
+  "ready" delta correlates with PVE-host ping frequency.
+* msgs counter climbs by 4-8 per ping (one ping involves multiple JSON
+  messages: a sync-delimited handshake, the actual command, the response).
+
+--- Diagnostic value if vit9696 reports another wedge on v2.5.4 ---
+Per his sample output showing pid 43 stuck in `select`, we'd ask him to:
+  sudo kill -USR1 $(pgrep mac-guest-agent || launchctl list com.macos.guest-agent | awk '/^[0-9]/ {print $1}')
+Then tail the log. Three possible outcomes:
+
+  1. NO channel_status line appears AND `sample <pid>` still shows
+     `select`. → Process is in an uninterruptible syscall — true kernel-side
+     blockage. (No userland fix can recover; would need a kernel-level
+     thread/process watchdog or a fix in Tiger's BSD serial driver itself.)
+  2. channel_status line appears with `select=<calls>/<timeouts>/<ready>`
+     where `calls` is FROZEN at the same value as a prior snapshot. → Tiger's
+     BSD serial driver is blocking select() at the kernel level (rare; we
+     haven't seen it in this session).
+  3. channel_status line appears, `select.calls` advances normally, but
+     `read.bytes` is frozen and `select.timeouts >> select.ready`. → The
+     classic "select doesn't wake on incoming data" failure mode the
+     watchdog is designed to recover from. We'd expect a `[WARN] No
+     message received in 600 seconds` log line within 10 minutes of this
+     dump and a `reconnects` counter increment.
+
+This three-way split is the empirical answer to "is this our bug or
+PVE's QGA proxy?" — which Codex correctly called out as undetermined
+from the v2.5.3 evidence vit9696 provided.

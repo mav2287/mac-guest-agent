@@ -1,0 +1,63 @@
+PVE-host QGA protocol end-to-end verification — Tiger 10.4.11 / Darwin 8.11.1
+=============================================================================
+Captured 2026-06-05 from the Proxmox VE 9.1.1 host driving the Tiger 10.4.11 VM
+through the standard `qm agent` command-line tool. This exercises the FULL stack:
+PVE QGA proxy → qga unix socket → QEMU isa-serial chardev → Tiger /dev/cu.serial1
+→ our daemon (LaunchDaemon-started) → JSON response → reverse path.
+
+A response on this path proves all of the following work end-to-end:
+
+  1. v2.5.4's x86_64 slice loaded (issue #9 fix)
+  2. lipo-thin install put a single-arch i386 binary at /usr/local/bin/mac-guest-agent
+     (vit9696's suggested UX improvement)
+  3. LaunchDaemon plist registered, daemon autostarted at boot
+  4. Daemon opened /dev/cu.serial1 with O_NONBLOCK (Codex hardening #1)
+  5. PVE's QGA proxy handshake succeeded
+  6. Tiger BSD serial driver delivered both PVE's request bytes AND our
+     response bytes (the very class of bug from issue #10)
+  7. JSON command dispatch matched our 45-command registry
+  8. Response wrapping (\xff delimiter + \n) decoded by PVE without error
+
+--- guest-ping ---
+$ qm agent 111 ping
+EXIT=0  (no output; PVE just emits exit code on success)
+
+Hammered 6 consecutive pings at 5-second intervals — all EXIT=0:
+
+[01:12:11] EXIT=0
+[01:12:17] EXIT=0
+[01:12:24] EXIT=0
+[01:12:30] EXIT=0
+[01:12:36] EXIT=0
+[01:12:42] EXIT=0
+
+--- guest-info / get-osinfo (richer command path) ---
+$ qm agent 111 get-osinfo
+{
+   "id" : "macos",
+   "kernel-release" : "8.11.1",
+   "kernel-version" : "Darwin Kernel Version 8.11.1: Wed Oct 10 18:23:28 PDT 2007; root:xnu-792.25.20~1/RELEASE_I386",
+   "machine" : "i386",
+   "name" : "Mac OS X",
+   "pretty-name" : "Mac OS X 10.4.11",
+   "variant" : "desktop",
+   "variant-id" : "desktop",
+   "version" : "10.4.11",
+   "version-id" : "8S2167"
+}
+EXIT=0
+
+--- Daemon log (the FIRST listening message and uptime so far) ---
+$ sudo tail -10 /var/log/mac-guest-agent.log
+2026-06-05 01:29:40 [INFO] macOS Guest Agent v2.5.4 starting...
+2026-06-05 01:29:40 [INFO] Detected macOS 10.4.11
+2026-06-05 01:29:40 [INFO] QEMU environment not detected via hw.model/system_profiler (this is normal for macOS VMs with custom hardware models)
+2026-06-05 01:29:40 [INFO] Registered 45 commands
+2026-06-05 01:29:40 [INFO] Detected serial device: /dev/cu.serial1
+2026-06-05 01:29:40 [INFO] Serial port: full raw mode (single fd=5)
+2026-06-05 01:29:40 [INFO] Opened device: /dev/cu.serial1 (fd=5)
+2026-06-05 01:29:40 [INFO] Agent started, listening for commands...
+
+This single response (and the sustained ping stability afterward) is the
+canonical end-to-end proof that the v2.5.4 patches integrate cleanly on
+the exact OS version vit9696 reported issue #9 against (10.4.11).

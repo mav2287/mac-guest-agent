@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.5.3
+VERSION := 2.5.4
 BUILD_DIR := build
 DIST_DIR := dist
 

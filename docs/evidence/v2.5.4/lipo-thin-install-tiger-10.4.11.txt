@@ -1,0 +1,84 @@
+lipo-thin install demonstration — Tiger 10.4.11 (vit9696's issue #9 last comment)
+=================================================================================
+Captured 2026-06-05 on the Tiger 10.4.11 VM. Demonstrates the
+behaviour added in v2.5.4 per vit9696's separate suggestion on
+issue #9 (`"one could probably replace mv command with lipo. I.e.
+sudo lipo -thin $(uname -m) mac-guest-agent -output /usr/local/bin/mac-guest-agent
+... On a positive side that would also slightly reduce the amount of space
+used by the guest agent."`).
+
+The behaviour is implemented inside the binary's own --install path
+(`src/service.c::service_install`) rather than in the README install
+recipe alone. This means the size-savings apply regardless of which
+recipe the operator uses — direct binary invocation, the README mv flow,
+or the install.sh bootstrap wrapper. The agent self-thins at install
+time. Falls back to plain cp if /usr/bin/lipo is missing for any reason.
+
+The README and `scripts/install.sh` are updated separately to suggest
+the lipo-thin recipe directly for operators who want a single visible step.
+
+--- Pre-install — source binary is universal fat (498 KB) ---
+$ ls -la /tmp/v254-hardened
+-rwxr-xr-x   1 user  wheel  498216 Jun  5 01:28 /tmp/v254-hardened
+$ file /tmp/v254-hardened
+/tmp/v254-hardened: Mach-O universal binary with 3 architectures
+/tmp/v254-hardened (for architecture i386):     Mach-O executable i386
+/tmp/v254-hardened (for architecture x86_64):   Mach-O 64-bit executable x86_64
+/tmp/v254-hardened (for architecture cputype (16777228) cpusubtype (0)): Mach-O 64-bit executable
+
+--- Install ---
+$ sudo /tmp/v254-hardened --install
+Self-installed binary (lipo-thin i386): /private/tmp/v254-hardened -> /usr/local/bin/mac-guest-agent
+                ^^^^^^^^^^^^^^^^^^^^^^^
+                Source: src/service.c::service_install runs `/usr/bin/lipo -thin $(uname -m)`
+Installing macOS Guest Agent...
+Installing LaunchDaemon configuration...
+Starting service...
+macOS Guest Agent installed and running.
+  Binary:    /usr/local/bin/mac-guest-agent
+  Plist:     /Library/LaunchDaemons/com.macos.guest-agent.plist
+  Log:       /var/log/mac-guest-agent.log
+  ...
+
+--- Post-install — installed binary is single-arch i386 (158 KB) ---
+$ ls -la /usr/local/bin/mac-guest-agent
+-rwxr-xr-x   1 root  wheel  157712 Jun  5 00:52 /usr/local/bin/mac-guest-agent
+$ file /usr/local/bin/mac-guest-agent
+/usr/local/bin/mac-guest-agent: Mach-O executable i386
+$ lipo -info /usr/local/bin/mac-guest-agent
+Non-fat file: /usr/local/bin/mac-guest-agent is architecture: i386
+
+--- Size summary ---
+fat source binary:    498,216 bytes  (3 slices)
+thin installed:       157,712 bytes  (1 slice: i386, matches `uname -m` on Tiger)
+saved:                340,504 bytes  (~68% reduction on disk)
+
+--- Tiger picks i386 because `uname -m` returns "i386" ---
+$ uname -m
+i386       <-- Tiger's KERNEL is 32-bit (RELEASE_I386), so uname reports i386 even on EM64T CPUs
+$          (XNU's grade_binary picks x86_64 over i386 for FAT binaries when running them,
+            but `uname -m` reports the kernel arch, not what grade_binary would pick.
+            The i386 single-arch installed binary still gets picked correctly by XNU
+            because it's the ONLY slice present — no fat header for grade_binary to traverse.)
+
+--- Daemon started successfully ---
+$ sudo launchctl list com.macos.guest-agent
+{
+        "LimitLoadToSessionType" = "System";
+        "Label" = "com.macos.guest-agent";
+        "OnDemand" = false;
+        "LastExitStatus" = 0;
+        "PID" = 482;
+        ...
+}
+$ qm agent 111 ping     # from PVE host
+EXIT=0
+
+The lipo-thin install path is:
+- Implemented in `src/service.c` so it works regardless of install recipe
+- Has a documented fallback to `cp` if /usr/bin/lipo is missing
+- Validated end-to-end on Tiger 10.4.11 with the daemon talking to PVE successfully
+- Documented in README.md install snippet for operators who want it as
+  an explicit one-line recipe rather than implicit binary behaviour
+- Preserves the one-binary distribution model — the GitHub release
+  artifact is still a single tri-fat universal Mach-O.
