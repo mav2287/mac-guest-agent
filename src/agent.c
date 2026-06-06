@@ -207,8 +207,8 @@ int agent_run(agent_t *ag, volatile sig_atomic_t *stop_flag)
                  * at file top for rationale. */
                 if (!ag->test_mode &&
                     (time(NULL) - last_msg_time) >= WATCHDOG_IDLE_TIMEOUT_SEC) {
-                    LOG_WARN("No message received in %d seconds — Tiger serial "
-                             "driver may be wedged; cycling channel",
+                    LOG_INFO("No message received in %d seconds — cycling channel "
+                             "(defense-in-depth; harmless on idle systems)",
                              WATCHDOG_IDLE_TIMEOUT_SEC);
                     /* Dump pre-reconnect counters for postmortem (helpful
                      * when correlating wedge timing across many reconnects). */
