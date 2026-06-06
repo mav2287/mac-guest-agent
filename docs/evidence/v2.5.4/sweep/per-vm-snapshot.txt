@@ -1,0 +1,163 @@
+=================================================
+VM 107 — BAM-Xserve-10.11 — 2026-06-06T06:20:32Z
+=================================================
+--- 1. binary fingerprint ---
+-rwxr-xr-x  1 root  wheel   487K Jun  6 01:19 /usr/local/bin/mac-guest-agent
+/usr/local/bin/mac-guest-agent: Mach-O universal binary with 3 architectures
+/usr/local/bin/mac-guest-agent (for architecture i386):	Mach-O executable i386
+/usr/local/bin/mac-guest-agent (for architecture x86_64):	Mach-O 64-bit executable x86_64
+9e9ddad5e7d1810afea5c505b7bb6b085b25e8e98464a1490a9de551d289f370  /usr/local/bin/mac-guest-agent
+
+--- 2. self-test-json ---
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json,sys; d=json.load(sys.stdin); od=d.get('out-data',''); j=json.loads(od); print(json.dumps(j, indent=2))
+                                                                        ~~~~~~~~~~^^^^
+  File "/usr/lib/python3.13/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/json/decoder.py", line 348, in decode
+    raise JSONDecodeError("Extra data", s, end)
+json.decoder.JSONDecodeError: Extra data: line 1 column 5 (char 4)
+
+--- 3. agent info — supported commands ---
+enabled: 43
+guest-exec guest-exec-status guest-file-close guest-file-flush guest-file-open guest-file-read guest-file-seek guest-file-write guest-fsfreeze-freeze guest-fsfreeze-freeze-list guest-fsfreeze-status guest-fsfreeze-thaw guest-fstrim guest-get-cpustats guest-get-disks guest-get-diskstats guest-get-fsinfo guest-get-host-name guest-get-hostname guest-get-load guest-get-memory-block-info guest-get-memory-blocks guest-get-osinfo guest-get-time guest-get-timezone guest-get-users guest-get-vcpus guest-info guest-network-get-interfaces guest-network-get-route guest-ping guest-set-time guest-set-user-password guest-shutdown guest-ssh-add-authorized-keys guest-ssh-get-authorized-keys guest-ssh-remove-authorized-keys guest-suspend-disk guest-suspend-hybrid guest-suspend-ram guest-sync guest-sync-delimited guest-sync-id
+
+--- 4. channel-status (SIGUSR1) ---
+2026-06-06 01:14:24 [INFO] channel_status fd=4 open=1 test=0 select=1705/1309/396 read=43623/0/0 probe=1725/20/1705/0 msgs=808 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/600/600
+
+--- 5. agent log tail ---
+2026-06-06 01:19:10 [INFO] Agent stopped
+2026-06-06 01:19:12 [INFO] macOS Guest Agent v2.5.4 starting...
+2026-06-06 01:19:12 [INFO] Detected macOS 10.11.6
+2026-06-06 01:19:12 [INFO] QEMU environment not detected via hw.model/system_profiler (this is normal for macOS VMs with custom hardware models)
+2026-06-06 01:19:12 [INFO] Registered 45 commands
+2026-06-06 01:19:12 [INFO] Detected serial device: /dev/cu.serial1
+2026-06-06 01:19:12 [INFO] Serial port: full raw mode (single fd=4)
+2026-06-06 01:19:12 [INFO] Opened device: /dev/cu.serial1 (fd=4)
+2026-06-06 01:19:12 [INFO] Agent started, listening for commands...
+2026-06-06 01:20:33 [INFO] Spawned process: /bin/sh (internal pid=1, real pid=1399, capture=1)
+
+=================================================
+VM 111 — Tiger-10.4.11 — 2026-06-06T06:20:38Z
+=================================================
+--- 1. binary fingerprint ---
+-rwxr-xr-x   1 root  wheel    486K Jun  6 00:59 /usr/local/bin/mac-guest-agent
+/usr/local/bin/mac-guest-agent: Mach-O universal binary with 3 architectures
+/usr/local/bin/mac-guest-agent (for architecture i386):	Mach-O executable i386
+/usr/local/bin/mac-guest-agent (for architecture x86_64):	Mach-O 64-bit executable x86_64
+MD5 (/usr/local/bin/mac-guest-agent) = 160d006e784018009bf6ffcb4569be80
+
+--- 2. self-test-json ---
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json,sys; d=json.load(sys.stdin); od=d.get('out-data',''); j=json.loads(od); print(json.dumps(j, indent=2))
+                                                                        ~~~~~~~~~~^^^^
+  File "/usr/lib/python3.13/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/json/decoder.py", line 348, in decode
+    raise JSONDecodeError("Extra data", s, end)
+json.decoder.JSONDecodeError: Extra data: line 1 column 5 (char 4)
+
+--- 3. agent info — supported commands ---
+enabled: 43
+guest-exec guest-exec-status guest-file-close guest-file-flush guest-file-open guest-file-read guest-file-seek guest-file-write guest-fsfreeze-freeze guest-fsfreeze-freeze-list guest-fsfreeze-status guest-fsfreeze-thaw guest-fstrim guest-get-cpustats guest-get-disks guest-get-diskstats guest-get-fsinfo guest-get-host-name guest-get-hostname guest-get-load guest-get-memory-block-info guest-get-memory-blocks guest-get-osinfo guest-get-time guest-get-timezone guest-get-users guest-get-vcpus guest-info guest-network-get-interfaces guest-network-get-route guest-ping guest-set-time guest-set-user-password guest-shutdown guest-ssh-add-authorized-keys guest-ssh-get-authorized-keys guest-ssh-remove-authorized-keys guest-suspend-disk guest-suspend-hybrid guest-suspend-ram guest-sync guest-sync-delimited guest-sync-id
+
+--- 4. channel-status (SIGUSR1) ---
+2026-06-06 01:09:21 [INFO] channel_status fd=5 open=1 test=0 select=616/614/2 read=206/0/0 probe=616/0/616/0 msgs=4 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/600/600
+
+--- 5. agent log tail ---
+2026-06-06 01:18:23 [INFO] Running thaw hook: 99-test.sh
+2026-06-06 01:18:24 [INFO] Filesystem thawed
+2026-06-06 01:18:25 [INFO] Filesystem freeze starting
+2026-06-06 01:18:25 [INFO] Running freeze hook: 99-test.sh
+2026-06-06 01:18:25 [WARN] F_FULLFSYNC failed on / (hfs): Inappropriate ioctl for device
+2026-06-06 01:18:25 [WARN] F_FULLFSYNC failed on /Volumes/Mac OS X Install Disc 1 (hfs): Inappropriate ioctl for device
+2026-06-06 01:18:25 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 0 fullfsynced, 2 flushed_only (=2 total); skipped 6 (3 network, 3 special, 0 readonly)
+2026-06-06 01:18:26 [INFO] Running thaw hook: 99-test.sh
+2026-06-06 01:18:26 [INFO] Filesystem thawed
+2026-06-06 01:20:39 [INFO] Spawned process: /bin/sh (internal pid=1, real pid=6841, capture=1)
+
+=================================================
+VM 112 — Leopard-10.5.8 — 2026-06-06T06:20:44Z
+=================================================
+--- 1. binary fingerprint ---
+-rwxr-xr-x  1 root  wheel   487K Jun  6 00:59 /usr/local/bin/mac-guest-agent
+/usr/local/bin/mac-guest-agent: Mach-O universal binary with 3 architectures
+/usr/local/bin/mac-guest-agent (for architecture i386):	Mach-O executable i386
+/usr/local/bin/mac-guest-agent (for architecture x86_64):	Mach-O 64-bit executable x86_64
+MD5 (/usr/local/bin/mac-guest-agent) = 160d006e784018009bf6ffcb4569be80
+
+--- 2. self-test-json ---
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json,sys; d=json.load(sys.stdin); od=d.get('out-data',''); j=json.loads(od); print(json.dumps(j, indent=2))
+                                                                        ~~~~~~~~~~^^^^
+  File "/usr/lib/python3.13/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/json/decoder.py", line 348, in decode
+    raise JSONDecodeError("Extra data", s, end)
+json.decoder.JSONDecodeError: Extra data: line 1 column 5 (char 4)
+
+--- 3. agent info — supported commands ---
+enabled: 43
+guest-exec guest-exec-status guest-file-close guest-file-flush guest-file-open guest-file-read guest-file-seek guest-file-write guest-fsfreeze-freeze guest-fsfreeze-freeze-list guest-fsfreeze-status guest-fsfreeze-thaw guest-fstrim guest-get-cpustats guest-get-disks guest-get-diskstats guest-get-fsinfo guest-get-host-name guest-get-hostname guest-get-load guest-get-memory-block-info guest-get-memory-blocks guest-get-osinfo guest-get-time guest-get-timezone guest-get-users guest-get-vcpus guest-info guest-network-get-interfaces guest-network-get-route guest-ping guest-set-time guest-set-user-password guest-shutdown guest-ssh-add-authorized-keys guest-ssh-get-authorized-keys guest-ssh-remove-authorized-keys guest-suspend-disk guest-suspend-hybrid guest-suspend-ram guest-sync guest-sync-delimited guest-sync-id
+
+--- 4. channel-status (SIGUSR1) ---
+2026-06-06 01:19:00 [INFO] channel_status fd=4 open=1 test=0 select=2546/2150/396 read=43623/0/0 probe=2555/9/2546/0 msgs=808 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/600/600
+
+--- 5. agent log tail ---
+2026-06-06 01:08:58 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 0 flushed_only (=2 total); skipped 4 (0 network, 4 special, 0 readonly)
+2026-06-06 01:08:59 [INFO] Running thaw hook: 99-test.sh
+2026-06-06 01:08:59 [INFO] Filesystem thawed
+2026-06-06 01:19:00 [INFO] No message received in 600 seconds — cycling channel (defense-in-depth; harmless on idle systems)
+2026-06-06 01:19:00 [INFO] channel_status fd=4 open=1 test=0 select=2546/2150/396 read=43623/0/0 probe=2555/9/2546/0 msgs=808 reconnects=wd:0/eio:0 buf_len=0 fionread=0 ages=0/600/600
+2026-06-06 01:19:00 [INFO] Channel closed
+2026-06-06 01:19:00 [INFO] Serial port: full raw mode (single fd=4)
+2026-06-06 01:19:00 [INFO] Opened device: /dev/cu.serial1 (fd=4)
+2026-06-06 01:19:00 [INFO] Watchdog reconnect succeeded
+2026-06-06 01:20:45 [INFO] Spawned process: /bin/sh (internal pid=1, real pid=914, capture=1)
+
+=================================================
+VM 113 — SL-10.6.8 — 2026-06-06T06:20:50Z
+=================================================
+--- 1. binary fingerprint ---
+-rwxr-xr-x  1 root  wheel   487K Jun  6 00:59 /usr/local/bin/mac-guest-agent
+/usr/local/bin/mac-guest-agent: Mach-O universal binary with 3 architectures
+/usr/local/bin/mac-guest-agent (for architecture i386):	Mach-O executable i386
+/usr/local/bin/mac-guest-agent (for architecture x86_64):	Mach-O 64-bit executable x86_64
+9e9ddad5e7d1810afea5c505b7bb6b085b25e8e98464a1490a9de551d289f370  /usr/local/bin/mac-guest-agent
+
+--- 2. self-test-json ---
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json,sys; d=json.load(sys.stdin); od=d.get('out-data',''); j=json.loads(od); print(json.dumps(j, indent=2))
+                                                                        ~~~~~~~~~~^^^^
+  File "/usr/lib/python3.13/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/json/decoder.py", line 348, in decode
+    raise JSONDecodeError("Extra data", s, end)
+json.decoder.JSONDecodeError: Extra data: line 1 column 5 (char 4)
+
+--- 3. agent info — supported commands ---
+enabled: 43
+guest-exec guest-exec-status guest-file-close guest-file-flush guest-file-open guest-file-read guest-file-seek guest-file-write guest-fsfreeze-freeze guest-fsfreeze-freeze-list guest-fsfreeze-status guest-fsfreeze-thaw guest-fstrim guest-get-cpustats guest-get-disks guest-get-diskstats guest-get-fsinfo guest-get-host-name guest-get-hostname guest-get-load guest-get-memory-block-info guest-get-memory-blocks guest-get-osinfo guest-get-time guest-get-timezone guest-get-users guest-get-vcpus guest-info guest-network-get-interfaces guest-network-get-route guest-ping guest-set-time guest-set-user-password guest-shutdown guest-ssh-add-authorized-keys guest-ssh-get-authorized-keys guest-ssh-remove-authorized-keys guest-suspend-disk guest-suspend-hybrid guest-suspend-ram guest-sync guest-sync-delimited guest-sync-id
+
+--- 4. channel-status (SIGUSR1) ---
+
+--- 5. agent log tail ---
+2026-06-06 01:13:26 [INFO] Running freeze hook: 99-test.sh
+2026-06-06 01:13:26 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 0 flushed_only (=2 total); skipped 3 (0 network, 3 special, 0 readonly)
+2026-06-06 01:13:27 [INFO] Running thaw hook: 99-test.sh
+2026-06-06 01:13:27 [INFO] Filesystem thawed
+2026-06-06 01:13:28 [INFO] Filesystem freeze starting
+2026-06-06 01:13:28 [INFO] Running freeze hook: 99-test.sh
+2026-06-06 01:13:28 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 0 flushed_only (=2 total); skipped 3 (0 network, 3 special, 0 readonly)
+2026-06-06 01:13:30 [INFO] Running thaw hook: 99-test.sh
+2026-06-06 01:13:30 [INFO] Filesystem thawed
+2026-06-06 01:20:51 [INFO] Spawned process: /bin/sh (internal pid=1, real pid=935, capture=1)
+
