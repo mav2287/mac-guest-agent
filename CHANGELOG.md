@@ -270,6 +270,54 @@ failures of any kind.
   cipher recipe, and a troubleshooting matrix covering every symptom
   we hit during the v2.5.4 validation work.
 
+### Late-cycle additions (baked into v2.5.4, no version bump)
+
+After the initial v2.5.4 release commits landed and the agent was
+exercised on a fresh Leopard 10.5.8 install, two additional fixes
+landed under the same v2.5.4 banner before release tagging:
+
+- **`fix(exec)`** (`7883573`) — bypass i386 libc `execvp()` wrapper for
+  absolute paths. Apple's pre-10.6 i386 libc `execvp()` wrapper silently
+  returns failure on absolute paths in a way that loses errno; the new
+  `exec_child_image()` helper in `src/cmd-exec.c` calls `execv()`
+  directly for slash-containing paths (bypassing the wrapper), with a
+  `/bin/sh path args` ENOEXEC fallback and errno propagation to
+  captured stderr. Discovered when the Leopard i386 slice's `guest-exec`
+  silently returned exit 127 for every binary; Codex CLI ran the
+  root-cause investigation. Verified after patch: `/usr/bin/true`,
+  `/bin/echo`, `/usr/bin/whoami`, `/sbin/ifconfig`, etc. all succeed
+  from the i386 slice. No effect on x86_64/arm64 (`execv` is fine on
+  those archs too).
+
+- **`log(watchdog)`** (`6490a99`) — drop Tiger-specific wording from the
+  idle-channel watchdog message, downgrade `WARN` → `INFO`. The
+  v2.4.x-era message text said "Tiger serial driver may be wedged"
+  because the watchdog was introduced specifically to defend against
+  Tiger's `selrecord` bug. Post-v2.5.4 (after the EOF-storm root-cause
+  fix), the watchdog is defense-in-depth only and fires on any 600 s
+  idle on any supported macOS — the misleading wording made the same
+  benign idle cycle look like a Tiger-specific regression on Leopard
+  and El Capitan logs during the v2.5.4 validation sweep. New message:
+  *"No message received in 600 seconds — cycling channel
+  (defense-in-depth; harmless on idle systems)"*.
+
+- **`docs(COMPATIBILITY)`** (`0822407`) — runtime evidence drop for
+  v2.5.4 across 10.4-10.11. Promotes 10.4.11 Tiger, 10.5.8 Leopard,
+  and 10.6.8 Snow Leopard to full Tier 1 with current v2.5.4 artifact
+  runtime evidence (replacing the prior `1†` current-artifact-retest-
+  pending qualifiers). 10.11.6 El Capitan refreshed to note this is
+  the fourth consecutive v2.5.x release confirmed structurally
+  identical on real Xserve3,1 hardware.
+
+- **`docs(evidence)`** (`ab2cd03`, `880a435`, `17be907`) —
+  release-readiness sweep evidence under `docs/evidence/v2.5.4/sweep/`.
+  60+ distinct test scenarios per VM, 240+ tests total, 100% pass rate
+  across all four PVE guests (BAM-Xserve 10.11, Tiger 10.4.11,
+  Leopard 10.5.8, SL 10.6.8). All 8 Codex-prioritized tests pass.
+  Tiger `guest-network-get-interfaces` documented as a known v2.5.5
+  follow-up (not blocking — command isn't on the freeze/backup
+  critical path).
+
 ## v2.5.3 — 2026-05-29
 
 ### UX polish — self-source for --install and --upgrade
