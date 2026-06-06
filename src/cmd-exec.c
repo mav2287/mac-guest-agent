@@ -69,6 +69,40 @@ typedef struct {
 static exec_process_t process_table[MAX_PROCESSES];
 static int next_pid = 1;
 
+static void exec_child_image(const char *path, char *const argv[])
+{
+    if (strchr(path, '/')) {
+        execv(path, argv);
+        if (errno == ENOEXEC) {
+            int argc = 0;
+            while (argv[argc]) argc++;
+
+            char **sh_argv = calloc((size_t)argc + 2, sizeof(char *));
+            if (sh_argv) {
+                sh_argv[0] = "/bin/sh";
+                sh_argv[1] = (char *)path;
+                for (int i = 1; i < argc; i++)
+                    sh_argv[i + 1] = argv[i];
+                execv("/bin/sh", sh_argv);
+            }
+        }
+    } else {
+        execvp(path, argv);
+    }
+
+    /* Preserve the real failure reason in captured stderr. */
+    int e = errno;
+    char msg[512];
+    int n = snprintf(msg, sizeof(msg),
+                     "mac-guest-agent: exec failed for %s: %s (errno=%d)\n",
+                     path, strerror(e), e);
+    if (n > 0) {
+        size_t len = (n < (int)sizeof(msg)) ? (size_t)n : sizeof(msg) - 1;
+        (void)write(STDERR_FILENO, msg, len);
+    }
+    _exit(127);
+}
+
 /* Release any resources owned by a slot and clear it back to defaults. */
 static void release_process(exec_process_t *p)
 {
@@ -317,8 +351,7 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
             }
         }
 
-        execvp(path_item->valuestring, argv);
-        _exit(127);
+        exec_child_image(path_item->valuestring, argv);
     }
 
     /* Parent */
