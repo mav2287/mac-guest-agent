@@ -71,6 +71,7 @@ _host_page_size
 _host_processor_info
 _host_statistics64
 _inet_ntop
+_ioctl
 _IOIteratorNext
 _IOObjectRelease
 _IORegistryEntryCreateCFProperty
@@ -105,7 +106,7 @@ _puts
 _read
 _readdir
 _realloc
-_realpath$DARWIN_EXTSN
+_realpath
 _rename
 _rmdir
 _select

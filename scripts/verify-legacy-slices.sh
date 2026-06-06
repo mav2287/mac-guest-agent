@@ -123,10 +123,16 @@ LC_ATOM_INFO
 
 # Per-slice REQ_DYLD-bit allowlist (named form).
 # i386 floor: 10.4 dyld — NONE expected (classic relocations only)
-# x86_64 floor: 10.6 dyld — LC_DYLD_INFO_ONLY only (introduced 10.6, Mozilla 602049)
+# x86_64 floor: 10.4 dyld — LC_LOAD_WEAK_DYLIB ONLY (post-issue-#9: x86_64
+#   lowered to 10.4 with `-Wl,-ld_classic` + `-platform_version,macos,10.4,10.13`
+#   so Tiger's 2007-era dyld can parse it; classic LC_SYMTAB binding. The
+#   sole LC_REQ_DYLD entry is `LC_LOAD_WEAK_DYLIB` from the weak-linked
+#   CoreFoundation and IOKit frameworks — required because Tiger ships
+#   those frameworks as i386-only, so the x86_64 slice's references must
+#   be weak to allow the load.)
 # arm64 floor: 11.0 dyld — modern set
 ALLOWED_REQ_DYLD_i386=""
-ALLOWED_REQ_DYLD_x86_64="LC_DYLD_INFO_ONLY"
+ALLOWED_REQ_DYLD_x86_64="LC_LOAD_WEAK_DYLIB"
 ALLOWED_REQ_DYLD_arm64="LC_DYLD_INFO_ONLY LC_MAIN LC_BUILD_VERSION LC_DYLD_CHAINED_FIXUPS LC_DYLD_EXPORTS_TRIE LC_FUNCTION_VARIANTS LC_FUNCTION_VARIANT_FIXUPS"
 
 # Subset of KNOWN_LCS that carry the LC_REQ_DYLD bit (per loader.h annotations).
@@ -276,7 +282,7 @@ check_slice() {
 
 # --- 4. Run per-slice checks --------------------------------------------
 check_slice i386   10.4 no
-check_slice x86_64 10.6 no
+check_slice x86_64 10.4 no
 check_slice arm64  11.0 yes
 
 echo ""

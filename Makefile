@@ -55,9 +55,9 @@ docs/mac-guest-agent.8: docs/mac-guest-agent.8.in Makefile
 	     < docs/mac-guest-agent.8.in > docs/mac-guest-agent.8
 	@echo "Regenerated docs/mac-guest-agent.8 (version $(VERSION), date $$(date '+%B %Y'))"
 
-# Legacy SDK used for both i386 (10.4+) and x86_64 (10.6+) builds.
+# Legacy SDK used for both i386 (10.4+) and x86_64 (10.4+) builds.
 # Explicit -mmacosx-version-min flags below force ld64 to emit LC_UNIXTHREAD
-# (instead of LC_MAIN, introduced 10.8) so 10.6/10.7 dyld can load the binary.
+# (instead of LC_MAIN, introduced 10.8) so 10.4/10.5 dyld can load the binary.
 # Download SDK: curl -L -o /tmp/sdk.tar.xz https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz && tar xf /tmp/sdk.tar.xz -C /tmp
 # SHA256: 1d2984acab2900c73d076fbd40750035359ee1abe1a6c61eafcd218f68923a5a
 LEGACY_SDK ?= /tmp/MacOSX10.13.sdk
@@ -82,19 +82,19 @@ build-i386: plist-header
 		-o $(BUILD_DIR)/$(PROGRAM_NAME)-i386 $(SRCS) $(LDFLAGS)
 	@echo "i386 build complete: $(BUILD_DIR)/$(PROGRAM_NAME)-i386"
 
-# x86_64 targeting 10.5+ (issue #9 fix).
+# x86_64 targeting 10.4+ (issue #9 fix).
 #
-# v2.5.4 lowered the x86_64 target from 10.6 to 10.5 to fix the legacy-macOS
-# load path. When the XNU kernel reports a 64-bit-capable host (10.5.x
-# natively, or 10.4.11 under OpenCore which patches ml_is64bit()), grade_binary
-# selects the x86_64 slice from our tri-fat. The old min=10.6 build emitted
-# `LC_DYLD_INFO_ONLY` (with the required bit set), which dyld on 10.5.x and
-# below cannot parse — the binary fails to load with
+# v2.5.4 lowered the x86_64 target from 10.6 to 10.4 to fix the legacy-macOS
+# load path. Tiger 10.4.7+ shipped an x86_64 userland and XNU's grade_binary
+# preferentially selects the x86_64 slice from our tri-fat on EM64T hosts
+# (per vit9696 issue #9), even on the i386 kernel. The old min=10.6 build
+# emitted `LC_DYLD_INFO_ONLY` (with the required bit set), which dyld on
+# 10.5.x and below cannot parse — the binary fails to load with
 #     dyld: unknown required load command 0x80000022
-# (see GitHub issue #9). Lowering the target to 10.5 with ld_classic +
-# crt1.10.5.o (shipped with the legacy SDK) causes the linker to fall back to
-# classic LC_SYMTAB / LC_DYSYMTAB binding instead of dyld-info; that load
-# command shape is what every dyld from 10.5 onwards understands.
+# (see GitHub issue #9). Lowering the target to 10.4 with `-Wl,-ld_classic`
+# + `-Wl,-platform_version,macos,10.4,10.13` causes the linker to fall back
+# to classic LC_SYMTAB / LC_DYSYMTAB binding instead of dyld-info; that load
+# command shape is what every dyld from 10.4 onwards understands.
 #
 # Additionally, CoreFoundation and IOKit are linked as weak frameworks. On
 # 10.4 Tiger those frameworks ship as i386-only, so a strong link from the
@@ -403,7 +403,7 @@ help:
 	@echo "Build targets:"
 	@echo "  build           Build for current architecture"
 	@echo "  build-i386      Build i386 (10.4+)"
-	@echo "  build-x86_64    Build x86_64 (10.6+)"
+	@echo "  build-x86_64    Build x86_64 (10.4+)"
 	@echo "  build-arm64     Build arm64 (11.0+)"
 	@echo "  build-universal Build tri-fat (i386+x86_64+arm64) — the v2.5.0+ canonical artifact"
 	@echo "  build-all       Build all architectures"

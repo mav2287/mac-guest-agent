@@ -46,9 +46,15 @@ which emits three things Tiger's 2007-era libSystem/dyld cannot handle:
 The relauncher introduced in v2.5.4 (`src/relauncher.c`) remains as
 defense in depth: on Tiger it tries to `lipo`-extract and `execv` the
 i386 slice for full CF/IOKit fidelity; on Snow Leopard+ it's a compile-time
-no-op. The new x86_64 compatibility flags mean the x86_64 slice *itself*
-loads cleanly on Tiger even when the relauncher cannot run (e.g. no
-Developer Tools installed, no `/usr/bin/lipo`).
+no-op. On Tiger specifically, if `/usr/bin/lipo` is absent (no Developer
+Tools installed) the relauncher logs the failure and exits non-zero
+rather than falling through — operators get an explicit error pointing
+at the missing tool. The new x86_64 compatibility flags mean the x86_64
+slice loads cleanly on Tiger *before* the relauncher even runs, so
+installs without Developer Tools still produce a working agent via the
+LaunchDaemon-respawn path (the first invocation exits, launchd
+restarts, and the relauncher is now a no-op because the i386 fallback
+has been written by the install path).
 
 **Validation:**
 - Tiger 10.4.10 VM (Darwin 8.10.3, kernel selects x86_64 slice — the

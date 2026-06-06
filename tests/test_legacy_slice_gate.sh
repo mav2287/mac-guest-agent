@@ -48,7 +48,8 @@ SRCS=(src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c
       src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c
       src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c
       src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c src/util.c src/log.c
-      src/compat.c src/service.c src/selftest.c src/third_party/cJSON.c)
+      src/compat.c src/service.c src/selftest.c src/relauncher.c
+      src/third_party/cJSON.c)
 LDFLAGS=(-framework CoreFoundation -framework IOKit)
 COMMON_CFLAGS=(-Wall -O2 -std=c99 '-DVERSION="sabotage"'
                -Isrc -Isrc/third_party -Wno-deprecated-declarations)
@@ -118,29 +119,35 @@ lipo -create \
     "$BUILD_DIR/$PROGRAM-arm64" \
     -output "$TMPDIR/sab-a.universal"
 assert_rejects "LC_MAIN on x86_64 slice" \
-    "x86_64.*LC_MAIN" \
+    "x86_64.*(LC_MAIN|LC_DYLD_INFO_ONLY)" \
     "$TMPDIR/sab-a.universal"
 # Note: caught by gate 3c (disallowed required-load-command) before reaching
-# gate 3d (the issue-#4-specific message). Either rejection is valid — both
-# are LC_MAIN-related, and 3c gives a more general allowlist-violation
-# context. Pattern is broad to accept whichever gate fires first.
+# gate 3d (the issue-#4-specific message). With the post-issue-#9 allowlist
+# the x86_64 floor is 10.4 so LC_DYLD_INFO_ONLY is also disallowed and may
+# fire first. Either rejection is valid — both indicate a load command
+# the post-issue-#9 x86_64 slice must not carry. Pattern accepts either.
 
 # --- sabotage B: wrong min version on x86_64 --------------------------------
 
-echo "=== Sabotage B: x86_64 with wrong min version (10.7 vs required 10.6) ==="
-MACOSX_DEPLOYMENT_TARGET=10.7 clang "${COMMON_CFLAGS[@]}" \
-    -mmacosx-version-min=10.7 \
+echo "=== Sabotage B: x86_64 with wrong min version (10.6 vs required 10.4) ==="
+MACOSX_DEPLOYMENT_TARGET=10.6 clang "${COMMON_CFLAGS[@]}" \
+    -mmacosx-version-min=10.6 \
     -arch x86_64 -isysroot "$SDK" \
-    -Wl,-ld_classic -Wl,-platform_version,macos,10.7,10.13 \
-    -o "$TMPDIR/x86_64-min10.7" "${SRCS[@]}" "${LDFLAGS[@]}" 2>/dev/null
+    -fno-stack-protector -D_FORTIFY_SOURCE=0 \
+    -Wl,-ld_classic -Wl,-platform_version,macos,10.6,10.13 \
+    -Wl,-weak_framework,CoreFoundation -Wl,-weak_framework,IOKit \
+    -o "$TMPDIR/x86_64-min10.6" "${SRCS[@]}" 2>/dev/null
 lipo -create \
     "$BUILD_DIR/$PROGRAM-i386" \
-    "$TMPDIR/x86_64-min10.7" \
+    "$TMPDIR/x86_64-min10.6" \
     "$BUILD_DIR/$PROGRAM-arm64" \
     -output "$TMPDIR/sab-b.universal"
 assert_rejects "x86_64 min version drift" \
-    "x86_64 slice min=10\.7, expected 10\.6" \
+    "x86_64.*(min=10\.6.*expected 10\.4|LC_DYLD_INFO_ONLY)" \
     "$TMPDIR/sab-b.universal"
+# Note: a min=10.6 build also emits LC_DYLD_INFO_ONLY (since 10.6 introduced
+# the dyld-info shape), so the disallowed-load-command rejection may fire
+# before the min-version rejection. Either is a valid catch.
 
 # --- sabotage C: universal missing i386 slice -------------------------------
 

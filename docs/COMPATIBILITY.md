@@ -68,16 +68,16 @@ Detailed breakdown of what has been verified per version. All installer-verified
 |---|---|---|---|---|---|---|
 | 10.4.11 Tiger | v1.9, PCI 0x0700 | 19/19 required (no host_statistics64) | CF + IOKit | in pkg | — | i386 |
 | 10.5 Leopard | v1.9, PCI 0x0700 | in libc.dylib | CF + IOKit | 7/10 | — | i386 |
-| 10.6 Snow Leopard | v3.0, PCI 0x0700 | in libSystem.B | CF + IOKit | 7/10 | — | x86_64 10.6 |
-| 10.7 Lion | v3.0, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
-| 10.8 Mountain Lion | v3.1, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
-| 10.9 Mavericks | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
-| 10.10 Yosemite | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.6 |
-| 10.11 El Capitan | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.6 |
-| 10.12 Sierra | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.6 |
-| 10.13 High Sierra | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.6 |
-| 10.14 Mojave | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.6 |
-| 10.15 Catalina | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.6 |
+| 10.6 Snow Leopard | v3.0, PCI 0x0700 | in libSystem.B | CF + IOKit | 7/10 | — | x86_64 10.4 |
+| 10.7 Lion | v3.0, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.4 |
+| 10.8 Mountain Lion | v3.1, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.4 |
+| 10.9 Mavericks | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.4 |
+| 10.10 Yosemite | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 7/10 | — | x86_64 10.4 |
+| 10.11 El Capitan | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.4 |
+| 10.12 Sierra | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | — | x86_64 10.4 |
+| 10.13 High Sierra | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.4 |
+| 10.14 Mojave | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.4 |
+| 10.15 Catalina | v3.2, PCI 0x0700 | 20/20 | CF + IOKit | 8/10 | APFS, diskutil APFS | x86_64 10.4 |
 | 11.6 Big Sur | v3.2, PCI 0x0700 | dyld cache | CF + IOKit | — | APFS + VirtIO v74 | arm64 11.0 |
 | 26.3 Tahoe | v3.2, PCI 0x0700 | runtime | CF + IOKit | 10/10 | APFS + VirtIO | arm64 11.0 |
 

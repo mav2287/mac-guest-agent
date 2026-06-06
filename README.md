@@ -116,7 +116,7 @@ make build-arm64        # Apple Silicon (11.0+, no SDK needed)
 make test               # Run all tests
 ```
 
-The legacy slices (i386 for 10.4+, x86_64 for 10.6+) require the macOS 10.13
+The legacy slices (i386 for 10.4+, x86_64 for 10.4+) require the macOS 10.13
 SDK because modern Xcode SDKs no longer expose pre-10.7 deployment targets.
 Download it once, then pass it to `make`:
 
@@ -127,14 +127,14 @@ curl -fL -o /tmp/sdk.tar.xz \
 tar xf /tmp/sdk.tar.xz -C /tmp
 
 make build-i386       LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.4+ (32-bit)
-make build-x86_64     LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.6+ (64-bit)
+make build-x86_64     LEGACY_SDK=/tmp/MacOSX10.13.sdk   # 10.4+ (64-bit, Tiger-compatible via -ld_classic)
 make build-universal  LEGACY_SDK=/tmp/MacOSX10.13.sdk   # tri-fat (release shape)
 ```
 
 The legacy slices also depend on Apple's `ld-classic` linker (`-Wl,-ld_classic`
 in the Makefile) to honor `-mmacosx-version-min` for entry-point selection;
 the default `ld-prime` hardcodes `LC_MAIN` on x86_64 and produces binaries
-that 10.6/10.7 dyld cannot load (issue #4). See `.github/workflows/build.yml`
+that 10.4/10.5 dyld cannot load (issue #4). See `.github/workflows/build.yml`
 for the full toolchain story.
 
 ## Documentation
