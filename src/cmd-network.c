@@ -279,6 +279,24 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
 {
     (void)args;
 
+    /* Tiger 10.4 guard — same rationale as handle_network_get_interfaces.
+     *
+     * Tiger's `popen(3)` is materially slower when called from a
+     * long-running daemon than from a fresh SSH-shell process — likely
+     * the same kernel/launchd interaction that makes its getifaddrs()
+     * hang indefinitely. `netstat -rn` is fast from a normal shell
+     * (~50 ms) but takes ~11 s to return when popen'd from the agent
+     * daemon on Tiger, exceeding PVE's ~5 s QGA timeout. Unlike
+     * getifaddrs() the call does eventually return so the chardev does
+     * NOT wedge — but PVE has already given up and the response is
+     * discarded. Surfacing an empty routing-table array immediately
+     * avoids the dead wait without misrepresenting state. Other macOS
+     * versions are unaffected. */
+    struct utsname uts;
+    if (uname(&uts) == 0 && uts.release[0] == '8' && uts.release[1] == '.') {
+        return cJSON_CreateArray();
+    }
+
     char *out = NULL;
     if (run_command_capture("netstat -rn", &out) != 0 || !out) {
         free(out);
