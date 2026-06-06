@@ -314,9 +314,22 @@ landed under the same v2.5.4 banner before release tagging:
   60+ distinct test scenarios per VM, 240+ tests total, 100% pass rate
   across all four PVE guests (BAM-Xserve 10.11, Tiger 10.4.11,
   Leopard 10.5.8, SL 10.6.8). All 8 Codex-prioritized tests pass.
-  Tiger `guest-network-get-interfaces` documented as a known v2.5.5
-  follow-up (not blocking — command isn't on the freeze/backup
-  critical path).
+
+- **`fix(network)`** (`904783c`) — Tiger 10.4 `getifaddrs()` hangs
+  indefinitely when called from a long-running daemon. The same
+  `getifaddrs()` call from a freshly-spawned SSH-shell process on the
+  same Tiger VM returns < 50 ms — the bug is specific to Tiger's libc
+  + sysctl/kqueue interaction in the long-running daemon context.
+  PVE's default QGA timeout (~5 s) ran out before `getifaddrs()`
+  returned, wedging the host-side QGA chardev proxy state. Fix: on
+  Tiger 10.4 (Darwin 8.x) return an empty array immediately. The QGA
+  spec permits this and PVE's verify.sh + freeze/backup critical path
+  do not depend on the command; operators needing network info on
+  Tiger can use `qm guest exec /sbin/ifconfig`. Other macOS versions
+  (10.5+) get the full interface list as before — verified across all
+  four sweep VMs. Same commit also consolidates `netstat -ibn` from
+  N forks (per-interface) to 1 fork per response across all macOS
+  versions — found during the bisect, real optimization, kept.
 
 ## v2.5.3 — 2026-05-29
 
