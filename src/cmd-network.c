@@ -12,6 +12,7 @@
 #include <net/if_dl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/utsname.h>
 
 static char *format_mac(const struct sockaddr_dl *sdl)
 {
@@ -25,22 +26,34 @@ static char *format_mac(const struct sockaddr_dl *sdl)
     return buf;
 }
 
-static void add_net_stats(cJSON *iface_obj, const char *name)
+/* Parse netstat -ibn output for one interface name. `netstat_out` must
+ * have been captured by the caller; this function does NOT fork or free.
+ *
+ * Up to v2.5.4 this function forked `netstat -ibn` itself on every
+ * call. That was fine on modern macOS (sub-millisecond fork+exec) but
+ * on Tiger 10.4 — where fork+exec can take a couple hundred ms because
+ * the kernel walks the launched binary's dyld bind table eagerly — N
+ * interfaces × N forks pushed `guest-network-get-interfaces` past PVE's
+ * 5 s QGA timeout, wedging the chardev. The handler now captures the
+ * netstat output ONCE and passes it to this parser per interface. See
+ * docs/evidence/v2.5.4/sweep/test-matrix.md for the Tiger repro. */
+static void add_net_stats(cJSON *iface_obj, const char *name,
+                          const char *netstat_out)
 {
-    char *out = NULL;
-    if (run_command_capture("netstat -ibn", &out) != 0 || !out) {
-        free(out);
-        return;
-    }
+    if (!netstat_out) return;
+
+    /* strtok_r mutates its input; work on a copy so we don't trash the
+     * caller's buffer between per-interface calls. */
+    char *copy = strdup(netstat_out);
+    if (!copy) return;
 
     char *save_ptr = NULL;
-    char *line = strtok_r(out, "\n", &save_ptr);
+    char *line = strtok_r(copy, "\n", &save_ptr);
     while (line) {
-        /* Skip non-matching lines */
         char line_name[64];
         if (sscanf(line, "%63s", line_name) == 1 && strcmp(line_name, name) == 0) {
-            /* netstat -ibn format varies, look for numeric fields */
-            /* Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll */
+            /* netstat -ibn format:
+             * Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll */
             char n[64];
             int mtu;
             char net[64], addr[64];
@@ -58,24 +71,76 @@ static void add_net_stats(cJSON *iface_obj, const char *name)
                 cJSON_AddNumberToObject(stats, "tx-errs", (double)oerrs);
                 cJSON_AddNumberToObject(stats, "tx-dropped", 0);
                 cJSON_AddItemToObject(iface_obj, "statistics", stats);
-                free(out);
+                free(copy);
                 return;
             }
         }
         line = strtok_r(NULL, "\n", &save_ptr);
     }
-    free(out);
+    free(copy);
 }
 
 static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
 
+    /* Tiger 10.4 (Darwin 8.x) guard.
+     *
+     * Tiger's `getifaddrs(3)` hangs indefinitely when called from a
+     * long-running daemon (LaunchDaemon, in our case). Empirically:
+     * on Tiger 10.4.11 a debug-logged build emits "net-get-ifaces:
+     * entry" but never the corresponding "net-get-ifaces: getifaddrs
+     * done" message — `getifaddrs()` simply never returns. PVE's
+     * default QGA timeout is ~5 s, so the call appears as a wedge:
+     * PVE returns "QEMU guest agent is not running" and the chardev
+     * proxy state stays stuck until the LaunchDaemon plist is
+     * reloaded. Same call from a freshly-spawned SSH-shell process
+     * on the same Tiger VM returns < 50 ms — the bug is specific to
+     * Tiger's getifaddrs implementation in the long-running daemon
+     * context (likely an sysctl + kqueue interaction that other
+     * macOS versions don't have).
+     *
+     * Tiger 10.4 was the last release of the pre-Snow-Leopard era
+     * (2005) and is at end-of-life. The QGA spec permits an empty
+     * `return` array, so on Tiger we surface an empty response
+     * rather than hang. PVE's verify.sh and the freeze/backup
+     * critical path do not depend on this command. Operators needing
+     * network info on Tiger can use `qm guest exec` with /sbin/ifconfig
+     * (which is fast from a child shell).
+     *
+     * Documented in docs/COMPATIBILITY.md under Tiger entry.
+     * Other supported macOS versions (10.5+) are unaffected. */
+    struct utsname uts;
+    if (uname(&uts) == 0 && uts.release[0] == '8' && uts.release[1] == '.') {
+        return cJSON_CreateArray();
+    }
+
     struct ifaddrs *ifap = NULL;
     if (getifaddrs(&ifap) != 0) {
         *err_class = "GenericError";
         *err_desc = "Failed to get network interfaces";
         return NULL;
+    }
+
+    /* Capture netstat -ibn output ONCE for the whole response. Each
+     * per-interface stats lookup parses the cached buffer instead of
+     * forking netstat N times. See add_net_stats() comment for why
+     * this matters on Tiger 10.4. The buffer is freed at the bottom.
+     *
+     * Tiger 10.4 (Darwin 8.x): skip the netstat call entirely. Even
+     * one popen("netstat -ibn") on Tiger 10.4 inside a long-running
+     * agent process can take multiple seconds — exceeding PVE's 4-5 s
+     * guest-network-get-interfaces timeout and leaving PVE's host-side
+     * QGA proxy state stuck on "not running". The per-interface
+     * statistics sub-object is a nice-to-have, not required by the QGA
+     * spec; dropping it on Tiger keeps the rest of the response
+     * (name + hardware-address + ip-addresses) intact and within the
+     * timeout. Other macOS versions are unaffected. */
+    char *netstat_out = NULL;
+    struct utsname u;
+    int tiger = (uname(&u) == 0 && u.release[0] == '8' && u.release[1] == '.');
+    if (!tiger) {
+        (void)run_command_capture("netstat -ibn", &netstat_out);
     }
 
     /* Build interface map: name -> {mac, ips} */
@@ -171,11 +236,12 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
         }
 
         cJSON_AddItemToObject(iface, "ip-addresses", ip_arr);
-        add_net_stats(iface, seen_names[i]);
+        add_net_stats(iface, seen_names[i], netstat_out);
         cJSON_AddItemToArray(result, iface);
     }
 
     freeifaddrs(ifap);
+    free(netstat_out);
     LOG_DEBUG("Retrieved %d network interfaces", cJSON_GetArraySize(result));
     return result;
 }
