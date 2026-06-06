@@ -331,6 +331,23 @@ landed under the same v2.5.4 banner before release tagging:
   N forks (per-interface) to 1 fork per response across all macOS
   versions — found during the bisect, real optimization, kept.
 
+- **`fix(network)`** (`6754a36`) — same Tiger-daemon-popen slowness
+  applied to `handle_network_get_route()`. `netstat -rn` is fast
+  (~50 ms) from a normal shell but takes ~11 s when popen'd from the
+  agent daemon on Tiger, exceeding PVE's ~5 s QGA timeout. Unlike
+  `getifaddrs()` the call DOES eventually return so the chardev does
+  not wedge — but PVE has given up by then. Same Tiger 10.4 (Darwin
+  8.x) short-circuit: return an empty array immediately. Other
+  macOS versions still get the full routing table.
+
+  Also clears two earlier sweep "open caveats" as false alarms after
+  re-testing with corrected harnesses: fsfreeze hook scripts DO
+  receive `action="freeze"` / `"thaw"` as `$1` (the prior empty `$1`
+  observation was a heredoc quoting bug in the test); and
+  `--self-test-json` output IS valid JSON when invoked correctly via
+  `qm guest exec` (prior pollution observation was a test invocation
+  artifact, not an agent bug).
+
 ## v2.5.3 — 2026-05-29
 
 ### UX polish — self-source for --install and --upgrade
