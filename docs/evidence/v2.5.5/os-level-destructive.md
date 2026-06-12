@@ -192,6 +192,37 @@ removed (`idlehalt=1` preserved). Tiger was journaled again first
 up (`oc-*-boot*.img.bak-precpus`); safety snapshots `pre_2core` (112/113) and
 `pre_q35_test` (111) retained until cleanup is confirmed.
 
+## Stress-verification of the fix (don't assume — beat on it)
+
+The fix was hammered on all four VMs (`/tmp/stress.py`), each phase asserting the
+channel never permanently wedges:
+
+| Phase | Load | 107 | 113 | 112 | 111 |
+|---|---|---|---|---|---|
+| A | 2000 rapid pings (1 socket) | ✅ | ✅ | ✅ | ✅ |
+| B | 360 heavy popen-class cmds (diskstats/route/ifaces/cpustats…) | ✅ | ✅ | ⚠️→✅ | ✅ |
+| C | 180 KB chunked write/read + byte integrity | ✅ | ✅ | ✅ | ✅ |
+| D | 30 guest-exec spawns + status poll | ✅ | ✅ | ✅ | ✅ |
+| post-abuse | real cmds (ping/osinfo/net/disk) after everything | ✅ | ✅ | ✅ | ✅ |
+
+Every VM — Tiger included — survives load that **permanently** killed a 1-core
+channel (16 KB burst → dead, needed `qm reset`), and remains usable for real
+commands afterward. **The permanent wedge is fixed fleet-wide.**
+
+Two anomalies, run to ground rather than assumed away:
+- **112 Phase B** flagged once (a single dropped response, `alive=False` at that
+  instant). Not reproducible: 5 fresh rounds = 1,800 heavy commands, 360/360
+  each. A transient, recovered immediately — not a Leopard regression.
+- **Phase E ("oversized-message recovery")** scored 0–3/6 on *all four including
+  El Cap*, the known-good baseline that never wedges. That makes it a flawed
+  metric (too-strict immediate re-probe of the per-message overrun), not a VM
+  fault — disregarded.
+
+Residual (pre-existing, not a wedge, unchanged by the SMP fix): a single inbound
+message >~1.3 KB loses bytes to the 16550 RX FIFO on every config (El Cap too);
+it desyncs only that one exchange and recovers. Senders chunk ≤~900 B to avoid
+it. This is the long-documented UART limit, not the wedge.
+
 ## Recovery / housekeeping
 
 All three VMs were restored to a healthy, agent-running state via
