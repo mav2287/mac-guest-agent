@@ -301,6 +301,13 @@ All 45 commands work regardless of PVE's allowlist — PVE just can't invoke the
 
 ## Troubleshooting
 
+> **Is it the VM or the agent?** A wedged serial channel, a hung "sleep", or a
+> dropped response on old macOS is almost always the emulated platform, not the
+> agent. See **[VM Configs & Troubleshooting](VM_CONFIGS.md)** for per-OS
+> known-good configs and a symptom → cause → side → fix catalog (the single most
+> common one: give old-macOS VMs **≥ 2 cores** and no `cpus=1` boot-arg, or the
+> serial channel wedges under load).
+
 ### Adding the agent to an existing macOS VM
 
 If you followed a guide like [klabsdev](https://klabsdev.com/definitive-guide-to-running-macos-in-proxmox/) or similar to set up your macOS VM and now want to add the guest agent, you don't need to rebuild anything:
