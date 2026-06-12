@@ -172,6 +172,26 @@ set `cores: 2` — no machine-type change needed (verified on the original
 the risk** (`cpus=1` may be load-bearing there — task #172 stabilization). The
 agent needs no change; this is a VM-config fix that removes the wedge entirely.
 
+## Applied fleet-wide — all VMs standardized to q35 + 2 cores
+
+The wedge fix (drop `cpus=1` from OpenCore `config.plist` + `cores: 2`) plus a
+machine-type standardization to bare `q35` was applied to the whole fleet and
+verified. Every old macOS — **including Tiger 10.4** — boots stable on `q35` and
+runs SMP without panic:
+
+| VM | OS | machine | hw.ncpu | post-fix wedge test |
+|---|---|---|---|---|
+| 111 | Tiger 10.4.11 | q35 | 2 | 300/300 rapid pings ALIVE, 700 B write byte-exact |
+| 112 | Leopard 10.5.8 | q35 | 2 | 300/300 + integrity (earlier) |
+| 113 | Snow Leopard 10.6.8 | q35 | 2 | up, ncpu=2 |
+| 107 | El Capitan 10.11 | q35 | 2 | baseline (never wedged) |
+
+Tiger's boot-args were `keepsyms=1 -v cpus=1 idlehalt=1` — only `cpus=1` was
+removed (`idlehalt=1` preserved). Tiger was journaled again first
+(`diskutil enableJournal /`) so hard-cycles are safe. Config.plist images backed
+up (`oc-*-boot*.img.bak-precpus`); safety snapshots `pre_2core` (112/113) and
+`pre_q35_test` (111) retained until cleanup is confirmed.
+
 ## Recovery / housekeeping
 
 All three VMs were restored to a healthy, agent-running state via
