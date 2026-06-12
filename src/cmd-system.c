@@ -126,9 +126,25 @@ static cJSON *handle_get_time(cJSON *args, const char **err_class, const char **
 static cJSON *handle_set_time(cJSON *args, const char **err_class, const char **err_desc)
 {
     cJSON *time_item = cJSON_GetObjectItemCaseSensitive(args, "time");
-    if (!time_item || !cJSON_IsNumber(time_item)) {
+
+    /* Argless form (QGA contract): "set the system clock from the hardware RTC"
+     * (Linux does `hwclock --hctosys`). macOS exposes NO userspace way to read
+     * the RTC and re-apply it — the kernel owns that at boot and there is no
+     * `hwclock` equivalent. Rather than return a success that did nothing (a
+     * dead no-op that lies to the caller), fail honestly: the caller must pass
+     * an explicit `time` (which orchestrators do after snapshot/restore/
+     * migration — the form that actually matters). */
+    if (!time_item) {
+        *err_class = "GenericError";
+        *err_desc  = "argless guest-set-time (resync from RTC) is not supported on "
+                     "macOS: there is no userspace hwclock equivalent. Pass an "
+                     "explicit 'time' (nanoseconds since epoch).";
+        return NULL;
+    }
+
+    if (!cJSON_IsNumber(time_item)) {
         *err_class = "InvalidParameter";
-        *err_desc = "Missing or invalid 'time' argument";
+        *err_desc = "Invalid 'time' argument (must be a number: nanoseconds since epoch)";
         return NULL;
     }
 
@@ -158,6 +174,77 @@ static cJSON *handle_set_time(cJSON *args, const char **err_class, const char **
 
 /* ---- guest-get-users ---- */
 
+/* Returns 1 if username is already present in the seen[] set, else records it
+ * and returns 0. Caps at 32 distinct users (matches the array bound). */
+static int user_seen(char seen[][64], int *seen_count, const char *name)
+{
+    for (int i = 0; i < *seen_count; i++) {
+        if (strcmp(seen[i], name) == 0) return 1;
+    }
+    if (*seen_count < 32) {
+        strncpy(seen[*seen_count], name, 63);
+        seen[*seen_count][63] = '\0';
+        (*seen_count)++;
+    }
+    return 0;
+}
+
+/* Tiger/legacy fallback: on Mac OS X 10.4 the loginwindow and sshd populate the
+ * BSD legacy utmp database, NOT utmpx — so getutxent() returns nothing even with
+ * a console user logged in (confirmed on 10.4.11). Parse `who`, which reads the
+ * legacy database on every macOS version. `who` line format (BSD):
+ *     name  line         Mon DD HH:MM
+ * `who` omits the year, so login-time is reconstructed against the current year.
+ * Appends any not-already-seen users to the array. */
+static void append_users_from_who(cJSON *users, char seen[][64], int *seen_count)
+{
+    char *out = NULL;
+    if (run_command_capture("who 2>/dev/null", &out) != 0 || !out) {
+        free(out);
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm now_tm;
+    localtime_r(&now, &now_tm);
+
+    char *save_line = NULL;
+    for (char *line = strtok_r(out, "\n", &save_line); line;
+         line = strtok_r(NULL, "\n", &save_line)) {
+        char name[64] = "", tty[64] = "", mon[16] = "", day[8] = "", hhmm[16] = "";
+        /* name  tty  Mon  DD  HH:MM   (extra trailing fields like host ignored) */
+        if (sscanf(line, "%63s %63s %15s %7s %15s", name, tty, mon, day, hhmm) < 5)
+            continue;
+        if (name[0] == '\0') continue;
+        if (user_seen(seen, seen_count, name)) continue;
+
+        cJSON *user = cJSON_CreateObject();
+        cJSON_AddStringToObject(user, "user", name);
+
+        /* Reconstruct login-time from "Mon DD HH:MM" + current year. If parsing
+         * fails, omit login-time rather than emit a bogus value. */
+        char when[64];
+        snprintf(when, sizeof(when), "%s %s %s %d", mon, day, hhmm,
+                 now_tm.tm_year + 1900);
+        struct tm lt;
+        memset(&lt, 0, sizeof(lt));
+        lt.tm_isdst = -1;
+        if (strptime(when, "%b %d %H:%M %Y", &lt) != NULL) {
+            time_t lts = mktime(&lt);
+            /* If the reconstructed time is in the future (login was last year,
+             * e.g. Dec login read in Jan), roll back a year. */
+            if (lts > now + 86400) {
+                lt.tm_year -= 1;
+                lts = mktime(&lt);
+            }
+            if (lts != (time_t)-1)
+                cJSON_AddNumberToObject(user, "login-time", (double)lts);
+        }
+        cJSON_AddItemToArray(users, user);
+    }
+    free(out);
+}
+
 static cJSON *handle_get_users(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args; (void)err_class; (void)err_desc;
@@ -172,22 +259,7 @@ static cJSON *handle_get_users(cJSON *args, const char **err_class, const char *
     while ((entry = getutxent()) != NULL) {
         if (entry->ut_type != USER_PROCESS)
             continue;
-
-        /* Check if we've already added this user */
-        int duplicate = 0;
-        for (int i = 0; i < seen_count; i++) {
-            if (strcmp(seen[i], entry->ut_user) == 0) {
-                duplicate = 1;
-                break;
-            }
-        }
-        if (duplicate) continue;
-
-        if (seen_count < 32) {
-            strncpy(seen[seen_count], entry->ut_user, 63);
-            seen[seen_count][63] = '\0';
-            seen_count++;
-        }
+        if (user_seen(seen, &seen_count, entry->ut_user)) continue;
 
         cJSON *user = cJSON_CreateObject();
         cJSON_AddStringToObject(user, "user", entry->ut_user);
@@ -196,6 +268,14 @@ static cJSON *handle_get_users(cJSON *args, const char **err_class, const char *
         cJSON_AddItemToArray(users, user);
     }
     endutxent();
+
+    /* utmpx is empty on Tiger 10.4 (uses the BSD legacy utmp DB) — fall back to
+     * `who` so a logged-in console/SSH user is still reported. The fallback runs
+     * whenever utmpx yielded nothing; on modern macOS utmpx is populated and the
+     * `who` pass simply finds the same (already-seen) users and adds nothing. */
+    if (cJSON_GetArraySize(users) == 0) {
+        append_users_from_who(users, seen, &seen_count);
+    }
 
     LOG_DEBUG("Retrieved %d logged-in users", cJSON_GetArraySize(users));
     return users;

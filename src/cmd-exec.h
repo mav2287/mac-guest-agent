@@ -14,4 +14,9 @@ void cmd_exec_init(void);
  * Linux / Windows qemu-ga's async model). */
 void cmd_exec_drain_all(void);
 
+/* 1 if any captured child still has an open stdout/stderr pipe (output may
+ * still be arriving). The main loop polls fast while this is true so a verbose
+ * child isn't throttled to ~64 KB/s by the slow idle tick. */
+int  cmd_exec_has_pending_output(void);
+
 #endif

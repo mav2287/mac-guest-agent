@@ -247,7 +247,7 @@ auto-generated `net0:` entry by deleting it and putting the NIC in `args`:
 
 ```sh
 qm set 111 --delete net0
-qm set 111 --args '-machine type=pc-q35-7.0+pve0 -device usb-ehci,id=ehci -device usb-kbd,bus=ehci.0 -device usb-tablet,bus=ehci.0 -cpu Penryn,vendor=GenuineIntel,kvm=off,+sse4.1,+sse4.2,+ssse3 -netdev user,id=net0,hostfwd=tcp:0.0.0.0:22111-10.0.2.15:22 -device e1000-82545em,netdev=net0,mac=BC:24:11:06:56:10,bus=pcie.0,addr=0x4,id=net0'
+qm set 111 --args '-machine type=pc-q35-7.0+pve0 -device usb-ehci,id=ehci -device usb-kbd,bus=ehci.0 -device usb-tablet,bus=ehci.0 -cpu Penryn,vendor=GenuineIntel,kvm=off,+sse4.1,+sse4.2,+ssse3 -netdev user,id=net0,hostfwd=tcp:0.0.0.0:22111-10.0.2.15:22 -device e1000-82545em,netdev=net0,mac=XX:XX:XX:XX:XX:XX,bus=pcie.0,addr=0x4,id=net0'
 ```
 
 Pieces of that args line, line-by-line:
@@ -279,7 +279,7 @@ Pieces of that args line, line-by-line:
 
 ```ini
 agent: 0
-args: -machine type=pc-q35-7.0+pve0 -device usb-ehci,id=ehci -device usb-kbd,bus=ehci.0 -device usb-tablet,bus=ehci.0 -cpu Penryn,vendor=GenuineIntel,kvm=off,+sse4.1,+sse4.2,+ssse3 -netdev user,id=net0,hostfwd=tcp:0.0.0.0:22111-10.0.2.15:22 -device e1000-82545em,netdev=net0,mac=BC:24:11:06:56:10,bus=pcie.0,addr=0x4,id=net0
+args: -machine type=pc-q35-7.0+pve0 -device usb-ehci,id=ehci -device usb-kbd,bus=ehci.0 -device usb-tablet,bus=ehci.0 -cpu Penryn,vendor=GenuineIntel,kvm=off,+sse4.1,+sse4.2,+ssse3 -netdev user,id=net0,hostfwd=tcp:0.0.0.0:22111-10.0.2.15:22 -device e1000-82545em,netdev=net0,mac=XX:XX:XX:XX:XX:XX,bus=pcie.0,addr=0x4,id=net0
 bios: ovmf
 boot: order=sata2;ide0
 cores: 1
@@ -486,11 +486,11 @@ Inside Tiger:
 ```
 $ ifconfig en0
 en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
-        ether bc:24:11:06:56:10
+        ether XX:XX:XX:XX:XX:XX
         media: autoselect status: inactive       ← driver says LINK DOWN
 $ netstat -in
 Name  Mtu   Network  Address          Ipkts Opkts
-en0   1500  <Link#2> bc:24:11:06:56:10    0     8    ← RX=0, TX works for DISCOVERs only
+en0   1500  <Link#2> XX:XX:XX:XX:XX:XX    0     8    ← RX=0, TX works for DISCOVERs only
 $ ioreg -l | grep -A3 AppleIntel82
 | +- AppleIntel82545Ethernet <class AppleIntel82545Ethernet, !registered, !matched, active, busy 0, retain count 7>
 ```
@@ -525,7 +525,7 @@ The exact args line (already in *Step 3*):
 
 ```
 -netdev user,id=net0,hostfwd=tcp:0.0.0.0:22111-10.0.2.15:22
--device e1000-82545em,netdev=net0,mac=BC:24:11:06:56:10,bus=pcie.0,addr=0x4,id=net0
+-device e1000-82545em,netdev=net0,mac=XX:XX:XX:XX:XX:XX,bus=pcie.0,addr=0x4,id=net0
 ```
 
 Now PVE host port 22111 → Tiger:22.

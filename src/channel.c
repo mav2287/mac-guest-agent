@@ -13,7 +13,17 @@
 #include <termios.h>
 #include <stdio.h>
 
-#define READ_BUF_SIZE 4096
+/* Inbound message-assembly buffer. 64 KB (was 4096) so a single large QGA
+ * message (e.g. a fat guest-file-write chunk) can be held whole. Linux qemu-ga
+ * accumulates into a growable parser and caps only at a multi-MB DoS guard;
+ * this fixed buffer is the macOS-agent equivalent, sized generously. */
+#define READ_BUF_SIZE 65536
+
+/* Max read() calls in one drain pass before yielding back to the poll loop.
+ * Bounds the tight drain loop so a misbehaving/never-EAGAIN fd can't spin
+ * forever; 64 * 64KB = 4 MB of drain headroom per pass, far more than any
+ * real QGA message. */
+#define MAX_DRAIN_ITERS 64
 #define POLL_TIMEOUT_MS 1000
 
 struct channel {
@@ -301,12 +311,14 @@ int channel_open(channel_t *ch)
             tio.c_cflag = CS8 | CREAD | CLOCAL;   /* 8-bit, rx on, ignore modem */
             tio.c_cc[VMIN] = 1;
             tio.c_cc[VTIME] = 0;
-            /* Set max baud rate. QEMU ignores baud rate on virtual serial ports
-             * (data flows at memory speed), but the macOS Apple16X50Serial.kext
-             * may use it to pace internal buffering. 115200 is the standard
-             * max for 16550 UARTs and is widely supported across all macOS versions. */
-            cfsetispeed(&tio, B115200);
-            cfsetospeed(&tio, B115200);
+            /* No baud rate is set here on purpose. This is a virtual 16550 over
+             * a QEMU chardev: data moves at memory speed and QEMU ignores the
+             * UART's programmed baud entirely, so any cfsetspeed() value is
+             * inert. (We previously set B115200 "for maximum throughput" — it
+             * did nothing.) The device keeps its default line speed in
+             * c_ispeed/c_ospeed, which on macOS is non-zero, so the port stays
+             * open. If real on-wire pacing is ever needed it must be done with
+             * flow control, not a baud value. */
             tcsetattr(ch->fd, TCSANOW, &tio);
             /* v2.5.4 (Codex post-EOF-storm fix): flush OUTPUT only, not
              * input. Input flush on reopen can drop PVE's incoming
@@ -454,6 +466,35 @@ static int channel_try_read(channel_t *ch, int probe)
     ch->read_len += (size_t)n;
     ch->read_buf[ch->read_len] = '\0';
     return 1;
+}
+
+/* Drain the tty input queue aggressively in ONE pass: once any bytes are
+ * available, keep reading until a complete line ('\n') is buffered or the queue
+ * is momentarily empty (EAGAIN). This is the fix for the measured Tiger inbound
+ * loss: the old path did exactly one read() per agent-loop iteration, and on
+ * Tiger (where select() often won't wake — issue #10) that iteration cadence is
+ * ~1 Hz, far too slow to keep the small (~2 KB) macOS tty input queue from
+ * overflowing on a multi-KB message. Pulling everything available in one shot,
+ * as soon as we see the first byte, keeps the queue from overflowing.
+ *
+ * Returns: 1 = a complete line is now buffered; 0 = no line yet, queue empty
+ * (EAGAIN); -1 = read error/EOF (caller triggers reconnect). `probe` selects
+ * the telemetry counter bucket (see channel_try_read). */
+static int channel_drain_until_line(channel_t *ch, int probe)
+{
+    for (int i = 0; i < MAX_DRAIN_ITERS; i++) {
+        if (ch->read_len > 0 && memchr(ch->read_buf, '\n', ch->read_len))
+            return 1;
+        /* Buffer full without a newline — let channel_try_read's overflow
+         * handling discard it on the next call; stop draining here. */
+        if (ch->read_len >= READ_BUF_SIZE - 1)
+            return 1;
+        int r = channel_try_read(ch, probe);
+        if (r < 0) return -1;     /* error/EOF */
+        if (r == 0) break;        /* EAGAIN — nothing more right now */
+        /* r == 1: got bytes; loop to look for the newline or read more */
+    }
+    return (ch->read_len > 0 && memchr(ch->read_buf, '\n', ch->read_len)) ? 1 : 0;
 }
 
 /* v2.5.4 diagnostic: dump per-channel counters via LOG_INFO.
@@ -628,9 +669,9 @@ char *channel_read_message(channel_t *ch)
      * per loop iteration (microseconds — negligible). The probe is
      * counted separately from the post-select read_eagain so the
      * diagnostic dumps still tell us what stage is stalled. */
-    int pr = channel_try_read(ch, 1 /*probe*/);
+    int pr = channel_drain_until_line(ch, 1 /*probe*/);
     if (pr < 0) return NULL;          /* EOF/EIO bubbled up */
-    if (pr > 0) goto extract_line;    /* probe got bytes -- skip select() */
+    if (pr > 0) goto extract_line;    /* a complete line is buffered — skip select() */
 
     /* Device mode: select + read.
      *
@@ -678,9 +719,10 @@ char *channel_read_message(channel_t *ch)
     }
     ch->select_ready++;
 
-    /* select() said ready — read the actual bytes. Same helper as the
-     * probe, just counted separately (probe=0). */
-    int sr = channel_try_read(ch, 0 /*post-select*/);
+    /* select() said ready — drain the actual bytes. Same helper as the probe,
+     * just counted separately (probe=0). Drain hard so a multi-KB message is
+     * pulled out of the tty queue before it can overflow. */
+    int sr = channel_drain_until_line(ch, 0 /*post-select*/);
     if (sr < 0) return NULL;
     if (sr == 0) {
         /* select() said ready but read() returned EAGAIN. Shouldn't

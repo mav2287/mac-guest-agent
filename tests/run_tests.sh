@@ -493,10 +493,12 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-test_cmd "guest-fstrim" \
+# guest-fstrim has no on-demand equivalent on macOS (TRIM is automatic via the
+# storage driver). It MUST error honestly rather than return an empty
+# {"paths":[]} that lies about having reclaimed space.
+test_cmd "guest-fstrim (unsupported on macOS)" \
     '{"execute":"guest-fstrim"}' \
-    "object" \
-    "paths"
+    "error"
 
 # Subset-freeze (guest-fsfreeze-freeze-list with mountpoints).
 # In --test mode sync_all_volumes returns n_mountpoints when a filter is
@@ -1114,9 +1116,16 @@ else
     SKIP=$((SKIP + 1))
 fi
 
-# Test set-time with bad arguments
-test_cmd "guest-set-time (missing arg)" \
+# set-time with NO time arg is the QGA "sync from RTC" form. macOS has no
+# userspace hwclock equivalent, so the agent CANNOT honor it — it must error
+# honestly rather than return a success that did nothing (a dead no-op).
+test_cmd "guest-set-time (argless RTC resync unsupported)" \
     '{"execute":"guest-set-time","arguments":{}}' \
+    "error"
+
+# A 'time' field of the wrong type is still a hard error.
+test_cmd "guest-set-time (non-number time)" \
+    '{"execute":"guest-set-time","arguments":{"time":"not-a-number"}}' \
     "error"
 
 # =========================================================

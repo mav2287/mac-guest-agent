@@ -33,3 +33,7 @@ mac-guest-agent-*
 
 # graphify local analysis output
 graphify-out/
+.env.local
+.claude/
+build-test/
+compile_flags.txt

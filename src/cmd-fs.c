@@ -814,17 +814,25 @@ static cJSON *handle_fsfreeze_status(cJSON *args, const char **err_class, const 
     return cJSON_CreateString(freeze_status ? "frozen" : "thawed");
 }
 
-/* ---- Fstrim (documented no-op) ---- */
+/* ---- Fstrim (honest error: not invocable on macOS) ---- */
 
 static cJSON *handle_fstrim(cJSON *args, const char **err_class, const char **err_desc)
 {
-    (void)args; (void)err_class; (void)err_desc;
-    /* macOS handles TRIM natively via the storage driver.
-     * Users should set discard=on on their PVE virtual disk. */
-    cJSON *result = cJSON_CreateObject();
-    if (result)
-        cJSON_AddItemToObject(result, "paths", cJSON_CreateArray());
-    return result;
+    (void)args;
+    /* There is NO userspace "trim now" on macOS. macOS issues TRIM/UNMAP
+     * automatically from the storage driver on delete (when the device
+     * advertises it); there is no diskutil/ioctl equivalent of Linux fstrim
+     * to invoke on demand. Returning an empty {"paths":[]} success would be a
+     * lie — it tells the caller (e.g. a PVE post-backup reclaim step) that
+     * free blocks were discarded when the agent did nothing. Fail honestly so
+     * the operator relies on the automatic path (discard=on + ssd=1 on the
+     * virtual disk) instead of a no-op that looks like it worked. */
+    *err_class = "GenericError";
+    *err_desc  = "guest-fstrim is not supported on macOS: TRIM/UNMAP is issued "
+                 "automatically by the storage driver on delete (enable with "
+                 "discard=on + ssd=1 on the virtual disk). There is no on-demand "
+                 "trim to invoke.";
+    return NULL;
 }
 
 /* ---- Continuous Sync (called from agent.c poll loop) ---- */

@@ -19,6 +19,19 @@ extern volatile sig_atomic_t g_dump_status_requested;
 
 #define FREEZE_POLL_TIMEOUT_MS 100
 
+/* Idle select() timeout for the read loop. Kept at 1000 ms. A short timeout was
+ * tested (50 ms) to fight Tiger's inbound message loss by running the read-first
+ * probe more often, but measurement showed it did NOT raise the loss threshold
+ * (the bytes are dropped at the emulated-16550 RX overrun, below the agent — see
+ * docs/evidence/UART_DRAIN.md), so the extra idle wakeups buy nothing. */
+#define IDLE_POLL_TIMEOUT_MS 1000
+
+/* Poll timeout while a guest-exec child still has captured output flowing.
+ * Short (20 ms) so the per-tick cmd_exec_drain_all() empties the child's pipe
+ * ~50x/s — lifts large-output capture from ~64 KB/s (one 64 KB pipe per idle
+ * tick) to multi-MB/s. Only in effect while output is pending, so no idle cost. */
+#define EXEC_DRAIN_POLL_TIMEOUT_MS 20
+
 /* Stale-channel watchdog (issue #10).
  *
  * On Tiger 10.4 the BSD serial driver can wedge in a state where the fd
@@ -178,11 +191,27 @@ int agent_run(agent_t *ag, volatile sig_atomic_t *stop_flag)
             g_dump_status_requested = 0;
             channel_dump_status(ag->channel);
         }
-        /* During freeze: shorten poll timeout and run continuous sync */
+        /* During freeze: shorten poll timeout and run continuous sync.
+         * While a guest-exec child is still producing captured output, also
+         * poll fast so we drain its pipe ~50x/s instead of once per idle tick
+         * — otherwise the 64 KB pipe fills, the child blocks, and capture is
+         * throttled to ~64 KB/s. The fast path costs nothing when no exec is
+         * in flight (cmd_exec_has_pending_output() returns 0). */
         if (fsfreeze_is_frozen()) {
             channel_set_poll_timeout(ag->channel, FREEZE_POLL_TIMEOUT_MS);
+        } else if (cmd_exec_has_pending_output()) {
+            channel_set_poll_timeout(ag->channel, EXEC_DRAIN_POLL_TIMEOUT_MS);
         } else {
-            channel_set_poll_timeout(ag->channel, 1000);
+            /* IDLE_POLL_TIMEOUT_MS (was 1000). On Tiger select() frequently
+             * won't wake on serial-data arrival (issue #10), so the per-tick
+             * read-first probe is the only thing that pulls bytes — and it runs
+             * once per this timeout. At 1 Hz the small (~2 KB) macOS tty input
+             * queue overflows on a multi-KB inbound message before the agent
+             * ever reads it (measured: loss above ~1.3 KB). A short timeout runs
+             * the probe ~frequently enough to drain the queue before it
+             * overflows. Cost is ~20 idle wakeups/s — negligible with the HLT
+             * idle path; modern hosts also benefit (snappier dispatch). */
+            channel_set_poll_timeout(ag->channel, IDLE_POLL_TIMEOUT_MS);
         }
 
         /* Drain in-flight guest-exec processes on every tick so a

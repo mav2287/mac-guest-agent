@@ -3,7 +3,6 @@
 #include "commands.h"
 #include "compat.h"
 #include "log.h"
-#include "relauncher.h"
 #include "selftest.h"
 #include "service.h"
 #include "util.h"
@@ -314,11 +313,19 @@ static struct option long_options[] = {
 
 int main(int argc, char *argv[])
 {
-    /* First-thing-in-main: on x86_64 + Darwin < 10 (pre-10.6 Snow Leopard),
-     * re-exec the i386 slice. No-op on i386, arm64, and 10.6+. See
-     * src/relauncher.c for the full rationale. Must be before anything
-     * that touches CoreFoundation/IOKit (weak-linked, NULL on Tiger). */
-    relaunch_as_i386_if_legacy_macos(argc, argv);
+    /* Tiger/Leopard arch strategy (no runtime relaunch): the binary ships
+     * tri-fat, and on Tiger 10.4.7+ XNU grades a fat binary to its x86_64 slice
+     * — but you CANNOT switch a running x86_64 process to i386 on Tiger (the
+     * kernel rejects execve of an i386 image from an x86_64 process with
+     * EBADEXEC). A runtime "relaunch as i386" is therefore impossible there; the
+     * old relauncher (lipo + execv) not only couldn't work but aborted the
+     * process before main(), which blocked the installer itself. Instead the
+     * agent is always *installed* as a pure i386 slice on a 32-bit-kernel guest
+     * (service.c extract_native_slice picks the `uname -m` slice), so launchd
+     * execs i386 directly and the daemon is i386 from birth, with full CF/IOKit.
+     * The only thing that ever runs x86_64 on Tiger is the transient installer
+     * process, which does pure file/syscall work (no CF/IOKit), so the NULL
+     * weak-linked frameworks in the x86_64 slice are never dereferenced. */
 
     config_t cfg;
     memset(&cfg, 0, sizeof(cfg));

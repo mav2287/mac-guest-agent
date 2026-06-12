@@ -10,17 +10,6 @@
 #include <mach/host_info.h>
 #include <mach/mach_host.h>
 
-/* host_statistics64 was introduced in macOS 10.6 (Snow Leopard) and is absent
-   from Tiger's libSystem.B.dylib. Re-declaring with weak_import makes the
-   symbol resolve to NULL at load time on 10.4 instead of aborting the
-   process via dyld lazy-binding failure, so the vm_stat text fallback below
-   can actually run. On 10.6+ the attribute is a no-op. */
-extern kern_return_t host_statistics64(
-    host_t host_priv,
-    host_flavor_t flavor,
-    host_info64_t host_info64_out,
-    mach_msg_type_number_t *host_info64_outCnt) __attribute__((weak_import));
-
 /* ---- helpers ---- */
 
 /* Use the sysctl C API directly instead of shelling out.
@@ -66,128 +55,6 @@ static int get_logical_cpus(void)
     return 1;
 }
 
-/* Get memory statistics using the Mach host_statistics64 API.
-   Introduced in 10.6; weak-imported (see the declaration above) so the
-   symbol resolves to NULL on Tiger/Leopard instead of aborting at load
-   time. Callers must check for that and fall back to the vm_stat text
-   path; on 10.6+ this is the preferred kernel-level source. */
-static int get_vm_stat_mach(long long *free_pages, long long *active_pages,
-                            long long *inactive_pages, long long *wired_pages,
-                            long long *compressed_pages, long long *speculative_pages,
-                            long long *purgeable_pages, long long *page_size)
-{
-    /* Tiger lacks host_statistics64 entirely. Caller falls back to vm_stat
-       text parsing. The NULL test is only meaningful because the symbol is
-       weak_import'd above. */
-    if (&host_statistics64 == NULL) {
-        return -1;
-    }
-
-    vm_size_t ps;
-    host_page_size(mach_host_self(), &ps);
-    *page_size = (long long)ps;
-
-    vm_statistics64_data_t vm_info;
-    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
-    kern_return_t kr = host_statistics64(mach_host_self(), HOST_VM_INFO64,
-                                         (host_info64_t)&vm_info, &count);
-    if (kr != KERN_SUCCESS) {
-        return -1;
-    }
-
-    *free_pages = (long long)vm_info.free_count;
-    *active_pages = (long long)vm_info.active_count;
-    *inactive_pages = (long long)vm_info.inactive_count;
-    *wired_pages = (long long)vm_info.wire_count;
-    *speculative_pages = (long long)vm_info.speculative_count;
-    *purgeable_pages = (long long)vm_info.purgeable_count;
-    *compressed_pages = (long long)vm_info.compressor_page_count;
-
-    return 0;
-}
-
-/* Fallback: parse vm_stat text output for older systems where
-   host_statistics64 may not support VM_INFO64 */
-static int get_vm_stat_text(long long *free_pages, long long *active_pages,
-                            long long *inactive_pages, long long *wired_pages,
-                            long long *compressed_pages, long long *speculative_pages,
-                            long long *purgeable_pages, long long *page_size)
-{
-    char *out = NULL;
-    if (run_command_capture("vm_stat", &out) != 0 || !out) {
-        free(out);
-        return -1;
-    }
-
-    char *save_ptr = NULL;
-    char *line = strtok_r(out, "\n", &save_ptr);
-    while (line) {
-        char *ps = strstr(line, "page size of ");
-        if (ps) {
-            *page_size = strtoll(ps + 13, NULL, 10);
-            line = strtok_r(NULL, "\n", &save_ptr);
-            continue;
-        }
-
-        char *colon = strchr(line, ':');
-        if (colon) {
-            *colon = '\0';
-            char *val_str = colon + 1;
-            while (*val_str == ' ' || *val_str == '\t') val_str++;
-            size_t vlen = strlen(val_str);
-            if (vlen > 0 && val_str[vlen - 1] == '.')
-                val_str[vlen - 1] = '\0';
-
-            long long val = strtoll(val_str, NULL, 10);
-
-            if (strstr(line, "Pages free"))
-                *free_pages = val;
-            else if (strstr(line, "Pages active"))
-                *active_pages = val;
-            else if (strstr(line, "Pages inactive"))
-                *inactive_pages = val;
-            else if (strstr(line, "Pages speculative"))
-                *speculative_pages = val;
-            else if (strstr(line, "Pages wired"))
-                *wired_pages = val;
-            else if (strstr(line, "Pages purgeable"))
-                *purgeable_pages = val;
-            else if (strstr(line, "Pages stored in compressor"))
-                *compressed_pages = val;
-        }
-        line = strtok_r(NULL, "\n", &save_ptr);
-    }
-    free(out);
-    return 0;
-}
-
-/* Get memory stats: prefer Mach API, fall back to text parsing */
-static int get_vm_stat(long long *free_pages, long long *active_pages,
-                       long long *inactive_pages, long long *wired_pages,
-                       long long *compressed_pages, long long *speculative_pages,
-                       long long *purgeable_pages, long long *page_size)
-{
-    *free_pages = 0;
-    *active_pages = 0;
-    *inactive_pages = 0;
-    *wired_pages = 0;
-    *compressed_pages = 0;
-    *speculative_pages = 0;
-    *purgeable_pages = 0;
-    *page_size = 4096;
-
-    if (get_vm_stat_mach(free_pages, active_pages, inactive_pages, wired_pages,
-                         compressed_pages, speculative_pages, purgeable_pages,
-                         page_size) == 0) {
-        return 0;
-    }
-
-    LOG_DEBUG("Mach VM stats unavailable, falling back to vm_stat command");
-    return get_vm_stat_text(free_pages, active_pages, inactive_pages, wired_pages,
-                            compressed_pages, speculative_pages, purgeable_pages,
-                            page_size);
-}
-
 /* ---- guest-get-vcpus ---- */
 
 static cJSON *handle_get_vcpus(cJSON *args, const char **err_class, const char **err_desc)
@@ -228,25 +95,12 @@ static cJSON *handle_get_memory_blocks(cJSON *args, const char **err_class, cons
         return NULL;
     }
 
-    /* Memory usage from vm_stat. If it cannot be measured, return an error
-     * rather than fabricating a figure: a guessed "used" value (previously
-     * total/2) is indistinguishable from a real reading to every consumer,
-     * so a measurement failure must surface as a failure. */
-    long long free_p, active_p, inactive_p, wired_p, compressed_p, spec_p, purg_p, pgsz;
-    if (get_vm_stat(&free_p, &active_p, &inactive_p, &wired_p, &compressed_p,
-                    &spec_p, &purg_p, &pgsz) != 0) {
-        *err_class = "GenericError";
-        *err_desc = "Failed to read memory statistics";
-        return NULL;
-    }
-    long long pages_used = wired_p + active_p + compressed_p;
-    /* Guard the page-count multiplication against int64 overflow. */
-    if (pgsz <= 0 || pages_used > (long long)(0x7FFFFFFFFFFFFFFFLL / pgsz)) {
-        *err_class = "GenericError";
-        *err_desc = "Memory statistics out of range";
-        return NULL;
-    }
-    long long used = pages_used * pgsz;
+    /* QGA `online` means "is this memory block plugged in / online" for memory
+     * hotplug. macOS has no memory hotplug and never offlines RAM, so EVERY
+     * block is online and none can be offlined. The old code set online from
+     * current memory *usage* (used/block_size) — that conflated "used" with
+     * "online" and misled any hotplug consumer (a half-used VM looked like it
+     * had half its RAM unplugged). Report the honest hotplug truth instead. */
 
     /* Calculate block size */
     long long block_size;
@@ -274,17 +128,12 @@ static cJSON *handle_get_memory_blocks(cJSON *args, const char **err_class, cons
     }
     if (num_blocks < 1) num_blocks = 1;
 
-    int online_blocks = (int)(used / block_size);
-    if (used % block_size > 0) online_blocks++;
-    if (online_blocks < 1) online_blocks = 1;
-    if (online_blocks > num_blocks) online_blocks = num_blocks;
-
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < num_blocks; i++) {
         cJSON *block = cJSON_CreateObject();
         cJSON_AddNumberToObject(block, "phys-index", i);
-        cJSON_AddBoolToObject(block, "online", i < online_blocks);
-        cJSON_AddBoolToObject(block, "can-offline", 0);
+        cJSON_AddBoolToObject(block, "online", 1);      /* macOS RAM is always online */
+        cJSON_AddBoolToObject(block, "can-offline", 0); /* and can never be offlined */
         cJSON_AddItemToArray(arr, block);
     }
     return arr;

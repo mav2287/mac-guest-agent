@@ -1,5 +1,143 @@
 # Changelog
 
+## v2.5.5 — unreleased (finalizing)
+
+Two themes: replace the remaining Tiger 10.4 daemon-context *placeholders*
+(commands that returned empty/no-op because the obvious macOS syscall hangs
+when called from a launchd-spawned daemon) with real implementations that go
+around the hang; and a dead-item audit that removed commands which advertised
+success while doing nothing.
+
+### Tiger runs i386 — relauncher removed, daemon-context workarounds deleted
+
+Root-causes and closes issue #11 ("Ping works, network-get-interfaces does not
+in macOS 10.4.11"). The real problem was the *arch* the daemon ran: a fat binary
+graded to x86_64 on Tiger 10.4.7+, and Tiger's new-in-10.4.7 x86_64 libSystem
+hangs `getifaddrs` / `IOServiceMatching` / `sysctl(NET_RT_DUMP)` from a launchd
+daemon (and can't `exec` Tiger's i386 tools). The install-arch fix above makes
+the daemon i386, where those native calls return instantly — proven under a
+launchd daemon on both the real i386 iMac and the QEMU i386 VM.
+
+- **Removed `src/relauncher.{c,h}`.** It tried to re-exec the i386 slice at
+  runtime via `lipo`, which is impossible on Tiger (the kernel rejects `execve`
+  of an i386 image from an x86_64 process) and actually aborted the installer
+  before `main()`. The reliable mechanism is installing the i386 slice.
+- **Removed the three Tiger daemon-context workarounds** now that the daemon is
+  i386: `getifaddrs`→SIOCGIFCONF ioctl walk and `IOServiceMatching`→`ioreg` popen
+  are deleted (native calls used on all versions); the route handler's comment is
+  corrected (it always used `netstat -rn`). ~420 lines removed.
+- The previous **sustained-traffic channel wedge** is gone on i386 (the daemon
+  no longer hangs inside those calls). The separate large-inbound byte-loss
+  (`docs/evidence/UART_DRAIN.md`) is unchanged — a hardware 16550 RX overrun,
+  handled by sender-side ≤1.3 KB chunking.
+- Legacy-slice undefined-symbol baselines refreshed (`tests/legacy_slice_symbols_*.txt`):
+  `_cfsetispeed/ospeed` and `_host_statistics64` dropped; `_chmod`/`_sysctl`/`_ftello`/
+  `_strptime`/`_mktime` added (exec-free install + set-time).
+
+### Tiger 10.4 commands now return real data (were empty placeholders in v2.5.4)
+
+v2.5.4 shipped honest empty/`return`-nothing placeholders for several commands
+that hung or returned nothing on the Tiger daemon. v2.5.5 returns real data —
+and with the daemon now running i386 (see above), the **native** calls work, so
+no Tiger-specific code path is needed:
+
+- **`guest-network-get-interfaces`** — real interface/IP/MAC data via native
+  `getifaddrs(3)` (validated on the i386 iMac and QEMU i386 VM). Now also
+  includes `lo0` to match Linux qemu-ga. This is the direct fix for issue #11.
+- **`guest-get-diskstats`** — real per-disk stats via native `IOServiceMatching`
+  / IOBlockStorageDriver `Statistics`.
+- **`guest-network-get-route`** — real route table via `netstat -rn` (one
+  version-independent path; replaces the v2.5.4 return-empty caveat).
+- **`guest-get-users`** — falls back to parsing `who` (reconstructing
+  login-time) when the utmpx database is empty (a Tiger DB quirk, not arch).
+
+### Dead-item audit — commands that pretended to work now tell the truth
+
+Removed four cases where a command returned success (or an empty result) while
+doing nothing, which misleads a caller into thinking an action occurred:
+
+- **`guest-fstrim`** — was a `{"paths":[]}` no-op. macOS issues TRIM/UNMAP
+  automatically; there is no on-demand trim to invoke. Now returns a
+  `GenericError` saying so.
+- **`guest-set-time`** (argless form) — was a success no-op. macOS has no
+  userspace `hwclock` equivalent to resync from the RTC. Now returns a
+  `GenericError`; the explicit-`time` form still works.
+- **`guest-get-memory-blocks`** — `online` was derived from current RAM
+  *usage* (a half-used VM looked half-unplugged). macOS has no memory
+  hotplug, so every block is now reported `online:true, can-offline:false`.
+- **`guest-suspend-ram` / `guest-suspend-hybrid`** — both called `pmset
+  sleepnow` with an S3 hibernate mode, which has no QEMU wake path and
+  *wedges the VM*. Now gated: advertised `enabled:false` in `guest-info`,
+  return `CommandNotFound` on the normal path, and (if an operator
+  force-enables via `--allow-rpcs`) return a `GenericError` directing to
+  host-side suspend (`qm suspend` / `virsh suspend`). `guest-suspend-disk`
+  (hibernatemode 25 → write image + power off, host-resumable) is unchanged.
+
+### One universal binary installs the right arch on every Apple VM (incl. Tiger)
+
+The shipped binary is one tri-fat (i386 + x86_64 + arm64) and one command
+(`--install` / `--upgrade`) now installs correctly on **every** supported guest,
+including a Tiger VM:
+
+- **Always installs a single native slice, never fat.** Install/upgrade extracts
+  exactly the `uname -m` slice (i386 on Tiger, x86_64 on Intel 10.5+, arm64 on
+  Apple Silicon) **in-process** — a built-in Mach-O fat parser, no `lipo`/`cp`
+  child (verified byte-identical to `lipo -thin`). The old code fell back to
+  copying the *fat* binary when `lipo` was absent (a minimal Tiger). That matters
+  because on an EM64T Tiger 10.4.7+ XNU grades a fat binary to its **x86_64**
+  slice — but Tiger's own `/bin` + `/usr/bin` are i386/ppc only, so an x86_64
+  daemon cannot `execve` any of them (`EBADEXEC`), silently breaking `guest-exec`
+  and `guest-shutdown`. A pure i386 install keeps the daemon's arch matched to
+  the tools it must spawn.
+- **The whole install is exec-free, so it works even when run as x86_64 on Tiger.**
+  When the universal binary is launched on a Tiger 10.4.7+ VM it runs its x86_64
+  slice, and *every* i386 helper it would normally shell out to (`cp`, `chmod`,
+  `launchctl`, `ps`) fails with `EBADEXEC`. So install/upgrade now uses syscalls
+  end-to-end: binary placement via in-process extract + `rename()`; backup via a
+  `read`/`write` copy + `fchmod()`; daemon restart by `kill()`ing the stale
+  daemon so the plist's `KeepAlive` respawns the freshly placed i386 binary; and
+  the running-state check via a `sysctl(KERN_PROC)` scan. On modern guests the
+  normal `launchctl` path is used; the syscall path is the automatic fallback.
+
+- **Atomic binary placement** (`--install` / `--upgrade`) — staged into a
+  sibling temp file then `rename()`d over the target, instead of writing in
+  place. A still-running daemon makes the target an in-use text file; an
+  in-place write could fail with `ETXTBSY`. `rename()` only swaps the directory
+  entry, so it is immune and never leaves a half-written binary at the path.
+
+- **Standard `--install` now detects an existing install** and refuses with
+  guidance (`--upgrade` to update with backup/rollback, or `--uninstall` first)
+  instead of silently overwriting with no safety net — matching how the VirtIO
+  modes already behave. The detection is exec-free (works on Tiger). The
+  bootstrap `scripts/install.sh` passes `--install` straight through, so re-running
+  the one-liner surfaces this guidance.
+
+### `scripts/install.sh`
+
+Thin bootstrap wrapper, corrected: it now `chmod +x`'s the downloaded binary
+(a `curl -o` write is 0644, so the previous download path failed with "binary
+not executable"), and its header comment no longer claims it copies the binary
+(the binary self-copies). It does no arch/slice selection — it downloads the
+universal binary (or `--local`) and `exec`s `binary --install`/`--upgrade`,
+which is exactly equivalent to running the binary directly; it exists only so
+`curl …/install.sh | sudo bash` can stand in for that (a binary can't be piped
+into an interpreter). The GitHub download needs TLS 1.2+, so on 10.4–10.6 use
+`--local`.
+- **Inbound message buffer** `READ_BUF_SIZE` 4096 → 65536 plus a
+  drain-until-newline read loop, so modern (multi-core) VMs can receive a
+  large single message in one pass. (Tiger's ~1.5 KB inbound cap is a
+  hardware-level 16550 RX-overrun property below the agent and is unchanged —
+  see `docs/evidence/UART_DRAIN.md`; the sender chunks large writes.) The
+  inert `cfsetspeed(B115200)` call was removed — QEMU ignores the UART's
+  programmed baud entirely.
+- **guest-exec output draining** — while a captured child still has output
+  flowing, the main loop polls fast (20 ms) and drains its pipe ~50×/s,
+  lifting large-output capture from ~64 KB/s (one pipe-full per idle tick)
+  to multi-MB/s. Zero cost when no exec is in flight.
+- **`--upgrade` verify** — `ps` keyword `comm` → `command` (Tiger's `ps`
+  rejects `comm`) and a 10-iteration daemon-start poll, fixing the silent
+  upgrade rollback on Tiger (issue #11 follow-up).
+
 ## v2.5.4 — 2026-06-04
 
 ### Tiger 10.4 fixes — empirically validated on real and virtualized Tiger Intel

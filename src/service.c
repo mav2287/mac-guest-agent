@@ -10,6 +10,9 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <sys/sysctl.h>    /* KERN_PROC process scan (exec-free daemon control) */
+#include <signal.h>        /* kill() for exec-free daemon restart */
+#include <stdint.h>        /* uint32_t/uint64_t for Mach-O fat parsing */
 #include <mach-o/dyld.h>   /* _NSGetExecutablePath for self-source flows */
 
 /* Embedded plist data - generated at build time by xxd */
@@ -58,6 +61,258 @@ static int get_self_executable_path(char *out_buf, size_t buf_size)
     }
     snprintf(out_buf, buf_size, "%s", resolved);
     return 0;
+}
+
+/* Big-endian field readers — Mach-O fat headers are always stored big-endian
+ * on disk regardless of host byte order. */
+static uint32_t macho_be32(const unsigned char *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+}
+static uint64_t macho_be64(const unsigned char *p)
+{
+    return ((uint64_t)macho_be32(p) << 32) | macho_be32(p + 4);
+}
+
+/* Map a `uname -m` string to its Mach-O cpu_type. 0 = unknown.
+ * (Avoids pulling <mach/machine.h> and keeps the values explicit.) */
+static int macho_host_cputype(const char *machine)
+{
+    if (strcmp(machine, "i386")   == 0) return 0x00000007;       /* CPU_TYPE_I386     */
+    if (strcmp(machine, "x86_64") == 0) return 0x01000007;       /* CPU_TYPE_X86_64   */
+    if (strcmp(machine, "arm64")  == 0) return 0x0100000c;       /* CPU_TYPE_ARM64    */
+    if (strcmp(machine, "ppc")    == 0) return 0x00000012;       /* CPU_TYPE_POWERPC  */
+    return 0;
+}
+
+/* Extract the slice matching the host arch from a (possibly fat) Mach-O at
+ * `src` into `out_path`, created mode 0755. If `src` is already thin, copy it
+ * whole. Pure libc + syscalls — NO exec.
+ *
+ * Why this exists (the bug it fixes): the previous staging used `lipo -thin`
+ * and fell back to `cp` when lipo was absent (a minimal Tiger without Developer
+ * Tools). That fallback copied the *fat* binary verbatim. On an EM64T Tiger
+ * 10.4.7+, XNU's grade_binary then runs the x86_64 slice of that fat binary —
+ * but Tiger's own /bin + /usr/bin tools are i386/ppc only, so the x86_64 daemon
+ * cannot execve any of them (EBADEXEC), breaking guest-exec / guest-shutdown.
+ * Worse, `lipo`/`cp`/`chmod` are themselves i386 tools, so on an x86_64-running
+ * installer they too fail. Doing the thinning in-process sidesteps all of that:
+ * the installed binary is always a single native slice (i386 on Tiger), so the
+ * daemon's arch matches the system tools it must exec, and the install needs no
+ * child process at all. Returns 0 on success, -1 on error (out_path unlinked). */
+static int extract_native_slice(const char *src, const char *out_path)
+{
+    FILE *in = fopen(src, "rb");
+    if (!in) {
+        fprintf(stderr, "Error: cannot open %s: %s\n", src, strerror(errno));
+        return -1;
+    }
+
+    unsigned char hdr[8];
+    if (fread(hdr, 1, sizeof(hdr), in) != sizeof(hdr)) {
+        fprintf(stderr, "Error: %s too short to be a Mach-O\n", src);
+        fclose(in);
+        return -1;
+    }
+    uint32_t magic = macho_be32(hdr);
+    int is_fat   = (magic == 0xcafebabe || magic == 0xcafebabf);
+    int fat64    = (magic == 0xcafebabf);
+
+    uint64_t slice_off = 0, slice_size = 0;
+    if (is_fat) {
+        struct utsname uts;
+        if (uname(&uts) != 0) { fclose(in); return -1; }
+        int want = macho_host_cputype(uts.machine);
+        if (!want) {
+            fprintf(stderr, "Error: unknown host arch '%s' for slice select\n", uts.machine);
+            fclose(in);
+            return -1;
+        }
+        uint32_t nfat = macho_be32(hdr + 4);
+        for (uint32_t i = 0; i < nfat; i++) {
+            unsigned char a[32];
+            size_t asz = fat64 ? 32u : 20u;
+            if (fread(a, 1, asz, in) != asz) break;
+            int cput = (int)macho_be32(a);
+            if (cput == want) {
+                slice_off  = fat64 ? macho_be64(a + 8)  : macho_be32(a + 8);
+                slice_size = fat64 ? macho_be64(a + 16) : macho_be32(a + 12);
+                break;
+            }
+        }
+        if (slice_size == 0) {
+            struct utsname u2; uname(&u2);
+            fprintf(stderr, "Error: no %s slice found in %s\n", u2.machine, src);
+            fclose(in);
+            return -1;
+        }
+    } else {
+        /* Already thin (or not fat) — copy the whole file. */
+        if (fseeko(in, 0, SEEK_END) != 0) { fclose(in); return -1; }
+        off_t end = ftello(in);
+        if (end < 0) { fclose(in); return -1; }
+        slice_size = (uint64_t)end;
+        slice_off  = 0;
+    }
+
+    if (fseeko(in, (off_t)slice_off, SEEK_SET) != 0) { fclose(in); return -1; }
+
+    int outfd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (outfd < 0) {
+        fprintf(stderr, "Error: cannot create %s: %s\n", out_path, strerror(errno));
+        fclose(in);
+        return -1;
+    }
+
+    unsigned char buf[65536];
+    uint64_t remaining = slice_size;
+    int ok = 1;
+    while (remaining > 0) {
+        size_t want = remaining > sizeof(buf) ? sizeof(buf) : (size_t)remaining;
+        size_t got = fread(buf, 1, want, in);
+        if (got == 0) { ok = 0; break; }
+        size_t off = 0;
+        while (off < got) {
+            ssize_t wr = write(outfd, buf + off, got - off);
+            if (wr <= 0) { ok = 0; break; }
+            off += (size_t)wr;
+        }
+        if (!ok) break;
+        remaining -= got;
+    }
+    /* open() already set 0755, but honor it explicitly in case of a prior umask
+     * interaction on the create. */
+    if (fchmod(outfd, 0755) != 0) { /* non-fatal */ }
+    close(outfd);
+    fclose(in);
+
+    if (!ok || remaining != 0) {
+        fprintf(stderr, "Error: short read/write extracting slice from %s\n", src);
+        unlink(out_path);
+        return -1;
+    }
+    return 0;
+}
+
+/* Place `self_path` at BINARY_PATH atomically: extract the host-native Mach-O
+ * slice into a sibling temp file (in-process, mode 0755), then rename() it over
+ * BINARY_PATH.
+ *
+ * Two properties this guarantees:
+ *  - Single native slice, never fat. A fat binary on EM64T Tiger 10.4.7+ grades
+ *    to its x86_64 slice, which cannot exec Tiger's i386-only system tools. We
+ *    always lay down exactly the `uname -m` slice (i386 on Tiger), so the daemon
+ *    matches the tools it must spawn. See extract_native_slice for the full why.
+ *  - Atomic + ETXTBSY-immune. rename() only swaps the directory entry, so the
+ *    running daemon keeps its open inode and BINARY_PATH is never a half-written
+ *    file — and we never write onto the in-use text file directly.
+ *
+ * No child processes: the staging is libc/syscalls only, so it works even on a
+ * guest where the installing process can't exec i386 tools (lipo/cp/chmod).
+ * Returns 0 on success, -1 on failure (temp unlinked on every failure path). */
+static int place_binary_atomic(const char *self_path)
+{
+    char tmp_path[1024];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.new.%ld", BINARY_PATH, (long)getpid());
+
+    /* Clear any stale temp from a previously interrupted install. */
+    unlink(tmp_path);
+
+    if (extract_native_slice(self_path, tmp_path) != 0) {
+        /* extract_native_slice already printed the specific error and unlinked. */
+        return -1;
+    }
+
+    if (rename(tmp_path, BINARY_PATH) != 0) {
+        fprintf(stderr, "Error: failed to install %s -> %s: %s\n",
+                tmp_path, BINARY_PATH, strerror(errno));
+        unlink(tmp_path);
+        return -1;
+    }
+
+    struct utsname uts;
+    printf("Installed thin %s binary -> %s\n",
+           uname(&uts) == 0 ? uts.machine : "native", BINARY_PATH);
+    return 0;
+}
+
+/* Exec-free file copy (read/write loop + explicit mode). Replaces a `cp` + `chmod`
+ * child, which cannot be spawned by an installer that is itself running the
+ * x86_64 slice on a Tiger guest (every i386 system tool fails with EBADEXEC).
+ * Returns 0 on success, -1 on failure (dst unlinked on failure). */
+static int copy_file_syscall(const char *src, const char *dst, mode_t mode)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0) {
+        fprintf(stderr, "Error: open %s: %s\n", src, strerror(errno));
+        return -1;
+    }
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out < 0) {
+        fprintf(stderr, "Error: create %s: %s\n", dst, strerror(errno));
+        close(in);
+        return -1;
+    }
+    char buf[65536];
+    ssize_t n;
+    int ok = 1;
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(out, buf + off, (size_t)(n - off));
+            if (w <= 0) { ok = 0; break; }
+            off += w;
+        }
+        if (!ok) break;
+    }
+    if (n < 0) ok = 0;
+    if (fchmod(out, mode) != 0) { /* mode already set on create; non-fatal */ }
+    close(in);
+    close(out);
+    if (!ok) { unlink(dst); return -1; }
+    return 0;
+}
+
+/* Scan the process table for instances of our daemon (matched by the basename
+ * of BINARY_PATH against kinfo_proc.p_comm), excluding our own PID. If `do_kill`
+ * is set, send each a SIGTERM. Returns the match count, or -1 on a sysctl error.
+ *
+ * This is the exec-free substitute for `launchctl list` (detect) and
+ * `launchctl stop/unload` (restart): on a Tiger guest running the x86_64 slice
+ * those i386 tools can't be exec'd, so to swap a running daemon to the freshly
+ * placed i386 binary we kill the stale daemon and let the plist's KeepAlive
+ * make launchd respawn BINARY_PATH (now a pure i386 slice). */
+static int scan_daemon_processes(int do_kill)
+{
+    const char *base = strrchr(BINARY_PATH, '/');
+    base = base ? base + 1 : BINARY_PATH;
+
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t len = 0;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0 || len == 0) return -1;
+
+    /* The table can grow between the sizing call and the fetch; over-allocate a
+     * little and let sysctl report the real length back. */
+    len += 16 * sizeof(struct kinfo_proc);
+    struct kinfo_proc *procs = malloc(len);
+    if (!procs) return -1;
+    if (sysctl(mib, 4, procs, &len, NULL, 0) != 0) { free(procs); return -1; }
+
+    int total = (int)(len / sizeof(struct kinfo_proc));
+    pid_t self = getpid();
+    int count = 0;
+    for (int i = 0; i < total; i++) {
+        pid_t pid = procs[i].kp_proc.p_pid;
+        if (pid <= 1 || pid == self) continue;
+        /* p_comm is truncated to MAXCOMLEN; "mac-guest-agent" (15) fits. */
+        if (strncmp(procs[i].kp_proc.p_comm, base, MAXCOMLEN) == 0) {
+            count++;
+            if (do_kill) kill(pid, SIGTERM);
+        }
+    }
+    free(procs);
+    return count;
 }
 
 /* Helpers that gate each side-effect on the dry_run flag. Used by the
@@ -243,25 +498,74 @@ static int check_virtio_device_held(void)
  * absent. */
 static int check_our_daemon_running(void)
 {
+    /* Two-format probe. Modern macOS (10.5+) emits launchctl list lines
+     * as "<PID>\t<Status>\t<Label>" with PID being a decimal digit when
+     * the process is alive and "-" when only loaded. Tiger 10.4 emits
+     * just "<Label>" per line with NO PID/Status columns, so the legacy
+     * format cannot distinguish loaded-only from running. On Tiger we
+     * fall back to a process-table probe via `ps`, which works
+     * everywhere and was the only way the v2.5.5 lifecycle test on
+     * Tiger could ever pass — the v2.5.4 implementation hard-required
+     * the modern format and silently always rolled upgrades back on
+     * Tiger (root cause of issue #11 follow-up). */
     char *out = NULL;
     int rc = run_command_capture("launchctl list 2>/dev/null", &out);
-    if (rc != 0 || !out) {
-        free(out);
-        return 0;
-    }
-    int running = 0;
-    char *line = strtok(out, "\n");
-    while (line) {
-        if (strstr(line, SERVICE_NAME) != NULL) {
-            /* Format: "<PID> <Status> <Label>" — PID is "-" when not running. */
-            if (line[0] >= '0' && line[0] <= '9')
-                running = 1;
-            break;
+    int label_found = 0;
+    if (rc == 0 && out) {
+        char *save_ptr = NULL;
+        char *line = strtok_r(out, "\n", &save_ptr);
+        while (line) {
+            if (strstr(line, SERVICE_NAME) != NULL) {
+                label_found = 1;
+                if (line[0] >= '0' && line[0] <= '9') {
+                    free(out);
+                    return 1;
+                }
+                break;
+            }
+            line = strtok_r(NULL, "\n", &save_ptr);
         }
-        line = strtok(NULL, "\n");
     }
     free(out);
-    return running;
+    /* No launchctl entry at all → service isn't even loaded. */
+    if (!label_found && rc == 0) return 0;
+    /* Tiger path or launchctl-failure path: check the process table.
+     * `ps -axo pid,command` emits "  PID /path/to/command args" per line;
+     * matching the basename of BINARY_PATH on a line with a numeric leading
+     * column confirms a live process. The keyword must be `command`, not
+     * `comm`: Tiger's ps rejects `comm` with "keyword not found" (verified
+     * on 10.4.11 — this is why the first 10-iter verify fix still rolled
+     * back every Tiger upgrade), while `command` works on 10.4 through
+     * current macOS. */
+    char *ps_out = NULL;
+    rc = run_command_capture("ps -axo pid,command 2>/dev/null", &ps_out);
+    int running = 0;
+    if (rc == 0 && ps_out) {
+        const char *basename = strrchr(BINARY_PATH, '/');
+        basename = basename ? basename + 1 : BINARY_PATH;
+        char *save_ptr = NULL;
+        char *line = strtok_r(ps_out, "\n", &save_ptr);
+        while (line) {
+            if (strstr(line, basename) != NULL) {
+                /* Skip the header and any line whose leading char isn't
+                 * a digit (ps may right-align PID with leading spaces,
+                 * which the strspn skips past). */
+                const char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p >= '0' && *p <= '9') { running = 1; break; }
+            }
+            line = strtok_r(NULL, "\n", &save_ptr);
+        }
+    }
+    free(ps_out);
+    if (running) return 1;
+
+    /* Final, exec-free fallback. Both probes above shell out (launchctl, ps),
+     * which an installer running the x86_64 slice on a Tiger guest cannot do
+     * (i386 tools fail with EBADEXEC) — they return rc != 0 and we reach here
+     * with running == 0 even though the daemon may be alive. Scan the process
+     * table directly via sysctl, which needs no child process. */
+    return scan_daemon_processes(0 /* count only */) > 0 ? 1 : 0;
 }
 
 /* Read a single yes/no answer from /dev/tty (NOT stdin). Reading from /dev/tty
@@ -613,11 +917,25 @@ static int do_standard_install_body(int dry_run)
     } else {
         printf("Starting service...\n");
     }
-    if (dr_run_command(dry_run, "launchctl load " PLIST_PATH) != 0) {
-        fprintf(stderr, "Error: failed to load service\n");
-        return 1;
+    if (dr_run_command(dry_run, "launchctl load " PLIST_PATH) == 0) {
+        dr_run_command(dry_run, "launchctl start " SERVICE_NAME);
+    } else if (!dry_run) {
+        /* launchctl could not be run. The overwhelmingly likely cause is an
+         * installer running the x86_64 slice on a Tiger guest, where launchctl
+         * (an i386 tool) fails to exec. Fall back to the exec-free path: the
+         * plist is already written, so for an upgrade the job is still loaded
+         * under KeepAlive — killing the stale daemon makes launchd respawn the
+         * freshly placed i386 BINARY_PATH. For a brand-new install with no
+         * daemon yet, RunAtLoad starts it on the next boot. */
+        int killed = scan_daemon_processes(1 /* kill */);
+        if (killed > 0) {
+            printf("launchctl unavailable; killed %d stale daemon(s) — launchd "
+                   "KeepAlive will respawn the new binary.\n", killed);
+        } else {
+            printf("launchctl unavailable and no running daemon to respawn; the "
+                   "agent will start on next boot (RunAtLoad).\n");
+        }
     }
-    dr_run_command(dry_run, "launchctl start " SERVICE_NAME);
     return 0;
 }
 
@@ -700,6 +1018,57 @@ int service_install(int dry_run, install_mode_t mode)
         fprintf(stderr,
             "[WARN] --install --virtio-force enabled. All safety checks bypassed. "
             "Unsupported.\n");
+    } else {
+        /* Already installed? A standard --install over an existing install is
+         * almost always a mistake: the operator wants --upgrade, which backs up,
+         * verifies, and rolls back on failure — whereas --install just overwrites
+         * with no safety net. Detect and guide instead of silently reinstalling.
+         * (VirtIO modes already refuse above; this gives standard mode the same
+         * courtesy.) detect_install_state() is exec-free, so this works on a
+         * Tiger guest too. The bootstrap install.sh passes --install straight
+         * through, so this message is what an operator who re-runs the one-liner
+         * sees. */
+        install_state_t cur = detect_install_state();
+        if (cur != INSTALL_STATE_NOT_INSTALLED) {
+            char self_msg[1024];
+            const char *self_path = self_msg;
+            if (get_self_executable_path(self_msg, sizeof(self_msg)) != 0)
+                self_path = BINARY_PATH;
+            fprintf(stderr,
+                "Error: mac-guest-agent is already installed (%s mode).\n"
+                "  Update:    sudo %s --upgrade   (backs up, verifies, rolls back)\n"
+                "  Reinstall: sudo %s --uninstall, then sudo %s --install\n",
+                cur == INSTALL_STATE_STANDARD     ? "standard" :
+                cur == INSTALL_STATE_VIRTIO_FULL  ? "virtio"   : "virtio-force",
+                self_path, BINARY_PATH, self_path);
+            return 1;
+        }
+
+        /* STANDARD mode: a leftover VirtIO operator config + marker (e.g. from a
+         * prior --virtio-force on a host that has no VirtIO device, like Tiger)
+         * would make the freshly-(re)installed daemon try to open the absent
+         * VirtIO device and crash-loop under launchd KeepAlive. A standard
+         * install is an explicit request for the ISA-serial default, so clear
+         * the stale override here instead of silently inheriting it. */
+        int marker = read_virtio_marker();
+        struct stat cfg_st;
+        int cfg_present = (stat(VIRTIO_CONFIG_PATH, &cfg_st) == 0);
+        if (marker > 0 || cfg_present) {
+            if (dry_run) {
+                printf("DRY RUN: would clear stale VirtIO override before standard "
+                       "install (marker=%s, config=%s)\n",
+                       marker > 0 ? (marker == 1 ? "full" : "force") : "none",
+                       cfg_present ? VIRTIO_CONFIG_PATH : "absent");
+            } else {
+                fprintf(stderr,
+                    "[INFO] Clearing stale VirtIO override (marker=%s, config=%s) — "
+                    "standard install uses the ISA-serial default.\n",
+                    marker > 0 ? (marker == 1 ? "full" : "force") : "none",
+                    cfg_present ? "present" : "absent");
+                if (cfg_present) unlink(VIRTIO_CONFIG_PATH);
+                if (marker > 0) remove_virtio_marker();
+            }
+        }
     }
 
     /* Binary placement at BINARY_PATH. The plist's ProgramArguments
@@ -723,65 +1092,22 @@ int service_install(int dry_run, install_mode_t mode)
         }
         if (strcmp(self_path, BINARY_PATH) != 0) {
             if (dry_run) {
-                printf("DRY RUN: would lipo-thin %s -> %s (host arch)\n", self_path, BINARY_PATH);
+                printf("DRY RUN: would extract host-arch slice of %s -> %s\n", self_path, BINARY_PATH);
             } else {
                 if (mkdir_p("/usr/local/bin", 0755) != 0 && errno != EEXIST) {
                     fprintf(stderr, "Error: failed to create /usr/local/bin: %s\n", strerror(errno));
                     return 1;
                 }
-                /* v2.5.4+: lipo-thin to host arch instead of cp.
+                /* v2.5.5+: in-process slice extraction + atomic rename.
                  *
-                 * Per @vit9696's suggestion on issue #9: the source binary
-                 * we ship is a tri-fat (i386 + x86_64 + arm64), but only
-                 * one slice is ever used at runtime on any given host.
-                 * Stripping the other two saves ~340 KB on disk in the
-                 * installed location and leaves the running binary
-                 * single-arch (`file` reports a single Mach-O, no fat
-                 * wrapper). Critical on Tiger 10.4 specifically: with
-                 * the fat binary present, dyld walks the entire fat
-                 * header on every exec. The thin install skips that.
-                 *
-                 * Falls back to plain cp if lipo is unavailable (e.g.
-                 * minimal Tiger install without Developer Tools); the
-                 * agent still works fine as a fat binary, just bigger.
-                 *
-                 * `uname -m` returns: arm64 on Apple Silicon, x86_64 on
-                 * Intel 10.5+, i386 on Tiger and (some) Leopard. lipo
-                 * accepts all three as -thin arguments. */
-                int lipo_ok = 0;
-                struct stat lipo_stat;
-                if (stat("/usr/bin/lipo", &lipo_stat) == 0) {
-                    struct utsname uts;
-                    if (uname(&uts) == 0) {
-                        char *const lipo_argv[] = {
-                            "lipo", "-thin", uts.machine,
-                            self_path, "-output", BINARY_PATH, NULL
-                        };
-                        if (run_command_v("lipo", lipo_argv, NULL, NULL) == 0) {
-                            lipo_ok = 1;
-                            printf("Self-installed binary (lipo-thin %s): %s -> %s\n",
-                                   uts.machine, self_path, BINARY_PATH);
-                        } else {
-                            fprintf(stderr,
-                                    "Warning: lipo -thin %s failed (binary may be "
-                                    "single-arch already); falling back to cp\n",
-                                    uts.machine);
-                        }
-                    }
-                }
-                if (!lipo_ok) {
-                    char *const cp_argv[] = { "cp", self_path, BINARY_PATH, NULL };
-                    if (run_command_v("cp", cp_argv, NULL, NULL) != 0) {
-                        fprintf(stderr, "Error: failed to copy %s -> %s\n",
-                                self_path, BINARY_PATH);
-                        return 1;
-                    }
-                    printf("Self-installed binary (cp, fat): %s -> %s\n",
-                           self_path, BINARY_PATH);
-                }
-                char *const chmod_argv[] = { "chmod", "755", BINARY_PATH, NULL };
-                if (run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
-                    fprintf(stderr, "Error: chmod 755 %s failed\n", BINARY_PATH);
+                 * Per @vit9696's issue #9 the shipped binary is a tri-fat
+                 * (i386 + x86_64 + arm64); place_binary_atomic extracts exactly
+                 * the `uname -m` slice itself (no lipo/cp child) and rename()s it
+                 * over BINARY_PATH. Single native slice is mandatory on Tiger:
+                 * a fat binary there grades to x86_64, which can't exec Tiger's
+                 * i386-only system tools. See the helper's comment. */
+                if (place_binary_atomic(self_path) != 0) {
+                    /* place_binary_atomic already printed the specific error. */
                     return 1;
                 }
             }
@@ -877,6 +1203,29 @@ int service_install(int dry_run, install_mode_t mode)
     if (dry_run) {
         printf("DRY RUN complete — no files modified.\n");
         return 0;
+    }
+
+    /* STANDARD mode: verify the daemon actually came up before claiming success.
+     * VirtIO mode already verifies above (verify_agent_on_virtio). Without this,
+     * --install would print "installed and running" even when the daemon failed
+     * to start — exactly the fail-open seen when a stale VirtIO config pointed
+     * the daemon at a missing device. Same launchd-publish-latency headroom as
+     * the --upgrade verify loop: poll up to ~10s (Tiger's launchctl is slow). */
+    if (mode == INSTALL_MODE_STANDARD) {
+        int verified = 0;
+        for (int i = 0; i < 10; i++) {
+            if (check_our_daemon_running()) { verified = 1; break; }
+            sleep(1);
+        }
+        if (!verified) {
+            fprintf(stderr,
+                "Error: install completed but the daemon did not start within 10 "
+                "seconds.\n"
+                "  Check the log: tail -n 40 %s\n"
+                "  Then retry:    sudo launchctl load %s\n",
+                LOG_PATH, PLIST_PATH);
+            return 1;
+        }
     }
 
     if (mode == INSTALL_MODE_VIRTIO || mode == INSTALL_MODE_VIRTIO_FORCE) {
@@ -1077,23 +1426,24 @@ int service_upgrade(const char *new_binary_path, int dry_run)
      * old binary stays runnable until the new one is verified. */
     char backup[512];
     snprintf(backup, sizeof(backup), "%s.backup", BINARY_PATH);
-    char *const cp_backup_argv[] = { "cp", BINARY_PATH, backup, NULL };
-    if (run_command_v("cp", cp_backup_argv, NULL, NULL) != 0) {
+    /* Exec-free copy (not `cp`): on a Tiger guest where the installer runs the
+     * x86_64 slice, `cp`/`chmod` are i386 tools that can't be exec'd. */
+    if (copy_file_syscall(BINARY_PATH, backup, 0755) != 0) {
         fprintf(stderr, "Error: failed to back up current binary to %s\n", backup);
         return 1;
     }
-    char *const chmod_backup_argv[] = { "chmod", "+x", backup, NULL };
-    run_command_v("chmod", chmod_backup_argv, NULL, NULL);
     printf("Backed up current binary to %s\n", backup);
 
     stop_existing(0);
 
     printf("Installing new binary...\n");
-    char *const cp_argv[] = { "cp", (char *)new_binary_path, BINARY_PATH, NULL };
-    char *const chmod_argv[] = { "chmod", "755", BINARY_PATH, NULL };
-    if (run_command_v("cp", cp_argv, NULL, NULL) != 0 ||
-        run_command_v("chmod", chmod_argv, NULL, NULL) != 0) {
-        fprintf(stderr, "Error: failed to copy new binary; restoring backup\n");
+    /* In-process slice extraction + atomic rename (was in-place cp). stop_existing()
+     * above asks the daemon to stop, but launchd may not have reaped it yet when we
+     * write — staging into a temp + rename() over BINARY_PATH avoids ETXTBSY on the
+     * still-open text file and never leaves a half-written binary on a failed write.
+     * Extracts the host `uname -m` slice (i386 on Tiger), matching --install. */
+    if (place_binary_atomic(new_binary_path) != 0) {
+        fprintf(stderr, "Error: failed to install new binary; restoring backup\n");
         rename(backup, BINARY_PATH);
         return 1;
     }
@@ -1124,17 +1474,32 @@ int service_upgrade(const char *new_binary_path, int dry_run)
             fprintf(stderr, "Error: upgrade verify failed — agent did not open VirtIO "
                             "device. Rolling back to backup binary.\n");
             rename(backup, BINARY_PATH);
-            run_command_v("chmod", (char *const[]){ "chmod", "755", BINARY_PATH, NULL }, NULL, NULL);
+            chmod(BINARY_PATH, 0755);  /* exec-free; backup is already 0755 */
             do_standard_install_body(0);
             return 1;
         }
     } else {
-        sleep(1);
-        if (!check_our_daemon_running()) {
+        /* Poll up to ~10 seconds for the daemon to register a numeric PID
+         * with launchd. Tiger 10.4 (Darwin 8.x) needs the headroom: from a
+         * launchd-spawned daemon context, fork+exec to `launchctl list`
+         * inside check_our_daemon_running() itself costs 200-500ms per
+         * iteration, and Tiger's launchd is slow to publish the new PID
+         * after a plist install. The pre-v2.5.5 single sleep(1) + single
+         * check left an effective budget closer to 500ms of useful wait
+         * and rolled back successful upgrades on Tiger (issue #11). The
+         * 10s ceiling here is roomy on every supported macOS — modern
+         * systems still resolve in well under one iteration — and matches
+         * the shape of the VirtIO-mode verify_agent_on_virtio() loop. */
+        int verified = 0;
+        for (int i = 0; i < 20; i++) {
+            if (check_our_daemon_running()) { verified = 1; break; }
+            sleep(1);
+        }
+        if (!verified) {
             fprintf(stderr, "Error: upgrade verify failed — daemon did not start within "
-                            "1 second. Rolling back to backup binary.\n");
+                            "20 seconds. Rolling back to backup binary.\n");
             rename(backup, BINARY_PATH);
-            run_command_v("chmod", (char *const[]){ "chmod", "755", BINARY_PATH, NULL }, NULL, NULL);
+            chmod(BINARY_PATH, 0755);  /* exec-free; backup is already 0755 */
             do_standard_install_body(0);
             return 1;
         }

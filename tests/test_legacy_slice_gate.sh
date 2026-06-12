@@ -48,7 +48,7 @@ SRCS=(src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c
       src/cmd-info.c src/cmd-system.c src/cmd-power.c src/cmd-hardware.c
       src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c
       src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c src/util.c src/log.c
-      src/compat.c src/service.c src/selftest.c src/relauncher.c
+      src/compat.c src/service.c src/selftest.c
       src/third_party/cJSON.c)
 LDFLAGS=(-framework CoreFoundation -framework IOKit)
 COMMON_CFLAGS=(-Wall -O2 -std=c99 '-DVERSION="sabotage"'

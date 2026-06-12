@@ -1,11 +1,23 @@
 #!/bin/bash
 # macOS Guest Agent - Bootstrap Installer
 #
-# Thin wrapper that fetches the binary from GitHub (or uses --local PATH),
-# copies it to /usr/local/bin/mac-guest-agent, and exec's the binary with
-# the install action requested by the caller. All orchestration logic
-# (install/upgrade state machine, VirtIO override, marker handling,
-# rollback) lives in the binary itself (src/service.c) as of v2.5.3.
+# Thin wrapper whose ONLY job is to make the install one short command:
+# it fetches the universal binary from GitHub (or uses --local PATH), makes
+# it executable, and exec's it with the requested action (--install /
+# --upgrade / --uninstall). It does NOT copy, thin, or select an arch — the
+# binary self-copies to /usr/local/bin and does ALL orchestration itself
+# (install/upgrade state machine, i386/x86_64/arm64 slice selection, VirtIO
+# override, marker handling, rollback) in src/service.c as of v2.5.3.
+#
+# i.e. this is exactly equivalent to running the binary directly:
+#   curl -fsSL .../mac-guest-agent -o /tmp/mac-guest-agent \
+#     && chmod +x /tmp/mac-guest-agent && sudo /tmp/mac-guest-agent --install
+# The script just lets `curl .../install.sh | sudo bash` stand in for that
+# (you can't pipe a binary into an interpreter; only a script).
+#
+# NOTE: the GitHub download needs TLS 1.2+, so it only works on modern macOS.
+# On Tiger/Leopard/Snow Leopard, download the binary on another machine and
+# use `--local /path/to/mac-guest-agent`.
 #
 # Use cases:
 #   sudo bash install.sh                       # fresh standard install
@@ -90,7 +102,8 @@ while [ $# -gt 0 ]; do
             ;;
         --dry-run)
             DRY_RUN=1
-            FORWARD_ARGS+=("--dry-run")
+            # bash-2.05-compatible append (Tiger 10.4): += array append is bash 3.1+
+            FORWARD_ARGS[${#FORWARD_ARGS[@]}]="--dry-run"
             shift
             ;;
         --uninstall)
@@ -113,11 +126,11 @@ while [ $# -gt 0 ]; do
             #   --upgrade            (then --local PATH separately)
             #   (default flow downloads new binary; upgrade calls --upgrade
             #    on the binary against the downloaded file)
-            FORWARD_ARGS+=("--upgrade")
+            FORWARD_ARGS[${#FORWARD_ARGS[@]}]="--upgrade"
             shift
             ;;
         *)
-            FORWARD_ARGS+=("$1")
+            FORWARD_ARGS[${#FORWARD_ARGS[@]}]="$1"
             shift
             ;;
     esac
@@ -159,6 +172,7 @@ if [ "$USE_LOCAL" -eq 1 ]; then
         exit 1
     fi
     info "Using local binary: $BINARY"
+    chmod +x "$BINARY" 2>/dev/null || true
 else
     if [ "$DRY_RUN" -eq 1 ]; then
         info "DRY RUN: would download ${BINARY_NAME} from GitHub releases."
@@ -179,6 +193,8 @@ else
             exit 1
         fi
         BINARY="$TMPDIR/$BINARY_NAME"
+        # curl/wget write a 0644 file; the binary must be executable before exec.
+        chmod +x "$BINARY"
         info "Downloaded"
     fi
 fi

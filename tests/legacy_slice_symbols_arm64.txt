@@ -25,10 +25,9 @@ _CFGetTypeID
 _CFNumberGetTypeID
 _CFNumberGetValue
 _CFRelease
-_cfsetispeed
-_cfsetospeed
 _CFStringCreateWithCString
 _CFStringGetCString
+_chmod
 _close
 _closedir
 _dlsym
@@ -55,6 +54,7 @@ _fseeko
 _fstat
 _fsync
 _ftell
+_ftello
 _fwrite
 _getenv
 _geteuid
@@ -67,9 +67,7 @@ _getpid
 _getpwnam
 _gettimeofday
 _getutxent
-_host_page_size
 _host_processor_info
-_host_statistics64
 _inet_ntop
 _ioctl
 _IOIteratorNext
@@ -93,6 +91,7 @@ _memcpy
 _memmove
 _memset
 _mkdir
+_mktime
 _open
 _opendir
 _optarg
@@ -129,14 +128,15 @@ _strftime
 _strlen
 _strncmp
 _strncpy
+_strptime
 _strrchr
 _strstr
 _strtod
-_strtok
 _strtok_r
 _strtol
 _strtoll
 _sync
+_sysctl
 _sysctlbyname
 _syslog
 _tcdrain

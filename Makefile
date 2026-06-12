@@ -1,5 +1,5 @@
 PROGRAM_NAME := mac-guest-agent
-VERSION := 2.5.4
+VERSION := 2.5.5
 BUILD_DIR := build
 DIST_DIR := dist
 
@@ -12,7 +12,6 @@ SRCS := src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c \
         src/cmd-disk.c src/cmd-fs.c src/cmd-network.c src/cmd-file.c \
         src/cmd-exec.c src/cmd-ssh.c src/cmd-user.c \
         src/util.c src/log.c src/compat.c src/service.c src/selftest.c \
-        src/relauncher.c \
         src/third_party/cJSON.c
 
 INCLUDES := -Isrc -Isrc/third_party
@@ -100,14 +99,20 @@ build-i386: plist-header
 # 10.4 Tiger those frameworks ship as i386-only, so a strong link from the
 # x86_64 slice would abort the load (`no matching architecture in universal
 # wrapper`). Weak-linking makes their absence non-fatal: dyld leaves the
-# function pointers NULL and continues. The relauncher in src/relauncher.c
-# (called as the first line of main) then detects Darwin < 10 and re-execs
-# the i386 slice via lipo, so we never actually call CF/IOKit through NULL.
+# function pointers NULL and continues. On Tiger we never dereference those
+# NULL pointers, because the agent is *installed* as a pure i386 slice there
+# (service.c extract_native_slice picks the `uname -m` slice), so the daemon
+# runs i386 with real CF/IOKit. The x86_64 slice only ever runs on Tiger as
+# the transient installer process, which touches no CF/IOKit. (A runtime
+# x86_64->i386 relaunch is impossible on Tiger anyway: the kernel rejects
+# execve of an i386 image from an x86_64 process with EBADEXEC. An earlier
+# relauncher tried this via lipo and was removed — it could not work and
+# aborted the installer before main(). See src/main.c's note in main().)
 #
 # On 10.6 Snow Leopard onwards, the classic-bind slice still loads fine (dyld
-# kept LC_SYMTAB support), CF/IOKit resolve normally (not NULL), and the
-# relauncher is a no-op. So the same x86_64 slice covers 10.5 through current
-# Intel macOS with no operator-visible change.
+# kept LC_SYMTAB support) and CF/IOKit resolve normally (not NULL), so the same
+# x86_64 slice covers 10.5 through current Intel macOS with no operator-visible
+# change.
 #
 # Compatibility flags for the x86_64 slice when running on Tiger 10.4:
 #
@@ -151,22 +156,22 @@ build-i386: plist-header
 #   Tiger 10.4 ships CF/IOKit as i386-only. The x86_64 slice's strong
 #   references would abort the load with "no matching architecture in
 #   universal wrapper." Weak-linking makes them resolve to NULL at load
-#   time; functions that actually call CF/IOKit must guard against NULL
-#   pointers (or be on the relauncher's i386 fallback path).
+#   time. On Tiger the x86_64 slice is only the transient installer (no
+#   CF/IOKit calls); the long-running daemon is the i386 slice (installed by
+#   extract_native_slice), so it has real CF/IOKit. Functions that call
+#   CF/IOKit therefore only run under i386 on Tiger.
 #
-# Defense in depth: the relauncher in src/relauncher.c executes as a
-# constructor + first thing in main(). On Tiger it tries to extract and
-# re-exec the i386 slice via `lipo`. If that succeeds, the full-featured
-# i386 agent takes over. If lipo is missing (no Developer Tools installed)
-# or i386 slice extraction fails, the x86_64 slice continues — with the
-# compatibility flags above, the x86_64 agent itself runs natively on
-# Tiger to the extent that it doesn't need CF/IOKit (sysctl-backed code
-# paths work; weak NULL pointers must be guarded by the caller).
+# Why the x86_64 slice must still LOAD on Tiger even though the daemon is i386:
+# the operator may run a downloaded fat binary directly (`sudo /tmp/mac-guest-
+# agent --install`), which grades to x86_64. That process must start far enough
+# to run the (exec-free, CF/IOKit-free) installer, which then lays down the i386
+# slice. The compat flags above (classic bind + weak frameworks + unversioned
+# symbols) are what let it load and run that far.
 #
-# On 10.6 Snow Leopard onwards, the x86_64 slice runs normally as the
-# real agent; the relauncher detects Darwin >= 10 and returns as a no-op.
+# On 10.6 Snow Leopard onwards, the x86_64 slice runs normally as the real
+# agent (CF/IOKit resolve, daemon is x86_64).
 build-x86_64: plist-header
-	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.4+, Tiger-compatible classic bind + weak frameworks + relauncher)..."
+	@echo "Building $(PROGRAM_NAME) v$(VERSION) (x86_64, 10.4+, Tiger-compatible classic bind + weak frameworks)..."
 	@if [ ! -d "$(LEGACY_SDK)" ]; then echo "Error: legacy SDK not found at $(LEGACY_SDK)"; echo "Download: curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.13.sdk.tar.xz | tar xJ -C /tmp"; exit 1; fi
 	@mkdir -p $(BUILD_DIR)
 	MACOSX_DEPLOYMENT_TARGET=10.4 $(CC) $(CFLAGS) -mmacosx-version-min=10.4 \

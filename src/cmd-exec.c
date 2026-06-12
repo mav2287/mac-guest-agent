@@ -247,6 +247,20 @@ void cmd_exec_drain_all(void)
     }
 }
 
+/* Public: 1 if any captured child still has an open stdout/stderr pipe, i.e.
+ * output may still be arriving. The main loop uses this to poll fast while a
+ * child is producing — otherwise a verbose child's 64 KB pipe fills and it
+ * blocks between the ~1 s idle ticks, throttling capture to ~64 KB/s. */
+int cmd_exec_has_pending_output(void)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].in_use &&
+            (process_table[i].out_fd >= 0 || process_table[i].err_fd >= 0))
+            return 1;
+    }
+    return 0;
+}
+
 static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_desc)
 {
     cJSON *path_item = cJSON_GetObjectItemCaseSensitive(args, "path");
@@ -260,6 +274,25 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     cJSON *capture_item = cJSON_GetObjectItemCaseSensitive(args, "capture-output");
     int capture = cJSON_IsTrue(capture_item);
 
+    /* Optional stdin for the child (QGA "input-data": base64). Decode up front
+     * so a malformed value fails the call cleanly before we fork. */
+    cJSON *input_item = cJSON_GetObjectItemCaseSensitive(args, "input-data");
+    unsigned char *input_data = NULL;
+    size_t input_len = 0;
+    if (input_item) {
+        if (!cJSON_IsString(input_item) || !input_item->valuestring) {
+            *err_class = "InvalidParameter";
+            *err_desc = "'input-data' must be a base64 string";
+            return NULL;
+        }
+        input_data = base64_decode(input_item->valuestring, &input_len);
+        if (!input_data) {
+            *err_class = "InvalidParameter";
+            *err_desc = "'input-data' is not valid base64";
+            return NULL;
+        }
+    }
+
     /* Build argv */
     int argc = 1;
     if (cJSON_IsArray(arg_arr))
@@ -267,6 +300,7 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
 
     char **argv = calloc((size_t)(argc + 1), sizeof(char *));
     if (!argv) {
+        free(input_data);
         *err_class = "GenericError";
         *err_desc = "Memory allocation failed";
         return NULL;
@@ -285,6 +319,7 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     exec_process_t *proc = alloc_process();
     if (!proc) {
         free(argv);
+        free(input_data);
         *err_class = "GenericError";
         *err_desc = "Too many running processes";
         return NULL;
@@ -296,6 +331,7 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     if (capture) {
         if (pipe(out_pipe) < 0 || pipe(err_pipe) < 0) {
             free(argv);
+            free(input_data);
             if (out_pipe[0] >= 0) { close(out_pipe[0]); close(out_pipe[1]); }
             if (err_pipe[0] >= 0) { close(err_pipe[0]); close(err_pipe[1]); }
             *err_class = "GenericError";
@@ -304,13 +340,31 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
         }
     }
 
+    /* Set up the stdin pipe only when input-data was supplied. */
+    int in_pipe[2] = {-1, -1};
+    if (input_data) {
+        if (pipe(in_pipe) < 0) {
+            free(argv);
+            free(input_data);
+            if (capture) {
+                close(out_pipe[0]); close(out_pipe[1]);
+                close(err_pipe[0]); close(err_pipe[1]);
+            }
+            *err_class = "GenericError";
+            *err_desc = "Failed to create stdin pipe";
+            return NULL;
+        }
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         free(argv);
+        free(input_data);
         if (capture) {
             close(out_pipe[0]); close(out_pipe[1]);
             close(err_pipe[0]); close(err_pipe[1]);
         }
+        if (in_pipe[0] >= 0) { close(in_pipe[0]); close(in_pipe[1]); }
         *err_class = "GenericError";
         *err_desc = "fork() failed";
         return NULL;
@@ -319,6 +373,23 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
     if (pid == 0) {
         /* Child */
         setsid();
+
+        /* stdin: feed from the input pipe when input-data was supplied,
+         * otherwise /dev/null. Without this the child would inherit the
+         * agent's stdin — which is the QGA serial device — so a child that
+         * reads stdin could steal protocol bytes off the channel. */
+        if (input_data) {
+            close(in_pipe[1]);
+            dup2(in_pipe[0], STDIN_FILENO);
+            close(in_pipe[0]);
+        } else {
+            int devnull_in = open("/dev/null", O_RDONLY);
+            if (devnull_in >= 0) {
+                dup2(devnull_in, STDIN_FILENO);
+                close(devnull_in);
+            }
+        }
+
         if (capture) {
             close(out_pipe[0]);
             close(err_pipe[0]);
@@ -356,6 +427,27 @@ static cJSON *handle_exec(cJSON *args, const char **err_class, const char **err_
 
     /* Parent */
     free(argv);
+
+    /* Feed stdin to the child, then close the write end so it sees EOF.
+     * SIGPIPE is globally ignored (main.c), so a child that exits without
+     * reading turns into a short write we simply stop on rather than a
+     * signal. input-data is meant for modest payloads; a blocking write is
+     * fine and matches upstream qemu-ga behavior. */
+    if (input_data) {
+        close(in_pipe[0]);
+        size_t off = 0;
+        while (off < input_len) {
+            ssize_t w = write(in_pipe[1], input_data + off, input_len - off);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                break;  /* EPIPE (child gone) or other error — stop feeding */
+            }
+            off += (size_t)w;
+        }
+        close(in_pipe[1]);
+        free(input_data);
+        input_data = NULL;
+    }
 
     proc->in_use = 1;
     proc->pid = next_pid++;

@@ -216,6 +216,12 @@ static cJSON *handle_get_diskstats(cJSON *args, const char **err_class, const ch
 {
     (void)args;
 
+    /* Native IOKit path on all versions. (A Tiger 10.4 special-case that routed
+     * through `ioreg` via popen was removed in v2.5.5: it existed because the
+     * direct IOServiceMatching call hung when the daemon ran the x86_64 slice,
+     * but with the daemon always installed as i386 on Tiger the native call
+     * returns instantly — confirmed under a launchd daemon on both the real
+     * i386 iMac and the QEMU i386 VM. See docs/evidence/v2.5.5.) */
     CFMutableDictionaryRef match = IOServiceMatching(kIOBlockStorageDriverClass);
     if (!match) {
         *err_class = "GenericError";

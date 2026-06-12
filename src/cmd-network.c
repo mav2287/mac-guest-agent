@@ -12,7 +12,8 @@
 #include <net/if_dl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/utsname.h>
+#include <errno.h>
+#include <unistd.h>
 
 static char *format_mac(const struct sockaddr_dl *sdl)
 {
@@ -27,16 +28,11 @@ static char *format_mac(const struct sockaddr_dl *sdl)
 }
 
 /* Parse netstat -ibn output for one interface name. `netstat_out` must
- * have been captured by the caller; this function does NOT fork or free.
- *
- * Up to v2.5.4 this function forked `netstat -ibn` itself on every
- * call. That was fine on modern macOS (sub-millisecond fork+exec) but
- * on Tiger 10.4 — where fork+exec can take a couple hundred ms because
- * the kernel walks the launched binary's dyld bind table eagerly — N
- * interfaces × N forks pushed `guest-network-get-interfaces` past PVE's
- * 5 s QGA timeout, wedging the chardev. The handler now captures the
- * netstat output ONCE and passes it to this parser per interface. See
- * docs/evidence/v2.5.4/sweep/test-matrix.md for the Tiger repro. */
+ * have been captured by the caller; this function does NOT fork or
+ * free. The handler captures netstat output ONCE per call and passes
+ * it to this parser per interface to avoid N forks for N interfaces.
+ * Tiger 10.4 does not reach this code path; it uses the sysctl-based
+ * tiger_add_stats_from_iflist() helper above. */
 static void add_net_stats(cJSON *iface_obj, const char *name,
                           const char *netstat_out)
 {
@@ -84,37 +80,12 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
 {
     (void)args;
 
-    /* Tiger 10.4 (Darwin 8.x) guard.
-     *
-     * Tiger's `getifaddrs(3)` hangs indefinitely when called from a
-     * long-running daemon (LaunchDaemon, in our case). Empirically:
-     * on Tiger 10.4.11 a debug-logged build emits "net-get-ifaces:
-     * entry" but never the corresponding "net-get-ifaces: getifaddrs
-     * done" message — `getifaddrs()` simply never returns. PVE's
-     * default QGA timeout is ~5 s, so the call appears as a wedge:
-     * PVE returns "QEMU guest agent is not running" and the chardev
-     * proxy state stays stuck until the LaunchDaemon plist is
-     * reloaded. Same call from a freshly-spawned SSH-shell process
-     * on the same Tiger VM returns < 50 ms — the bug is specific to
-     * Tiger's getifaddrs implementation in the long-running daemon
-     * context (likely an sysctl + kqueue interaction that other
-     * macOS versions don't have).
-     *
-     * Tiger 10.4 was the last release of the pre-Snow-Leopard era
-     * (2005) and is at end-of-life. The QGA spec permits an empty
-     * `return` array, so on Tiger we surface an empty response
-     * rather than hang. PVE's verify.sh and the freeze/backup
-     * critical path do not depend on this command. Operators needing
-     * network info on Tiger can use `qm guest exec` with /sbin/ifconfig
-     * (which is fast from a child shell).
-     *
-     * Documented in docs/COMPATIBILITY.md under Tiger entry.
-     * Other supported macOS versions (10.5+) are unaffected. */
-    struct utsname uts;
-    if (uname(&uts) == 0 && uts.release[0] == '8' && uts.release[1] == '.') {
-        return cJSON_CreateArray();
-    }
-
+    /* Native getifaddrs(3) on all versions. (A Tiger 10.4 special-case that
+     * bypassed getifaddrs with a direct SIOCGIFCONF ioctl walk was removed in
+     * v2.5.5: it existed because getifaddrs hung when the daemon ran the x86_64
+     * slice, but with the daemon always installed as i386 on Tiger getifaddrs
+     * returns instantly — confirmed under a launchd daemon on both the real
+     * i386 iMac and the QEMU i386 VM. See docs/evidence/v2.5.5.) */
     struct ifaddrs *ifap = NULL;
     if (getifaddrs(&ifap) != 0) {
         *err_class = "GenericError";
@@ -124,35 +95,22 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
 
     /* Capture netstat -ibn output ONCE for the whole response. Each
      * per-interface stats lookup parses the cached buffer instead of
-     * forking netstat N times. See add_net_stats() comment for why
-     * this matters on Tiger 10.4. The buffer is freed at the bottom.
-     *
-     * Tiger 10.4 (Darwin 8.x): skip the netstat call entirely. Even
-     * one popen("netstat -ibn") on Tiger 10.4 inside a long-running
-     * agent process can take multiple seconds — exceeding PVE's 4-5 s
-     * guest-network-get-interfaces timeout and leaving PVE's host-side
-     * QGA proxy state stuck on "not running". The per-interface
-     * statistics sub-object is a nice-to-have, not required by the QGA
-     * spec; dropping it on Tiger keeps the rest of the response
-     * (name + hardware-address + ip-addresses) intact and within the
-     * timeout. Other macOS versions are unaffected. */
+     * forking netstat N times. Tiger never reaches this code path — it
+     * branches into tiger_get_interfaces_ioctl() above where stats are
+     * sourced from sysctl(NET_RT_IFLIST) instead. */
     char *netstat_out = NULL;
-    struct utsname u;
-    int tiger = (uname(&u) == 0 && u.release[0] == '8' && u.release[1] == '.');
-    if (!tiger) {
-        (void)run_command_capture("netstat -ibn", &netstat_out);
-    }
+    (void)run_command_capture("netstat -ibn", &netstat_out);
 
     /* Build interface map: name -> {mac, ips} */
     cJSON *result = cJSON_CreateArray();
 
-    /* First pass: collect unique interface names that are up and not loopback */
+    /* First pass: collect unique interface names that are up (loopback
+     * included, to match Linux qemu-ga which reports lo). */
     char seen_names[32][64];
     int seen_count = 0;
 
     for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
         if (!ifa->ifa_name) continue;
-        if (ifa->ifa_flags & IFF_LOOPBACK) continue;
         if (!(ifa->ifa_flags & IFF_UP)) continue;
 
         int found = 0;
@@ -275,27 +233,18 @@ static void ipv6_prefix_to_mask(int prefix, char *out, size_t outsz)
              bytes[12], bytes[13], bytes[14], bytes[15]);
 }
 
+
 static cJSON *handle_network_get_route(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
 
-    /* Tiger 10.4 guard — same rationale as handle_network_get_interfaces.
-     *
-     * Tiger's `popen(3)` is materially slower when called from a
-     * long-running daemon than from a fresh SSH-shell process — likely
-     * the same kernel/launchd interaction that makes its getifaddrs()
-     * hang indefinitely. `netstat -rn` is fast from a normal shell
-     * (~50 ms) but takes ~11 s to return when popen'd from the agent
-     * daemon on Tiger, exceeding PVE's ~5 s QGA timeout. Unlike
-     * getifaddrs() the call does eventually return so the chardev does
-     * NOT wedge — but PVE has already given up and the response is
-     * discarded. Surfacing an empty routing-table array immediately
-     * avoids the dead wait without misrepresenting state. Other macOS
-     * versions are unaffected. */
-    struct utsname uts;
-    if (uname(&uts) == 0 && uts.release[0] == '8' && uts.release[1] == '.') {
-        return cJSON_CreateArray();
-    }
+    /* Parse `netstat -rn` for the routing table on all versions. This was
+     * historically chosen over sysctl(NET_RT_DUMP) because the full-table
+     * NET_RT_DUMP hung the Tiger daemon — but that was an x86_64-on-Tiger
+     * artifact: NET_RT_DUMP returns instantly under an i386 daemon (confirmed
+     * v2.5.5 on the iMac and the QEMU VM, see docs/evidence/v2.5.5). We keep
+     * the netstat-text path anyway: it's the single, version-independent
+     * implementation and its output is straightforward to parse. */
 
     char *out = NULL;
     if (run_command_capture("netstat -rn", &out) != 0 || !out) {
@@ -334,9 +283,30 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
             continue;
         }
 
-        /* Parse route line: Destination Gateway Flags Netif [Expire] */
-        char dest[128] = "", gateway[128] = "", flags[32] = "", netif[32] = "";
-        if (sscanf(line, "%127s %127s %31s %31s", dest, gateway, flags, netif) < 3) {
+        /* Parse route line.
+         *
+         * macOS netstat -rn output differs by version:
+         *   10.5+ (4 columns):  Destination Gateway Flags        Netif [Expire]
+         *   10.4   (6 columns): Destination Gateway Flags Refs Use Netif [Expire]
+         *
+         * The Tiger row has two extra accounting columns (Refs / Use)
+         * after Flags that the modern row omits. Parsing the first 4
+         * `%s` tokens gets the Netif on 10.5+ but grabs the Refs
+         * counter on 10.4 — that's the v2.5.5 bug where Tiger reported
+         * `"iface":"3"` instead of `"iface":"en0"`. Resolve by trying
+         * the wider 6-column shape first and falling back to the
+         * narrower 4-column shape if the 6th token isn't present. */
+        char dest[128] = "", gateway[128] = "", flags[32] = "";
+        char netif[32] = "", t4[32] = "", t5[32] = "";
+        int n = sscanf(line, "%127s %127s %31s %31s %31s %31s",
+                       dest, gateway, flags, t4, t5, netif);
+        if (n >= 6) {
+            /* Tiger 6-column form: t4=Refs, t5=Use, netif=Netif. */
+        } else if (n >= 4) {
+            /* Modern 4-column form: t4 was actually Netif. */
+            strncpy(netif, t4, sizeof(netif) - 1);
+            netif[sizeof(netif) - 1] = '\0';
+        } else if (n < 3) {
             line = strtok_r(NULL, "\n", &save_ptr);
             continue;
         }

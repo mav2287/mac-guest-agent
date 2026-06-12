@@ -2,7 +2,7 @@ Real iMac5,1 — Tiger 10.4.5 / Darwin 8.5.3 — v2.5.4 candidate, i386 slice
 =========================================================================
 Captured 2026-06-04 from a real Late-2006 iMac5,1 (Intel Core 2 Duo T7200,
 4 GB RAM) running Mac OS X 10.4.5 stock install. Test harness:
-`SSHPASS=password /tmp/tiger-test/run-capture.sh user@192.168.33.5 build/mac-guest-agent-universal v254-final-2`
+`SSHPASS=password /tmp/tiger-test/run-capture.sh user@REDACTED-IP build/mac-guest-agent-universal v254-final-2`
 
 Hardware confirms this is real (not virtualized): hw_model=iMac5,1, cpu_count=2,
 4 GB RAM, /dev/disk0 with multiple HFS+ partitions including a separate "Leopard"

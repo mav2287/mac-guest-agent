@@ -1,3 +1,31 @@
+> **⚠️ SUPERSEDED — DO NOT TREAT AS GREEN.**
+>
+> This sweep was assembled before vit9696's issue #11 (2026-06-07).
+> Two material gaps surfaced after it was filed:
+>
+> 1. **Tiger network commands**: the ✅ marks on rows 29 and 30
+>    ("guest-network-get-interfaces" and "guest-network-get-route" on
+>    Tiger) reflect the v2.5.4 short-circuit returning an empty array
+>    without errors — they were implementation-tests, not outcome-tests.
+>    A correct sweep would have asserted "response contains at least
+>    one interface with a non-zero IPv4 address" and FAILED on Tiger.
+>    See `tests/outcome-sweep.sh` for what those assertions should look
+>    like and `src/cmd-network.c` `tiger_get_interfaces_ioctl()` /
+>    `tiger_get_routes_sysctl()` for the real fix.
+>
+> 2. **Lifecycle coverage**: item 17 below ("Install/uninstall
+>    idempotency") was run against BAM-Xserve ONLY. Tiger, Leopard, and
+>    Snow Leopard never had `--install` / `--upgrade` / `--uninstall`
+>    exercised. vit hit the upgrade verify rollback on Tiger immediately
+>    because the standard-mode verify gave the daemon `sleep(1)` —
+>    Tiger's `launchctl list` shell-out itself takes 200-500 ms from
+>    daemon context, leaving an effective budget under one second.
+>    Caught by widening to a 10-iter poll loop. See
+>    `tests/lifecycle-test.sh` for the regression harness.
+>
+> Outcome-based re-sweep is in progress. Treat everything below as
+> historical until that re-sweep lands.
+
 ## v2.5.4 release-readiness sweep evidence (2026-06-05/06)
 
 Comprehensive 4-VM validation against the v2.5.4 universal artifact
@@ -12,7 +40,7 @@ The four VMs covered:
 
 | VMID | Name         | macOS         | Kernel arch    | Slice selected by `lipo -thin` | Notes |
 |------|--------------|---------------|----------------|--------------------------------|-------|
-| 107  | BAM-Xserve   | 10.11.6       | x86_64         | x86_64                         | Real-world stripped Xserve3,1 install with MacBookPro3,1 SMBIOS spoof. SSH bridged on 192.168.33.x via vmbr0. |
+| 107  | BAM-Xserve   | 10.11.6       | x86_64         | x86_64                         | Real-world stripped Xserve3,1 install with MacBookPro3,1 SMBIOS spoof. SSH bridged on REDACTED-NET via vmbr0. |
 | 111  | Tiger        | 10.4.11       | i386 (RELEASE_I386) | **x86_64** (XNU grade_binary picks x86_64 on EM64T even on i386 kernel)  | Slirp NAT, hostfwd 22111. SMBIOS iMac19,1 (pinned by Tiger OC quirks). |
 | 112  | Leopard      | 10.5.8        | i386 (RELEASE_I386) | **i386** (XNU grade_binary correctly picks i386 on non-Xserve SMBIOS) | Slirp NAT, hostfwd 22112. SMBIOS MacBookPro3,1. APM→GPT-repacked install media. |
 | 113  | Snow Leopard | 10.6.8 (10K549) | x86_64 (RELEASE_X86_64, 64-bit kernel) | x86_64 | Slirp NAT, hostfwd 22113. SMBIOS MacPro3,1. APM→GPT-repacked install media. |
