@@ -37,3 +37,6 @@ graphify-out/
 .claude/
 build-test/
 compile_flags.txt
+
+# Pre-publication issue/PR reply drafts — never commit (cleaned up once in e120973)
+docs/drafts/
