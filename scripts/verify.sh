@@ -193,9 +193,9 @@ redact() {
             #   (b) ::<suffix>           — no prefix, 0+ suffix groups
             #       (covers ::1, ::).
             #   (c) full 8-group form    — no :: at all (7 colons).
-            # Each branch was verified against real agent output (the
-            # El Cap drop has both fe80::ca33:... and a routable GUA
-            # 2605:a601:...:1544 — both match here).
+            # Each branch was verified against real agent output covering
+            # both link-local (e.g. fe80::1) and routable GUA (e.g. the
+            # RFC 3849 doc prefix 2001:db8::1) forms — both match here.
             s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
             s{(?<![0-9a-fA-F:])::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;
             s{(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])}{<REDACTED-IPV6>}g;

@@ -557,11 +557,12 @@ re-enable them per-connection.
 ### From the PVE host directly
 
 ```sh
-# Install sshpass once (the password "password" is from your Tiger user
-# account; substitute whatever you set).
+# Install sshpass once, then set TIGER_SSH_PASS to your Tiger user account's
+# password before running the commands below.
 apt-get install -y sshpass
+export TIGER_SSH_PASS='<your-tiger-user-password>'
 
-SSHPASS=password sshpass -e ssh \
+SSHPASS="$TIGER_SSH_PASS" sshpass -e ssh \
   -o KexAlgorithms=+diffie-hellman-group1-sha1 \
   -o HostKeyAlgorithms=+ssh-rsa \
   -o Ciphers=+aes128-cbc,3des-cbc \
@@ -589,7 +590,7 @@ BuildVersion:   8R4088
 ssh -L 2222:127.0.0.1:22111 root@<pve-host>
 
 # In another terminal, connect to Tiger as if it were localhost:2222
-SSHPASS=password sshpass -e ssh \
+SSHPASS="$TIGER_SSH_PASS" sshpass -e ssh \
   -o KexAlgorithms=+diffie-hellman-group1-sha1 \
   -o HostKeyAlgorithms=+ssh-rsa \
   -o Ciphers=+aes128-cbc,3des-cbc \
@@ -607,7 +608,7 @@ The same legacy options work for `scp`. Important: **use `scp -O`**
 4.5 doesn't support.
 
 ```sh
-SSHPASS=password sshpass -e scp -O \
+SSHPASS="$TIGER_SSH_PASS" sshpass -e scp -O \
   -o KexAlgorithms=+diffie-hellman-group1-sha1 \
   -o HostKeyAlgorithms=+ssh-rsa \
   -o Ciphers=+aes128-cbc,3des-cbc \
