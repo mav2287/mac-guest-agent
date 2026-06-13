@@ -13,7 +13,10 @@
 #
 # Transport plugins:
 #   pve         — qm agent + qm guest exec
-#   libvirt     — virsh qemu-agent-command (added in commit 2)
+#   libvirt     — virsh dumpxml to discover the ISA-serial unix socket, then
+#                 direct socket I/O (NOT `virsh qemu-agent-command`, which is
+#                 hardcoded to the virtio QGA channel and cannot reach an ISA
+#                 agent — see the Transport: libvirt block below for rationale)
 #   utm         — Unix-socket I/O against UTM's QGA serial (commit 3)
 #   qga-socket  — Unix-socket I/O against a path supplied via --qga-socket
 #

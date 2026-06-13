@@ -43,3 +43,6 @@ docs/drafts/
 
 # Host-specific Tiger VM recovery runbook — contains internal infra (host IP/MAC/ssh alias), never publish
 docs/TIGER-VM-RECOVERY.md
+
+# Generated man page (built from docs/mac-guest-agent.8.in via `make`); not tracked
+docs/mac-guest-agent.8

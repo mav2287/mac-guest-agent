@@ -20,6 +20,8 @@ macOS Big Sur and newer include Apple's own built-in VirtIO guest agent which cl
 
 Inside the VM, the agent finds `/dev/cu.serial1`.
 
+> **Note — libvirt's native agent commands do not reach this agent.** `virsh qemu-agent-command`, `virsh domfsfreeze`, `virsh guest-info`, etc. are hardcoded to the VirtIO channel `org.qemu.guest_agent.0` and cannot talk to an ISA-serial agent. Drive this agent through the host-side unix socket bound above — this is what `scripts/verify.sh --transport libvirt` does (it discovers the socket via `virsh dumpxml` and speaks to it directly). If you specifically need virsh's built-in agent integration, use the VirtIO channel + the `--virtio` install path (SIP off, Apple's daemon unloaded) — see [docs/NO_ISA_OVERRIDE.md](NO_ISA_OVERRIDE.md).
+
 Disk and network devices are separate from the agent transport — use VirtIO for disk/network on Big Sur+, SATA/e1000 on pre-Big Sur. See the examples below.
 
 ### Big Sur+ Example (VirtIO disk/network, ISA serial for agent)

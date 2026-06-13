@@ -41,25 +41,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Manpage freshness (regenerate from template, fail on diff)
+      - name: Manpage generates from template
         run: |
-          # docs/mac-guest-agent.8 is generated from
+          # docs/mac-guest-agent.8 is a build artifact generated from
           # docs/mac-guest-agent.8.in via `make docs/mac-guest-agent.8`
-          # using $(VERSION) from the Makefile.
-          # If a VERSION bump lands without regenerating, fail CI here
-          # so the drift never reaches a release.
-          # Pin the date so this check isn't sensitive to the day the
-          # workflow runs vs the day the .8 was last regenerated; the
-          # @DATE@ substitution uses month+year only, which the
-          # developer's `make` will match if they regenerated in the
-          # same month.
+          # (it is not tracked in git). Smoke-test that the template +
+          # Makefile rule still produce a non-empty man page so a broken
+          # .8.in or rule never reaches a release.
           make docs/mac-guest-agent.8
-          if ! git diff --quiet docs/mac-guest-agent.8; then
-            echo "::error::docs/mac-guest-agent.8 is stale — run 'make docs/mac-guest-agent.8' and commit the result. Diff:"
-            git --no-pager diff docs/mac-guest-agent.8
+          if [ ! -s docs/mac-guest-agent.8 ]; then
+            echo "::error::docs/mac-guest-agent.8 was not generated from docs/mac-guest-agent.8.in"
             exit 1
           fi
-          echo "docs/mac-guest-agent.8 is fresh."
+          echo "docs/mac-guest-agent.8 generated OK."
 
       - name: Static analysis (clang --analyze)
         run: |
