@@ -40,3 +40,6 @@ compile_flags.txt
 
 # Pre-publication issue/PR reply drafts — never commit (cleaned up once in e120973)
 docs/drafts/
+
+# Host-specific Tiger VM recovery runbook — contains internal infra (host IP/MAC/ssh alias), never publish
+docs/TIGER-VM-RECOVERY.md

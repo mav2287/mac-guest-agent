@@ -1,6 +1,6 @@
 > **⚠️ SUPERSEDED — DO NOT TREAT AS GREEN.**
 >
-> This sweep was assembled before vit9696's issue #11 (2026-06-07).
+> This sweep was assembled before issue #11 (2026-06-07).
 > Two material gaps surfaced after it was filed:
 >
 > 1. **Tiger network commands**: the ✅ marks on rows 29 and 30
@@ -16,7 +16,7 @@
 > 2. **Lifecycle coverage**: item 17 below ("Install/uninstall
 >    idempotency") was run against BAM-Xserve ONLY. Tiger, Leopard, and
 >    Snow Leopard never had `--install` / `--upgrade` / `--uninstall`
->    exercised. vit hit the upgrade verify rollback on Tiger immediately
+>    exercised. The upgrade verify rollback on Tiger was hit immediately
 >    because the standard-mode verify gave the daemon `sleep(1)` —
 >    Tiger's `launchctl list` shell-out itself takes 200-500 ms from
 >    daemon context, leaving an effective budget under one second.

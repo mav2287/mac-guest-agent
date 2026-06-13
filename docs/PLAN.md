@@ -23,8 +23,8 @@ Three phases, **strict sequential** — each consumes the previous phase's deliv
 | 1 | QEMU `qga/qapi-schema.json` + `docs/interop/qemu-ga-ref.rst` | Canonical schema for `guest-fsfreeze-freeze`, `guest-fsfreeze-status`, `guest-get-cpustats`, `guest-get-memory-blocks`. Settles the "per-CPU array vs aggregate object?" question for `get-cpustats`. |
 | 2 | QEMU `qga/commands-posix.c` | Linux freeze reference impl: how does it handle foreign FS, partial failure, what does it return on partial success? |
 | 3 | QEMU `qga/main.c` | Linux command-gating state machine. Validates or contradicts our `fsfreeze_command_allowed`. |
-| 4 | Proxmox `PVE/QemuServer/Agent.pm` + `PVE/CLI/qm.pm` | What `qm agent <cmd>` and `qm guest cmd <cmd>` do with a `{"error":...}` response. Exit-code semantics. Resolves Finding 2 from the vit9696 thread definitively. |
-| 5 | Proxmox UI / RRD source | Whether the CPU% and memory gauges call `guest-get-cpustats` / `guest-get-memory-blocks`, or come from QMP host-side. Closes @vit9696's CPU question on real evidence. |
+| 4 | Proxmox `PVE/QemuServer/Agent.pm` + `PVE/CLI/qm.pm` | What `qm agent <cmd>` and `qm guest cmd <cmd>` do with a `{"error":...}` response. Exit-code semantics. Resolves Finding 2 from the issue #2 thread definitively. |
+| 5 | Proxmox UI / RRD source | Whether the CPU% and memory gauges call `guest-get-cpustats` / `guest-get-memory-blocks`, or come from QMP host-side. Closes the CPU question (issue #2) on real evidence. |
 | 6 | Apple's built-in QGA (Big Sur+, 18 cmds) — binary inspection | How Apple's macOS-native agent shapes its responses, especially for overlapping commands. |
 | 7 | virtio-balloon stats protocol | The "right" Linux memory-telemetry path. Confirms whether macOS will ever have real memory telemetry. |
 
@@ -106,7 +106,7 @@ For Question 1 specifically, the spec doc must catalogue:
 
 Implementation work flows from the spec and is tracked as separate commits: `src/cmd-fs.c` (`sync_all_volumes` per-FS dispatch, freeze response detail), `src/cmd-hardware.c` (cpustats shape if we extend), `fsfreeze_command_allowed` (allowlist alignment), possibly `src/agent.c` (frozen-state persistence), plus doc revisions to `docs/PVE.md`, `README.md`, `docs/COMPATIBILITY.md`, and the new freeze-semantics doc.
 
-**Unblocks:** Phase 3 + a confident, principled reply to @vit9696 that covers both his original findings *and* the deeper coverage question his report surfaced.
+**Unblocks:** Phase 3 + a confident, principled response on issue #2 that covers both the original findings *and* the deeper coverage question the report surfaced.
 
 ## Phase 3 — One-shot `pve-verify.sh` + script bug fix
 
@@ -125,13 +125,13 @@ Implementation work flows from the spec and is tracked as separate commits: `src
 3. **Single structured report** — human-readable text section + JSON appendix the maintainer can paste straight into `docs/evidence/<version>/`. JSON shape reflects whatever Phase 2 picked for `--self-test-json` / `--safe-test-json` (especially cpustats and per-FS freeze breakdown).
 4. **PII auto-redaction** (IPs, MAC addresses, VM IDs) gated by `--redact` flag, on by default.
 5. **Doc sweep** — update `docs/COMPATIBILITY.md` Step 2 and `docs/evidence/README.md` for the one-command flow. Update any per-FS freeze documentation (created by Phase 2) referenced from the validation flow.
-6. **Reply to @vit9696** — once Phase 2 has decisions, send the follow-up that:
-   - Confirms his behavioural-check FAIL was a bug in our script, not in our agent.
+6. **Follow up on issue #2** — once Phase 2 has decisions, post the follow-up that:
+   - Confirms the behavioural-check FAIL was a bug in our script, not in our agent.
    - Explains the per-FS freeze treatment we landed on (per Question 1).
-   - Confirms the F_FULLFSYNC-on-FAT32 warning he saw will become an INFO and the volume will be counted as best-effort flushed.
-   - Acknowledges the broader coverage question his report surfaced.
+   - Confirms the F_FULLFSYNC-on-FAT32 warning will become an INFO and the volume will be counted as best-effort flushed.
+   - Acknowledges the broader coverage question the report surfaced.
 
-**Deliverable:** updated `scripts/pve-verify.sh`, doc updates, the follow-up issue reply (drafted for review, posted on user OK), CHANGELOG Unreleased entry.
+**Deliverable:** updated `scripts/pve-verify.sh`, doc updates, the issue #2 follow-up (drafted for review, posted on user OK), CHANGELOG Unreleased entry.
 
 **Why this is last, not parallel:** if Phase 2 changes the cpustats shape or the freeze response detail, Phase 3 wraps a moving target. The streamline has to consume what Phases 1–2 produce.
 
@@ -141,7 +141,7 @@ Implementation work flows from the spec and is tracked as separate commits: `src
 |---|---|---|---|---|
 | 1 | **done** | `docs/research/UPSTREAM_NOTES.md` | 2026-05-23 | 2026-05-23 |
 | 2 | **done** | `docs/design/AGENT_BEHAVIOUR_SPEC.md` + implementation items 1–7 (per-FS dispatch, freeze-list subset, ZFS, cpustats array, allowlist test, `freeze_dispatch` JSON block, doc honesty) + `docs/design/FREEZE_SEMANTICS.md` | 2026-05-23 | 2026-05-23 |
-| 3 | **code + docs done; reply to @vit9696 still pending user OK** | `scripts/pve-verify.sh` Phase 3 rewrite (content-not-exit-code behavioural check, `qm guest exec` driven in-VM `--self-test-json` / `--safe-test-json`, freeze-log fetch, structured report + JSON appendix, PII redaction); `docs/COMPATIBILITY.md` Step 2 + `docs/evidence/README.md` updated for the one-shot flow | 2026-05-23 | 2026-05-23 (code/docs); reply pending |
+| 3 | **code + docs done; issue #2 follow-up still pending user OK** | `scripts/pve-verify.sh` Phase 3 rewrite (content-not-exit-code behavioural check, `qm guest exec` driven in-VM `--self-test-json` / `--safe-test-json`, freeze-log fetch, structured report + JSON appendix, PII redaction); `docs/COMPATIBILITY.md` Step 2 + `docs/evidence/README.md` updated for the one-shot flow | 2026-05-23 | 2026-05-23 (code/docs); reply pending |
 | 4 | **done** | `scripts/verify.sh` — unified multi-transport verifier (PVE + libvirt + UTM + qga-socket), auto-detection, transport plugin architecture, PVE preflights (root / cluster locality / backup lock), auto-thaw safety trap, `host_environment` capture block, multi-cycle freeze with mount-dispatch cross-check, `--no-freeze` flag, schema 2.0 JSON appendix, 57-assertion shell-shim integration test (`make test-verify-transports`). `pve-verify.sh` deleted (no shim). Docs swept: COMPATIBILITY / UTM / LIBVIRT / PVE / evidence (with full schema 2.0 field table) / FREEZE_SEMANTICS. | 2026-05-23 | 2026-05-23 |
 
 Update this table as phases progress.

@@ -551,13 +551,13 @@ $qmpclient->queue_cmd($qmp_peer, $blockstatscb, 'query-blockstats');
 
 **Conclusively: the PVE web UI does not call our QGA commands for any of its data gauges.** No `guest-get-cpustats`, no `guest-get-memory-blocks`, no `guest-get-memory-block-info` is ever invoked by `vmstatus`. Three consequences:
 
-1. **Our `guest-get-cpustats` shape mismatch (Target 1) does not affect the PVE UI.** The UI's CPU% is QEMU process CPU time on the host. That's why @vit9696 sees one core at 100% on his Tiger VM — the QEMU vCPU thread is genuinely consuming a host core (old-macOS-on-QEMU idle quirk), and PVE is faithfully reporting it. Our agent's CPU response shape is irrelevant to this gauge.
+1. **Our `guest-get-cpustats` shape mismatch (Target 1) does not affect the PVE UI.** The UI's CPU% is QEMU process CPU time on the host. That's why a Tiger VM shows one core at 100% — the QEMU vCPU thread is genuinely consuming a host core (old-macOS-on-QEMU idle quirk), and PVE is faithfully reporting it. Our agent's CPU response shape is irrelevant to this gauge.
 
-2. **Our `guest-get-memory-blocks` (and its derived "accurate memory reporting") does not feed the PVE UI either.** The memory gauge is cgroup RSS of QEMU (host RAM footprint) when no balloon stats are present. For a macOS guest, that's what shows up — not our agent's data. The reason @vit9696's gauge "looks correct" is that QEMU's RSS on the host happens to correlate roughly with guest memory pressure, not because PVE reads our agent.
+2. **Our `guest-get-memory-blocks` (and its derived "accurate memory reporting") does not feed the PVE UI either.** The memory gauge is cgroup RSS of QEMU (host RAM footprint) when no balloon stats are present. For a macOS guest, that's what shows up — not our agent's data. The reason the gauge "looks correct" is that QEMU's RSS on the host happens to correlate roughly with guest memory pressure, not because PVE reads our agent.
 
 3. **The "Accurate Memory Reporting Without Balloon Driver" rationale (`docs/PVE.md`) is misleading as written.** It implies PVE's memory gauge benefits from our agent. It doesn't. What we provide is *direct* memory reporting via `qm agent <vmid> get-memory-blocks` or our own `pve-verify.sh` — a separate path from the gauge. Phase 2 should re-word this so contributors aren't misled into thinking the UI gets prettier when our agent is installed.
 
-So the answer to the original @vit9696 CPU question is now fully evidenced and closed: **the 100%-of-one-core figure is QEMU's host-side measurement of an idle-but-not-HLT'ing Tiger guest.** Stopping the agent will not change it. Our `get-cpustats` shape will not change it. Only the guest kernel's idle behaviour under KVM can change it.
+So the answer to the original CPU question (issue #2) is now fully evidenced and closed: **the 100%-of-one-core figure is QEMU's host-side measurement of an idle-but-not-HLT'ing Tiger guest.** Stopping the agent will not change it. Our `get-cpustats` shape will not change it. Only the guest kernel's idle behaviour under KVM can change it.
 
 ---
 
@@ -580,13 +580,13 @@ Phase 1 complete. Across seven targets, the consolidated picture:
 - **Allowlist divergence** with upstream: ours is 9, theirs is 6. We allow re-freeze (idempotent); they block it. Phase 2 should decide whether to align or document the divergence. The other extra entries (`guest-sync-id`) are fine.
 - **Persistent frozen-state marker on disk + logging disabled while frozen** — upstream does both for crash-safety and to avoid writing to a frozen volume. We do neither. Mostly harmless given our freeze isn't a true I/O suspension, but Phase 2 should at least decide explicitly.
 
-### Why `pve-verify.sh`'s behavioural check failed for @vit9696
+### Why `pve-verify.sh`'s behavioural check reported a false failure (issue #2)
 
 `qm agent <vmid> <cmd>` is an alias for `qm guest cmd <vmid> <cmd>`. Both route through `PVE::API2::Qemu::Agent`'s `register_command` dispatcher, which wraps the QGA response as `{result: $res}` with **no error handling**. When our agent returns `{"error":{"class":"GenericError","desc":"Command not allowed while filesystem is frozen"}}`, PVE wraps that as `{result:{error:{desc:"..."}}}`, returns HTTP 200, and the CLI exits 0. Our `pve-verify.sh` check that reads exit code therefore declares failure even when the agent is doing the right thing.
 
 **Our agent's freeze gating in `src/agent.c:73` is correct.** The fix is in our script: inspect response content for `"error"` / `"pretty-name"` instead of exit code.
 
-### Why @vit9696's PVE CPU% gauge shows 100%
+### Why the PVE CPU% gauge shows 100% on a Tiger VM
 
 PVE's per-VM CPU gauge comes from `/proc/<qemu-pid>/stat` (`utime + stime`), not from our agent. Tiger's idle loop doesn't trap to KVM in a way that lets it park the vCPU thread, so the QEMU process keeps that thread spinning on the host. By El Cap that had been fixed. Our agent is not the source. Stopping the agent will not change the gauge.
 
@@ -708,7 +708,7 @@ Strings search for freeze-related identifiers (`freeze`, `thaw`, `FIFREEZE`, `F_
 
 Two critical properties:
 
-1. **The daemon is IOKit-launched on-demand.** It only starts when a device with `AppleVirtIOAgentDevice = 1` is matched by IOKit. This property is set by Apple's `applevirtio.console` driver, which only loads on guests running under Apple's Virtualization.framework. **On QEMU/OpenCore guests (vit9696's and the user's setups), this property is not present and Apple's agent never launches.**
+1. **The daemon is IOKit-launched on-demand.** It only starts when a device with `AppleVirtIOAgentDevice = 1` is matched by IOKit. This property is set by Apple's `applevirtio.console` driver, which only loads on guests running under Apple's Virtualization.framework. **On QEMU/OpenCore guests, this property is not present and Apple's agent never launches.**
 2. **The transport is Apple's `RemoteServices`** (not raw serial). The agent listens on a `virtualmachine-host`-only Mach service, gated by the entitlement `com.apple.private.AppleQEMUGuestAgent`. This is the VZ host ↔ guest agent channel; it has nothing to do with QGA's traditional serial channel.
 
 ### Verdict

@@ -59,8 +59,8 @@ $ sudo kill -USR1 482 ; sleep 1 ; sudo tail -3 /var/log/mac-guest-agent.log
 * msgs counter climbs by 4-8 per ping (one ping involves multiple JSON
   messages: a sync-delimited handshake, the actual command, the response).
 
---- Diagnostic value if vit9696 reports another wedge on v2.5.4 ---
-Per his sample output showing pid 43 stuck in `select`, we'd ask him to:
+--- Diagnostic value if another wedge is reported on v2.5.4 ---
+Per the reported sample output showing pid 43 stuck in `select`, the steps are:
   sudo kill -USR1 $(pgrep mac-guest-agent || launchctl list com.macos.guest-agent | awk '/^[0-9]/ {print $1}')
 Then tail the log. Three possible outcomes:
 
@@ -81,4 +81,4 @@ Then tail the log. Three possible outcomes:
 
 This three-way split is the empirical answer to "is this our bug or
 PVE's QGA proxy?" — which Codex correctly called out as undetermined
-from the v2.5.3 evidence vit9696 provided.
+from the v2.5.3 evidence provided in issue #11.

@@ -1,6 +1,6 @@
 # Audit: degraded code paths across the agent
 
-**Status:** in-progress audit triggered by vit9696 issue #11 (Tiger 10.4
+**Status:** in-progress audit triggered by issue #11 (Tiger 10.4
 `network-get-interfaces` returning `[]` and `--upgrade` rolling back
 even on success). Posted here so the next pass — and the next bug
 report — has a single place to start.

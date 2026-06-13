@@ -399,7 +399,7 @@ The post-fix Tiger 10.4.11 daemon has now beaten that by 50% with zero
 failures of any kind.
 
 > **Honesty caveat**: this is empirical validation in OUR test
-> environment. vit9696's environment may have subtly different timing,
+> environment. Other environments may have subtly different timing,
 > chardev backends, or load patterns. The watchdog + SIGUSR1 dump are
 > kept as defense in depth and diagnostic instrumentation for any
 > failure mode we haven't yet observed.

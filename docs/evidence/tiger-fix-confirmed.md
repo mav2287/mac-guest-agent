@@ -9,7 +9,7 @@ ssh pve "qm guest cmd 111 network-get-interfaces"
 []
 ```
 
-(Empty array — vit9696's issue #11.)
+(Empty array — the issue #11 symptom.)
 
 ## Post-fix v2.5.5-dev behavior
 
@@ -63,7 +63,7 @@ with three new code paths:
 
 Plus a separate fix in `src/service.c` `check_our_daemon_running()`
 to handle Tiger's label-only `launchctl list` output format (root
-cause of vit9696's separate `--upgrade` rollback report).
+cause of the separate `--upgrade` rollback report in issue #11).
 
 ## Tiger VM stability — open issue
 
@@ -101,4 +101,4 @@ Hypotheses (not yet confirmed):
   table dump, since most callers only care about the default route.
 
 The main fix (interfaces + MAC + IPs + stats) is proven working
-and unblocks vit9696's primary complaint in issue #11.
+and resolves the primary report in issue #11.

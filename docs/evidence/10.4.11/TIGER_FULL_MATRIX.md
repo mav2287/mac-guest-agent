@@ -262,7 +262,7 @@ Replay the EXACT sequences that historically produced "wedges", from the session
 
 ## Headline conclusions
 
-1. **Every guest command works correctly on Tiger 10.4.11.** All 25 read commands return real data; exec/file/freeze/write families all functional; the issue #11 network/disk fixes are solid. Vit's premise — "the wedges were the VM, not the agent" — is **confirmed**: the agent is correct, and there is **no per-command or per-call-count failure**. The supported PVE `qm` QMP path is bulletproof (40/40 under hammer).
+1. **Every guest command works correctly on Tiger 10.4.11.** All 25 read commands return real data; exec/file/freeze/write families all functional; the issue #11 network/disk fixes are solid. The conclusion that the wedges were the VM, not the agent, is **confirmed**: the agent is correct, and there is **no per-command or per-call-count failure**. The supported PVE `qm` QMP path is bulletproof (40/40 under hammer).
 
 2. **Three real agent/tooling bugs found and FIXED during testing** (uncommitted, in working tree):
    - `src/service.c`: `ps -axo pid,comm` → `pid,command` — Tiger ps rejects `comm`, which made **every `--upgrade` on Tiger silently roll back** (true root cause of the #11 follow-up; the prior 10-iter fix couldn't help). Verified fixed end-to-end.
