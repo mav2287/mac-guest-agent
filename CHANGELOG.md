@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.5.5 — unreleased (finalizing)
+## v2.5.5 — 2026-06-13
 
 Two themes: replace the remaining Tiger 10.4 daemon-context *placeholders*
 (commands that returned empty/no-op because the obvious macOS syscall hangs
