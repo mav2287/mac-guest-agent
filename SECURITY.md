@@ -61,12 +61,14 @@ block-rpcs = guest-exec,guest-set-user-password
 
 While the filesystem is frozen (`guest-fsfreeze-freeze` has been called but `guest-fsfreeze-thaw` has not), the agent restricts which commands can execute. This prevents new disk writes from invalidating the freeze consistency guarantee.
 
-**Allowed during freeze:**
+**Allowed during freeze** (matches `fsfreeze_is_allowlisted()` in `src/cmd-fs.c`):
 - `guest-ping`
 - `guest-sync`, `guest-sync-delimited`
+- `guest-sync-id` (extension — read-only, returns a caller-supplied correlation token)
 - `guest-info`
 - `guest-fsfreeze-status`
 - `guest-fsfreeze-freeze` (idempotent — returns current frozen count)
+- `guest-fsfreeze-freeze-list` (idempotent subset re-freeze — divergence from upstream)
 - `guest-fsfreeze-thaw`
 
 **Blocked during freeze:** all other commands. The agent returns a `GenericError` with a message indicating the filesystem is frozen.
@@ -80,7 +82,7 @@ Hook scripts in `/etc/qemu/fsfreeze-hook.d/` execute as root during freeze and t
 - **Must be owned by root** (uid 0)
 - **Must not be world-writable** (no `o+w` permission)
 - **Must be executable** (has `x` permission for owner)
-- **30-second timeout** per script — scripts that hang are killed via SIGTERM then SIGKILL
+- **30-second timeout** per script — a script that exceeds it is killed with SIGKILL (a hung hook during a freeze must not extend the freeze window, so there is no SIGTERM grace period)
 - **Execution order:** scripts run in alphabetical order on freeze, reverse order on thaw
 
 Scripts that **fail validation** (wrong owner, world-writable, not executable) are skipped with a warning logged — these are configuration errors, not runtime failures, and the freeze proceeds without that hook.

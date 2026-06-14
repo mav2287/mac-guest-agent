@@ -52,15 +52,24 @@ static cJSON *handle_file_open(cJSON *args, const char **err_class, const char *
     if (cJSON_IsString(mode_item) && mode_item->valuestring)
         mode_str = mode_item->valuestring;
 
+    /* Write-capable modes get O_NOFOLLOW on the final path component so an
+     * unprivileged guest user cannot win a symlink race at the target path and
+     * redirect a root-owned create/truncate/write to an arbitrary file (TOCTOU
+     * privilege escalation). A symlinked target then fails open() with ELOOP,
+     * which falls through to the GenericError path below — fail-secure. Matches
+     * the O_NOFOLLOW hardening already in src/cmd-ssh.c. Read-only ("r") keeps
+     * symlink-follow for QGA compatibility: a read returns nothing the QGA
+     * caller (already root in the guest) could not read directly. O_NOFOLLOW is
+     * POSIX and present on macOS since 10.0, so this stays Tiger-compatible. */
     int flags = O_RDONLY;
     if (strcmp(mode_str, "w") == 0)
-        flags = O_WRONLY | O_CREAT | O_TRUNC;
+        flags = O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW;
     else if (strcmp(mode_str, "a") == 0)
-        flags = O_WRONLY | O_CREAT | O_APPEND;
+        flags = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
     else if (strcmp(mode_str, "r+") == 0)
-        flags = O_RDWR;
+        flags = O_RDWR | O_NOFOLLOW;
     else if (strcmp(mode_str, "w+") == 0)
-        flags = O_RDWR | O_CREAT | O_TRUNC;
+        flags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW;
 
     open_file_t *entry = alloc_entry();
     if (!entry) {

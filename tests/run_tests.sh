@@ -120,11 +120,11 @@ import json, sys
 d = json.load(sys.stdin)
 r = d.get('return', d)
 if isinstance(r, list):
-    # Check first element of array
-    if len(r) > 0:
-        assert '$field' in r[0], f'Missing field: $field'
-    else:
-        pass  # empty array is ok
+    # A field assertion on an array means we expect >=1 element carrying that
+    # field. An empty array is a semantic FAILURE, not a pass (issue #11 bug
+    # class: empty-when-data-expected must be caught, not accepted).
+    assert len(r) > 0, f'Empty array — expected >=1 element with field: $field'
+    assert '$field' in r[0], f'Missing field: $field'
 elif isinstance(r, dict):
     assert '$field' in r, f'Missing field: $field'
 " 2>/dev/null; then

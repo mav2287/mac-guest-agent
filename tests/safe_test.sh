@@ -71,7 +71,7 @@ import json, sys
 d = json.load(sys.stdin)
 r = d['return']
 if isinstance(r, list):
-    assert len(r) == 0 or '$field' in r[0]
+    assert len(r) > 0 and '$field' in r[0]
 elif isinstance(r, dict):
     assert '$field' in r
 " 2>/dev/null && ! echo "$resp" | python -c "
@@ -79,7 +79,7 @@ import json, sys
 d = json.load(sys.stdin)
 r = d['return']
 if isinstance(r, list):
-    assert len(r) == 0 or '$field' in r[0]
+    assert len(r) > 0 and '$field' in r[0]
 elif isinstance(r, dict):
     assert '$field' in r
 " 2>/dev/null; then
@@ -236,8 +236,17 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-test_cmd "guest-fstrim (no-op)" \
-    '{"execute":"guest-fstrim"}'
+# guest-fstrim MUST error on macOS (no on-demand TRIM) rather than return a
+# fake empty success — verify the error, not a "return". See src/cmd-fs.c.
+FSTRIM=$(echo '{"execute":"guest-fstrim"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
+if echo "$FSTRIM" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
+   echo "$FSTRIM" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
+    echo "  PASS: guest-fstrim returns error (no fake no-op success)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: guest-fstrim should error, got: ${FSTRIM:0:120}"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "--- 8. Network ---"

@@ -95,9 +95,8 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
 
     /* Capture netstat -ibn output ONCE for the whole response. Each
      * per-interface stats lookup parses the cached buffer instead of
-     * forking netstat N times. Tiger never reaches this code path — it
-     * branches into tiger_get_interfaces_ioctl() above where stats are
-     * sourced from sysctl(NET_RT_IFLIST) instead. */
+     * forking netstat N times. (Tiger uses this same getifaddrs path as of
+     * v2.5.5 — the old SIOCGIFCONF / NET_RT_IFLIST special-case was removed.) */
     char *netstat_out = NULL;
     (void)run_command_capture("netstat -ibn", &netstat_out);
 
