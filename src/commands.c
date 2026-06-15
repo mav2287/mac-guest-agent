@@ -122,6 +122,16 @@ static command_entry_t *find_command(const char *name)
     return NULL;
 }
 
+/* Public existence check: is `name` a registered command? Used by the agent's
+ * freeze gate so that an UNKNOWN command (e.g. guest-fstrim, which is not
+ * registered on macOS) returns CommandNotFound rather than the misleading
+ * "not allowed while filesystem is frozen" — the freeze allowlist must only
+ * apply to commands that actually exist. */
+int command_exists(const char *name)
+{
+    return name && find_command(name) != NULL;
+}
+
 char *commands_dispatch(const char *cmd_name, cJSON *args, const cJSON *id)
 {
     if (!cmd_name) {

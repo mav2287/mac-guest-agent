@@ -73,13 +73,14 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 
 ## Summary
 
-- **Stable:** 35 commands
+- **Stable:** 36 commands
 - **Caveated:** 4 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, set-user-password)
 - **Error:** 2 commands (set-vcpus, set-memory-blocks)
 - **Alias:** 2 commands (sync-id, get-hostname)
+- (Total registered: 44)
 - **Full Linux parity:** 29 commands
-- **Partial parity:** 12 commands
-- **Divergent:** 3 commands
+- **Partial parity:** 13 commands
+- **Divergent:** 2 commands
 - **Not registered** (no macOS equivalent, matches upstream): `guest-fstrim` — see note above + [RECLAIM.md](RECLAIM.md)
 
 ## Runtime Test Evidence

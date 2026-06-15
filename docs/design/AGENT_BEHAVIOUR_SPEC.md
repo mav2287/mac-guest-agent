@@ -289,7 +289,7 @@ The honest disclosure of this choice lives in the source-file comment and in the
   4. Free the Mach buffer via `vm_deallocate(mach_task_self(), (vm_address_t)info, info_count * sizeof(integer_t))`.
 - Keep the registration in `cmd_hardware_init()` — same command name, fixed shape.
 - `--self-test-json` env block (`emit_system_info()` in `src/selftest.c`) — add a brief note describing the cpustats shape and the `type:"linux"` discriminator-choice rationale, so anyone tracing where the `"linux"` came from finds the explanation without having to read source.
-- No removal from `docs/COMMAND_STATUS.md`; command count stays 45.
+- No removal from `docs/COMMAND_STATUS.md` for this (cpustats) decision; it leaves the count unchanged. (The overall registered count is now **44**, not 45 — `guest-fstrim` was later removed; see RECLAIM.md.)
 - No test changes needed — `--safe-test` doesn't currently exercise `guest-get-cpustats` (verified in `src/selftest.c:626-627`: the array has `Memory block size` and `Memory blocks`, no cpustats entry).
 
 ### Failure modes

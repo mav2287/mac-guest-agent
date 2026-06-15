@@ -131,8 +131,11 @@ static void process_message(agent_t *ag, const char *msg)
         return;
     }
 
-    /* During freeze, only allow freeze-safe commands */
-    if (!fsfreeze_command_allowed(cmd_name)) {
+    /* During freeze, only allow freeze-safe commands. The gate applies only to
+     * commands that actually exist — an unknown command (e.g. guest-fstrim,
+     * which is not registered on macOS) must fall through to commands_dispatch()
+     * and get CommandNotFound, not the misleading "not allowed while frozen". */
+    if (command_exists(cmd_name) && !fsfreeze_command_allowed(cmd_name)) {
         char *resp = protocol_build_error("GenericError",
             "Command not allowed while filesystem is frozen", id);
         if (resp) {

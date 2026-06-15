@@ -781,7 +781,12 @@ int safetest_run(int json_output)
     if (trim_resp) {
         cJSON *parsed = cJSON_Parse(trim_resp);
         free(trim_resp);
-        int unregistered = parsed && cJSON_GetObjectItem(parsed, "error");
+        /* Must be specifically CommandNotFound — a re-registered handler that
+         * returned a generic error would otherwise slip through this gate. */
+        cJSON *err = parsed ? cJSON_GetObjectItem(parsed, "error") : NULL;
+        cJSON *cls = err ? cJSON_GetObjectItem(err, "class") : NULL;
+        int unregistered = cls && cJSON_IsString(cls) &&
+                           strcmp(cls->valuestring, "CommandNotFound") == 0;
         if (parsed) cJSON_Delete(parsed);
         if (unregistered) {
             pass++;

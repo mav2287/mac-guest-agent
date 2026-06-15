@@ -1,4 +1,11 @@
-# Dead-item audit — all 45 QGA commands
+# Dead-item audit — QGA commands
+
+> **Superseded (issue #12):** the `guest-fstrim` row below records the v2.5.5
+> decision (turn the dead no-op into an honest error). That was itself reverted —
+> `guest-fstrim` is now **not registered at all** on macOS (matches upstream
+> `CONFIG_FSTRIM` gating; calling it returns `CommandNotFound`). Command count is
+> now 44. See `docs/RECLAIM.md`.
+
 
 Goal: find every command that returns success/data without actually doing the
 thing — the anti-pattern that makes a caller think work happened when nothing

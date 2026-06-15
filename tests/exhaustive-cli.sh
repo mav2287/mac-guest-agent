@@ -90,7 +90,7 @@ for m in re.finditer(r"<<<([A-Za-z_]+)>>>\n(.*?)<<<EXIT:(\d+)>>>", text, re.S):
 CASES=[
  ("version","mac-guest-agent",0),("help","Usage",0),("help_verbs",None,0),
  ("dumpconf","[general]",0),("selftest","self-test",0),("selftest_ver","macOS version",0),
- ("selftest_cmds","45 registered",0),("selftest_json","{",0),("safetest","passed",0),
+ ("selftest_cmds","44 registered",0),("selftest_json","{",0),("safetest","passed",0),
  ("safetest_json","{",0),("block_rpcs","CommandNotFound",0),("allow_rpcs","CommandNotFound",0),
  ("test_ping","{}",0),("install_dry","DRY RUN",0),("uninstall_dry","DRY RUN",0),
  ("dash_virtio","TWO dashes",1),("virtio_both","cannot combine",1),

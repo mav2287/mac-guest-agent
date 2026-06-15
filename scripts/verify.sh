@@ -1402,7 +1402,7 @@ AGENTVER=$(json_query "$AGENTINFO" '$d->{version} // ""')
 if [ -n "$CMDCOUNT" ] && [ "$CMDCOUNT" -ge 40 ] 2>/dev/null; then
     pass "info — $CMDCOUNT commands registered${AGENTVER:+, agent v$AGENTVER}"
 elif [ -n "$CMDCOUNT" ] && [ "$CMDCOUNT" -gt 0 ] 2>/dev/null; then
-    fail "info — only $CMDCOUNT commands (expected ~45; a different agent may be answering)"
+    fail "info — only $CMDCOUNT commands (expected ~44; a different agent may be answering)"
 else
     fail "info — no valid response from agent"
 fi

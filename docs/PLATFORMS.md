@@ -72,7 +72,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 | Capability | Apple VirtIO Agent | mac-guest-agent |
 |---|---|---|
 | Transport | VirtIO serial (default — Apple's daemon owns the channel) | ISA serial — required as of v2.5.0; VirtIO transport removed |
-| Total commands | 18 | 45 |
+| Total commands | 18 | 44 |
 | Filesystem freeze/thaw | **No** | Yes (APFS snapshot + sync + hooks) |
 | Memory reporting | **No** | Yes (real usage via Mach VM stats) |
 | OS info (guest-get-osinfo) | **No** | Yes |
@@ -88,7 +88,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 | SSH key management | **No** | Yes |
 | User password | **No** | Yes |
 | Suspend/hibernate | **No** | Yes |
-| TRIM | **No** | Yes (no-op, macOS native) |
+| TRIM / discard | **No** | N/A — macOS has no on-demand TRIM, so neither agent exposes `guest-fstrim` (see RECLAIM.md) |
 | Freeze hooks (DB flush) | **No** | Yes (MySQL, PostgreSQL, Redis) |
 | Self-test / diagnostics | **No** | Yes (text + JSON) |
 | Backup readiness check | **No** | Yes |
