@@ -297,7 +297,7 @@ echo '{"execute":"guest-get-load"}' | sudo mac-guest-agent --test
 echo '{"execute":"guest-get-cpustats"}' | sudo mac-guest-agent --test
 ```
 
-All 44 commands work regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction.
+All 42 commands work regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction.
 
 ## Troubleshooting
 
@@ -317,7 +317,7 @@ If you followed a guide like [klabsdev](https://klabsdev.com/definitive-guide-to
 qm set <vmid> --agent enabled=1,type=isa
 ```
 
-> **Important:** Always use `type=isa`, even on Big Sur+. The default VirtIO serial channel is claimed by Apple's own built-in guest agent (which only supports 18 basic commands). `type=isa` gives our agent a dedicated channel with all 44 commands including freeze.
+> **Important:** Always use `type=isa`, even on Big Sur+. The default VirtIO serial channel is claimed by Apple's own built-in guest agent (which only supports 18 basic commands). `type=isa` gives our agent a dedicated channel with all 42 commands including freeze.
 
 **2. Stop and start the VM** (reboot is not enough — QEMU needs to create the serial device):
 ```bash

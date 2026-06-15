@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed — `guest-set-vcpus` / `guest-set-memory-blocks` no longer registered
+
+Same principle as the `guest-fstrim` change below: macOS has no CPU or memory
+hotplug, and upstream QEMU gates both commands behind `CONFIG_LINUX` (omitting
+them where unsupported). They had been registered with `enabled=0` (so calling
+them already returned `CommandNotFound`), but listing a command with
+`enabled:false` misuses the QGA flag — `enabled` means "administratively
+blocked", not "the platform can't do this". For consistency with `guest-fstrim`
+and with upstream, both are now simply **not registered**: absent from
+`guest-info`, `CommandNotFound` on call. Command count 44 → 42. The self-test
+now asserts all three (`guest-fstrim`, `guest-set-vcpus`,
+`guest-set-memory-blocks`) are unregistered (CommandNotFound), so the ship gate
+guards against silently re-introducing any of them.
+
 ### Fixed — `guest-fstrim` no longer ships a failing self-test (issue #12)
 
 `--safe-test-json` reported `20 passed, 1 failed, status:fail` on every macOS

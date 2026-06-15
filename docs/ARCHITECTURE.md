@@ -65,7 +65,7 @@ protocol_parse_request()  →  cJSON parse
     ▼
 commands_dispatch()
     │
-    ├─ find_command() in registry (44 commands)
+    ├─ find_command() in registry (42 commands)
     │
     ├─ check enabled (block-rpcs / allow-rpcs)
     │

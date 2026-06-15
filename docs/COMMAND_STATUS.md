@@ -1,8 +1,11 @@
 # Command Status
 
-All 44 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
+All 42 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
 
-> **`guest-fstrim` is intentionally not registered on macOS.** It is on-demand bulk free-space discard (Linux FITRIM), and macOS exposes no volume-level free-extent trim API — so, like upstream QEMU (which gates `guest-fstrim` behind `CONFIG_FSTRIM`/`#ifdef FITRIM`), we don't register it rather than ship a stub that always errors. Calling it returns the standard `CommandNotFound`. To reclaim thin-provisioned space on a macOS guest, see [RECLAIM.md](RECLAIM.md).
+> **Intentionally not registered on macOS** (no equivalent API; matches upstream QEMU's `CONFIG_*` gating — we omit the command rather than ship a stub, so `guest-info` doesn't advertise it and calling it returns the standard `CommandNotFound`):
+> - `guest-fstrim` — on-demand bulk free-space discard (Linux `FITRIM`); macOS has no volume-level free-extent trim API. To reclaim thin-provisioned space see [RECLAIM.md](RECLAIM.md).
+> - `guest-set-vcpus` — no CPU hotplug on macOS.
+> - `guest-set-memory-blocks` — no memory hotplug on macOS.
 
 ## Status Key
 
@@ -44,10 +47,8 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 | `guest-suspend-ram` | power | stable | partial | yes | Via pmset |
 | `guest-suspend-hybrid` | power | stable | partial | yes | Via pmset |
 | `guest-get-vcpus` | hardware | stable | partial | no | All reported online, can-offline=false |
-| `guest-set-vcpus` | hardware | error | divergent | — | No CPU hotplug on macOS |
 | `guest-get-memory-blocks` | hardware | stable | partial | no | Synthetic blocks derived from real memory usage |
 | `guest-get-memory-block-info` | hardware | stable | partial | no | Block size derived from total memory |
-| `guest-set-memory-blocks` | hardware | error | divergent | — | No memory hotplug on macOS |
 | `guest-get-cpustats` | hardware | stable | partial | no | Via Mach host_statistics (not /proc/stat) |
 | `guest-get-disks` | disk | stable | partial | no | Via diskutil, no PCI address mapping |
 | `guest-get-fsinfo` | disk | stable | full | no | Via getmntinfo + statfs |
@@ -75,13 +76,11 @@ All 44 registered commands with their actual status, Linux parity, and requireme
 
 - **Stable:** 36 commands
 - **Caveated:** 4 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, set-user-password)
-- **Error:** 2 commands (set-vcpus, set-memory-blocks)
 - **Alias:** 2 commands (sync-id, get-hostname)
-- (Total registered: 44)
+- (Total registered: 42)
 - **Full Linux parity:** 29 commands
 - **Partial parity:** 13 commands
-- **Divergent:** 2 commands
-- **Not registered** (no macOS equivalent, matches upstream): `guest-fstrim` — see note above + [RECLAIM.md](RECLAIM.md)
+- **Not registered** (no macOS equivalent, matches upstream): `guest-fstrim`, `guest-set-vcpus`, `guest-set-memory-blocks` — see note at top + [RECLAIM.md](RECLAIM.md)
 
 ## Runtime Test Evidence
 

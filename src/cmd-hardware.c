@@ -74,13 +74,9 @@ static cJSON *handle_get_vcpus(cJSON *args, const char **err_class, const char *
     return arr;
 }
 
-static cJSON *handle_set_vcpus(cJSON *args, const char **err_class, const char **err_desc)
-{
-    (void)args;
-    *err_class = "GenericError";
-    *err_desc = "CPU hotplug is not supported on macOS";
-    return NULL;
-}
+/* guest-set-vcpus is intentionally NOT registered on macOS — there is no CPU
+ * hotplug. Like upstream QEMU (CONFIG_LINUX-gated), we omit the command rather
+ * than advertise it; calling it returns CommandNotFound. */
 
 /* ---- guest-get-memory-blocks ---- */
 
@@ -167,13 +163,9 @@ static cJSON *handle_get_memory_block_info(cJSON *args, const char **err_class, 
     return result;
 }
 
-static cJSON *handle_set_memory_blocks(cJSON *args, const char **err_class, const char **err_desc)
-{
-    (void)args;
-    *err_class = "GenericError";
-    *err_desc = "Memory hotplug is not supported on macOS";
-    return NULL;
-}
+/* guest-set-memory-blocks is intentionally NOT registered on macOS — there is
+ * no memory hotplug. Like upstream QEMU (CONFIG_LINUX-gated), we omit it rather
+ * than advertise it; calling it returns CommandNotFound. */
 
 /* ---- guest-get-cpustats ---- */
 
@@ -242,9 +234,9 @@ static cJSON *handle_get_cpustats(cJSON *args, const char **err_class, const cha
 void cmd_hardware_init(void)
 {
     command_register("guest-get-vcpus", handle_get_vcpus, 1);
-    command_register("guest-set-vcpus", handle_set_vcpus, 0);  /* unsupported on macOS */
     command_register("guest-get-memory-blocks", handle_get_memory_blocks, 1);
     command_register("guest-get-memory-block-info", handle_get_memory_block_info, 1);
-    command_register("guest-set-memory-blocks", handle_set_memory_blocks, 0);  /* unsupported on macOS */
     command_register("guest-get-cpustats", handle_get_cpustats, 1);
+    /* guest-set-vcpus / guest-set-memory-blocks intentionally NOT registered —
+     * no CPU/memory hotplug on macOS (matches upstream CONFIG_LINUX gating). */
 }

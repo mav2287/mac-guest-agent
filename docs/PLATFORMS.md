@@ -11,7 +11,7 @@ The agent works with any QEMU-based hypervisor via ISA serial (`type=isa`).
 
 ## Why ISA Serial (Not VirtIO)
 
-macOS Big Sur and newer ship with Apple's own built-in VirtIO guest agent (`AppleVirtIO`, ~18 commands). When the default VirtIO serial channel is configured, Apple's agent claims it — not ours. Apple's agent lacks freeze support, memory reporting, routing, and most of the 44 commands we provide.
+macOS Big Sur and newer ship with Apple's own built-in VirtIO guest agent (`AppleVirtIO`, ~18 commands). When the default VirtIO serial channel is configured, Apple's agent claims it — not ours. Apple's agent lacks freeze support, memory reporting, routing, and most of the 42 commands we provide.
 
 Using `type=isa` (ISA serial) creates a separate channel via `Apple16X50Serial.kext` that Apple's agent does not claim. This is required on **all** macOS versions for our agent to work.
 
@@ -72,7 +72,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 | Capability | Apple VirtIO Agent | mac-guest-agent |
 |---|---|---|
 | Transport | VirtIO serial (default — Apple's daemon owns the channel) | ISA serial — required as of v2.5.0; VirtIO transport removed |
-| Total commands | 18 | 44 |
+| Total commands | 18 | 42 |
 | Filesystem freeze/thaw | **No** | Yes (APFS snapshot + sync + hooks) |
 | Memory reporting | **No** | Yes (real usage via Mach VM stats) |
 | OS info (guest-get-osinfo) | **No** | Yes |
@@ -105,7 +105,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 Both agents can run simultaneously — Apple's on VirtIO, ours on ISA serial. They do not conflict. PVE communicates with whichever agent is on the configured channel:
 
 - `agent: enabled=1` → talks to Apple's agent (18 commands)
-- `agent: enabled=1,type=isa` → talks to our agent (44 commands)
+- `agent: enabled=1,type=isa` → talks to our agent (42 commands)
 
 ### Why Not Just Use Apple's Agent?
 

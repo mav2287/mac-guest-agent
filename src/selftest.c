@@ -773,16 +773,22 @@ int safetest_run(int json_output)
         if (!json_output) printf("  FAIL  Unknown command (no response)\n");
     }
 
-    /* Capability assertion: guest-fstrim must NOT be registered on macOS (no
-     * FITRIM equivalent; matches upstream CONFIG_FSTRIM gating). Dispatching it
-     * therefore returns the standard CommandNotFound error. This guards against
+    /* Capability assertions: these commands have no macOS equivalent and must
+     * NOT be registered (matches upstream CONFIG_* gating). Dispatching each must
+     * return specifically CommandNotFound — a re-registered handler returning a
+     * generic error would otherwise slip through this gate. Guards against
      * silently re-introducing a command we cannot honor. */
-    char *trim_resp = commands_dispatch("guest-fstrim", NULL, NULL);
-    if (trim_resp) {
-        cJSON *parsed = cJSON_Parse(trim_resp);
-        free(trim_resp);
-        /* Must be specifically CommandNotFound — a re-registered handler that
-         * returned a generic error would otherwise slip through this gate. */
+    static const char *must_be_unregistered[] = {
+        "guest-fstrim",            /* no FITRIM equivalent on macOS */
+        "guest-set-vcpus",         /* no CPU hotplug on macOS */
+        "guest-set-memory-blocks", /* no memory hotplug on macOS */
+        NULL
+    };
+    for (int u = 0; must_be_unregistered[u]; u++) {
+        const char *name = must_be_unregistered[u];
+        char *r = commands_dispatch(name, NULL, NULL);
+        cJSON *parsed = r ? cJSON_Parse(r) : NULL;
+        free(r);
         cJSON *err = parsed ? cJSON_GetObjectItem(parsed, "error") : NULL;
         cJSON *cls = err ? cJSON_GetObjectItem(err, "class") : NULL;
         int unregistered = cls && cJSON_IsString(cls) &&
@@ -790,14 +796,11 @@ int safetest_run(int json_output)
         if (parsed) cJSON_Delete(parsed);
         if (unregistered) {
             pass++;
-            if (!json_output) printf("  PASS  guest-fstrim not registered (CommandNotFound)\n");
+            if (!json_output) printf("  PASS  %s not registered (CommandNotFound)\n", name);
         } else {
             fail++;
-            if (!json_output) printf("  FAIL  guest-fstrim should NOT be registered on macOS\n");
+            if (!json_output) printf("  FAIL  %s should NOT be registered on macOS\n", name);
         }
-    } else {
-        fail++;
-        if (!json_output) printf("  FAIL  guest-fstrim dispatch returned no response\n");
     }
 
     if (json_output) {
