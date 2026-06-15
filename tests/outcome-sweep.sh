@@ -268,7 +268,6 @@ skip "guest-file-* family"                "tested separately"
 skip "guest-shutdown / suspend-*"         "VM lifecycle covered by lifecycle-test.sh"
 skip "guest-set-time / set-vcpus / set-memory-blocks" "writes guest state; covered separately"
 skip "guest-fsfreeze-freeze / thaw"       "freezes the FS; covered by fsfreeze-roundtrip.sh"
-skip "guest-fstrim"                       "TRIMs the disk; runs in lifecycle-test.sh"
 skip "guest-ssh-add / remove-authorized-keys" "writes ~/.ssh/authorized_keys; covered separately"
 skip "guest-set-user-password"            "writes shadow; covered separately"
 

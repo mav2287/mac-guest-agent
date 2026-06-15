@@ -245,9 +245,9 @@ static void test_freeze_allowlist(void)
      * that the principled-restrictive rule excludes. If any of these starts
      * being allowed accidentally, this test surfaces it before shipping. */
     const char *blocked[] = {
-        /* Filesystem writes / TRIM */
+        /* Filesystem writes (guest-fstrim is not registered on macOS, so it's
+         * not in this list — there's no command to gate). */
         "guest-file-write",
-        "guest-fstrim",
         /* Time / identity writes */
         "guest-set-time",
         "guest-set-user-password",

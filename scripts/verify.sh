@@ -600,14 +600,14 @@ pve_config_summary() {
         fail "guest agent not enabled in VM config"
     fi
     if grep -qE 'discard=on' "$conf"; then
-        pass "discard=on (TRIM enabled)"
+        pass "discard=on (thin reclaim enabled)"
     else
-        info "discard not enabled (optional — needed for guest-fstrim)"
+        info "discard not enabled (optional — needed for thin-disk reclaim; see docs/RECLAIM.md)"
     fi
     if grep -qE 'ssd=1' "$conf"; then
         pass "ssd=1 (SSD emulation)"
     else
-        info "ssd=1 not set (optional — needed for guest-fstrim)"
+        info "ssd=1 not set (optional — helps thin-disk reclaim; see docs/RECLAIM.md)"
     fi
 }
 
@@ -784,14 +784,14 @@ libvirt_config_summary() {
     # discard / SSD emulation hints (best-effort grep — libvirt's disk XML
     # is structured but a string grep is enough for an evidence check).
     if printf '%s' "$xml" | grep -q "discard='unmap'\|discard=\"unmap\""; then
-        pass "disk discard=unmap (TRIM enabled)"
+        pass "disk discard=unmap (thin reclaim enabled)"
     else
-        info "disk discard not enabled (optional — needed for guest-fstrim)"
+        info "disk discard not enabled (optional — needed for thin-disk reclaim; see docs/RECLAIM.md)"
     fi
     if printf '%s' "$xml" | grep -q "rotation_rate=\"1\"\|rotation_rate='1'"; then
         pass "disk rotation_rate=1 (SSD emulation)"
     else
-        info "disk rotation_rate=1 not set (optional — needed for guest-fstrim)"
+        info "disk rotation_rate=1 not set (optional — helps thin-disk reclaim; see docs/RECLAIM.md)"
     fi
 }
 

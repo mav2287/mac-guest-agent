@@ -188,7 +188,7 @@ diskutil info disk0 | grep -i "Solid State\|TRIM"
 # Should show: Solid State: Yes, TRIM Support: Yes
 ```
 
-After this, macOS sends TRIM automatically on every file delete. Free space is reclaimed on the PVE host in real-time. The `guest-fstrim` command is a no-op because macOS handles TRIM natively.
+After this, macOS sends TRIM automatically on every file delete. Free space is reclaimed on the PVE host in real-time. (`guest-fstrim` is not a macOS command — macOS has no on-demand TRIM, so the agent does not register it, matching upstream QEMU; calling it returns `CommandNotFound`. For one-time reclaim see [RECLAIM.md](RECLAIM.md).)
 
 ### Reclaim Existing Free Space
 
