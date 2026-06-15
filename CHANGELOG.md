@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Changed — `guest-suspend-disk` disabled by default (no QEMU wake path)
+
+`guest-suspend-disk` was `enabled=1` while `guest-suspend-ram`/`-hybrid` were
+`enabled=0` — backwards. Task #179 testing showed in-guest suspend cannot be
+relied on under QEMU/OpenCore macOS guests: there is no working wake-from-S3/S4
+path (PCIe/USB don't re-enumerate on resume; OpenCore/OVMF doesn't restore the
+hibernate image). A real suspend **wedges the VM** (Leopard required `qm
+rollback`); a config that instant-wakes returns a **fake success**. So all three
+suspend variants are now `enabled=0` (registered → `CommandNotFound` on call).
+The reliable suspend for a managed VM is host-side `qm suspend` / `virsh
+suspend` (which PVE uses; it never calls `guest-suspend-*`). Unlike CPU/memory
+hotplug these stay *registered* (suspend is a genuine but config-dependent macOS
+capability — an operator with a proven wake path can re-enable via `allow-rpcs`).
+The self-test ship gate now also asserts the suspend trio is uncallable, so
+accidentally re-enabling `suspend-disk` fails CI. `COMMAND_STATUS.md` gains a
+`disabled` status and the suspend rows are corrected (they were mislabeled
+"stable"). Command count unchanged (42 — disabled commands are still registered).
+
+Also fixed a latent bug in `scripts/gen-command-table.sh`: its row filter
+(`grep -v "Command\|..."`) wrongly dropped any documented command whose notes
+mention `CommandNotFound`; narrowed to the separator/example rows only.
+
 ### Changed — `guest-set-vcpus` / `guest-set-memory-blocks` no longer registered
 
 Same principle as the `guest-fstrim` change below: macOS has no CPU or memory

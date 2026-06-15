@@ -773,33 +773,40 @@ int safetest_run(int json_output)
         if (!json_output) printf("  FAIL  Unknown command (no response)\n");
     }
 
-    /* Capability assertions: these commands have no macOS equivalent and must
-     * NOT be registered (matches upstream CONFIG_* gating). Dispatching each must
-     * return specifically CommandNotFound — a re-registered handler returning a
-     * generic error would otherwise slip through this gate. Guards against
-     * silently re-introducing a command we cannot honor. */
-    static const char *must_be_unregistered[] = {
-        "guest-fstrim",            /* no FITRIM equivalent on macOS */
-        "guest-set-vcpus",         /* no CPU hotplug on macOS */
-        "guest-set-memory-blocks", /* no memory hotplug on macOS */
+    /* Capability assertions: these commands must NOT be callable on macOS.
+     * Dispatching each must return specifically CommandNotFound. Two reasons:
+     *   - not registered at all (no macOS equivalent; matches upstream CONFIG_*
+     *     gating): fstrim, set-vcpus, set-memory-blocks.
+     *   - registered but enabled=0 (config-dependent + unsafe by default — no
+     *     working wake path on QEMU/OpenCore guests): the suspend-* trio.
+     * A disabled command also dispatches to CommandNotFound, so one check covers
+     * both. This guards against silently re-introducing a command we cannot
+     * honor OR re-enabling suspend (which wedges the VM — see #179 evidence). */
+    static const char *must_be_uncallable[] = {
+        "guest-fstrim",            /* not registered: no FITRIM equivalent */
+        "guest-set-vcpus",         /* not registered: no CPU hotplug */
+        "guest-set-memory-blocks", /* not registered: no memory hotplug */
+        "guest-suspend-disk",      /* enabled=0: no QEMU wake path (wedges VM) */
+        "guest-suspend-ram",       /* enabled=0: no QEMU wake path */
+        "guest-suspend-hybrid",    /* enabled=0: no QEMU wake path */
         NULL
     };
-    for (int u = 0; must_be_unregistered[u]; u++) {
-        const char *name = must_be_unregistered[u];
+    for (int u = 0; must_be_uncallable[u]; u++) {
+        const char *name = must_be_uncallable[u];
         char *r = commands_dispatch(name, NULL, NULL);
         cJSON *parsed = r ? cJSON_Parse(r) : NULL;
         free(r);
         cJSON *err = parsed ? cJSON_GetObjectItem(parsed, "error") : NULL;
         cJSON *cls = err ? cJSON_GetObjectItem(err, "class") : NULL;
-        int unregistered = cls && cJSON_IsString(cls) &&
-                           strcmp(cls->valuestring, "CommandNotFound") == 0;
+        int uncallable = cls && cJSON_IsString(cls) &&
+                         strcmp(cls->valuestring, "CommandNotFound") == 0;
         if (parsed) cJSON_Delete(parsed);
-        if (unregistered) {
+        if (uncallable) {
             pass++;
-            if (!json_output) printf("  PASS  %s not registered (CommandNotFound)\n", name);
+            if (!json_output) printf("  PASS  %s not callable (CommandNotFound)\n", name);
         } else {
             fail++;
-            if (!json_output) printf("  FAIL  %s should NOT be registered on macOS\n", name);
+            if (!json_output) printf("  FAIL  %s must NOT be callable on macOS\n", name);
         }
     }
 

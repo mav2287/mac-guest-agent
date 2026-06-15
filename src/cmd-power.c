@@ -143,10 +143,18 @@ static cJSON *handle_suspend_hybrid(cJSON *args, const char **err_class, const c
 void cmd_power_init(void)
 {
     command_register("guest-shutdown", handle_shutdown, 1);
-    command_register("guest-suspend-disk", handle_suspend_disk, 1);
-    /* ram/hybrid in-guest sleep has no QEMU wake path — gated, refuse cleanly.
-     * enabled:0 so guest-info advertises them as unsupported (host-side
-     * 'qm suspend' / 'virsh suspend' is the supported path). See handlers. */
+    /* All three in-guest suspend variants are registered but enabled=0 by
+     * default. QEMU/OpenCore macOS guests have no working wake-from-S3/S4 path
+     * (PCIe/USB don't re-enumerate on resume; OpenCore/OVMF doesn't restore the
+     * hibernate image), so a real suspend wedges the VM (verified on Leopard in
+     * docs/evidence/v2.5.5/os-level-destructive.md — required qm rollback) and a
+     * config that instant-wakes returns a fake success. The reliable suspend
+     * for a managed VM is HOST-SIDE: `qm suspend` / `virsh suspend`. enabled=0
+     * = blocked by default; an operator whose guest has a proven wake path can
+     * enable it via the allow-rpcs config. Unlike CPU/memory hotplug (never
+     * possible on macOS → unregistered), suspend is a genuine but
+     * config-dependent capability, so we keep it registered-disabled. */
+    command_register("guest-suspend-disk", handle_suspend_disk, 0);
     command_register("guest-suspend-ram", handle_suspend_ram, 0);
     command_register("guest-suspend-hybrid", handle_suspend_hybrid, 0);
 }

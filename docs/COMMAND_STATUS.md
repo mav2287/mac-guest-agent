@@ -13,8 +13,7 @@ All 42 registered commands with their actual status, Linux parity, and requireme
 |---|---|
 | **stable** | Works as expected, tested |
 | **caveated** | Works with documented limitations |
-| **no-op** | Returns success but does nothing (by design) |
-| **error** | Returns error (macOS doesn't support this operation) |
+| **disabled** | Registered but `enabled=0` → `CommandNotFound` on call. Off by default because it's unsafe/unreliable on a typical guest; an operator with a known-good config can allow it via `allow-rpcs`. |
 | **alias** | Duplicate registration of another command |
 
 ## Linux Parity Key
@@ -43,9 +42,9 @@ All 42 registered commands with their actual status, Linux parity, and requireme
 | `guest-get-users` | system | stable | full | no | Via getutxent |
 | `guest-get-load` | system | stable | full | no | Via getloadavg |
 | `guest-shutdown` | power | stable | full | yes | osascript → shutdown fallback |
-| `guest-suspend-disk` | power | stable | partial | yes | Via pmset (not /sys/power/state) |
-| `guest-suspend-ram` | power | stable | partial | yes | Via pmset |
-| `guest-suspend-hybrid` | power | stable | partial | yes | Via pmset |
+| `guest-suspend-disk` | power | disabled | partial | yes | `enabled=0` → `CommandNotFound`. `pmset hibernatemode 25`+sleep is correct, but QEMU/OpenCore guests have no working wake path: a real suspend wedges the VM (evidence/v2.5.5/os-level-destructive.md). Use host-side `qm suspend`/`virsh suspend`. |
+| `guest-suspend-ram` | power | disabled | partial | yes | `enabled=0` → `CommandNotFound`. No wake-from-S3 path on QEMU/OpenCore. Host-side suspend instead. |
+| `guest-suspend-hybrid` | power | disabled | partial | yes | `enabled=0` → `CommandNotFound`. Same — no QEMU wake path. Host-side suspend instead. |
 | `guest-get-vcpus` | hardware | stable | partial | no | All reported online, can-offline=false |
 | `guest-get-memory-blocks` | hardware | stable | partial | no | Synthetic blocks derived from real memory usage |
 | `guest-get-memory-block-info` | hardware | stable | partial | no | Block size derived from total memory |
@@ -74,8 +73,9 @@ All 42 registered commands with their actual status, Linux parity, and requireme
 
 ## Summary
 
-- **Stable:** 36 commands
+- **Stable:** 33 commands
 - **Caveated:** 4 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, set-user-password)
+- **Disabled** (`enabled=0` → CommandNotFound): 3 commands (suspend-disk, suspend-ram, suspend-hybrid) — no working wake path on QEMU/OpenCore guests; use host-side `qm suspend`/`virsh suspend`
 - **Alias:** 2 commands (sync-id, get-hostname)
 - (Total registered: 42)
 - **Full Linux parity:** 29 commands

@@ -47,7 +47,11 @@ if [ ! -f "$DOC_FILE" ]; then
     exit 0
 fi
 
-DOC_CMDS=$(grep '| `guest-' "$DOC_FILE" | grep -v "Command\|example\|---" | sed 's/.*| `\(guest-[^`]*\)`.*/\1/' | sort)
+# Rows are already constrained to lines containing "| `guest-"; only filter the
+# table separator and example placeholders. (Do NOT filter "Command" — a row's
+# notes may legitimately mention "CommandNotFound", and the header row doesn't
+# match "| `guest-" anyway.)
+DOC_CMDS=$(grep '| `guest-' "$DOC_FILE" | grep -v "example\|---" | sed 's/.*| `\(guest-[^`]*\)`.*/\1/' | sort)
 DOC_COUNT=$(echo "$DOC_CMDS" | wc -l | tr -d ' ')
 
 echo "Commands in $DOC_FILE: $DOC_COUNT"

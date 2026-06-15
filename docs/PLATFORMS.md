@@ -87,7 +87,7 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 | Routing table | **No** | Yes |
 | SSH key management | **No** | Yes |
 | User password | **No** | Yes |
-| Suspend/hibernate | **No** | Yes |
+| Suspend/hibernate | **No** | Disabled by default — no QEMU wake path; use host-side qm/virsh suspend |
 | TRIM / discard | **No** | N/A — macOS has no on-demand TRIM, so neither agent exposes `guest-fstrim` (see RECLAIM.md) |
 | Freeze hooks (DB flush) | **No** | Yes (MySQL, PostgreSQL, Redis) |
 | Self-test / diagnostics | **No** | Yes (text + JSON) |
