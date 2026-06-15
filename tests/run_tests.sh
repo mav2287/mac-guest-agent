@@ -356,7 +356,7 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-test_cmd "guest-set-vcpus (unsupported)" \
+test_cmd "guest-set-vcpus (not registered)" \
     '{"execute":"guest-set-vcpus"}' \
     "error"
 
@@ -370,7 +370,7 @@ test_cmd "guest-get-memory-block-info" \
     "object" \
     "size"
 
-test_cmd "guest-set-memory-blocks (unsupported)" \
+test_cmd "guest-set-memory-blocks (not registered)" \
     '{"execute":"guest-set-memory-blocks"}' \
     "error"
 

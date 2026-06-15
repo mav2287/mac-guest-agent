@@ -47,9 +47,10 @@ cat > "$BATT" <<'BATTERY_END'
 {"execute":"guest-fsfreeze-thaw"} @@ ok
 {"execute":"guest-fsfreeze-freeze-list","arguments":{"mountpoints":["/"]}} @@ ok
 {"execute":"guest-fsfreeze-thaw"} @@ ok
-{"execute":"guest-fstrim"} @@ err
-{"execute":"guest-set-vcpus","arguments":{"vcpus":[{"logical-id":0,"online":false}]}} @@ err
-{"execute":"guest-set-memory-blocks","arguments":{"mem-blks":[{"phys-index":0,"online":false}]}} @@ err
+{"execute":"guest-fstrim"} @@ err:CommandNotFound
+{"execute":"guest-set-vcpus","arguments":{"vcpus":[{"logical-id":0,"online":false}]}} @@ err:CommandNotFound
+{"execute":"guest-set-memory-blocks","arguments":{"mem-blks":[{"phys-index":0,"online":false}]}} @@ err:CommandNotFound
+{"execute":"guest-suspend-disk"} @@ err:CommandNotFound
 {"execute":"guest-suspend-ram"} @@ err:CommandNotFound
 {"execute":"guest-suspend-hybrid"} @@ err:CommandNotFound
 {"execute":"guest-set-time"} @@ err

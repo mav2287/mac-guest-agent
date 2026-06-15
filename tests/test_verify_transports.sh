@@ -202,7 +202,7 @@ case "$1" in
             ping)                       echo '{}' ;;
             get-osinfo)                 echo '{"pretty-name":"macOS Test 26.5","name":"macOS","version":"26.5","kernel-release":"25.5.0"}' ;;
             network-get-interfaces)     echo '[{"name":"en0","hardware-address":"aa:bb:cc:dd:ee:ff","ip-addresses":[{"ip-address":"192.168.42.10","ip-address-type":"ipv4","prefix":24}]}]' ;;
-            info)                       echo '{"version":"2.4.3","supported_commands":['"$(printf '"cmd%d",' $(seq 1 44))"'"cmd45"]}' ;;
+            info)                       echo '{"version":"2.4.3","supported_commands":['"$(printf '"cmd%d",' $(seq 1 41))"'"cmd42"]}' ;;
             get-memory-block-info)      echo '{"size":1073741824}' ;;
             get-memory-blocks)          echo '[{"phys-index":0,"online":true,"can-offline":false},{"phys-index":1,"online":true,"can-offline":false}]' ;;
             fsfreeze-freeze)
@@ -485,7 +485,7 @@ sub respond_to {
     elsif ($cmd eq "guest-sync")                  { return { return => $req->{arguments}->{id} // 1 }; }
     elsif ($cmd eq "guest-get-osinfo")            { return { return => { "pretty-name" => "macOS Test 26.5", name => "macOS", version => "26.5" } }; }
     elsif ($cmd eq "guest-network-get-interfaces"){ return { return => [ { name => "en0", "hardware-address" => "00:11:22:33:44:66", "ip-addresses" => [ { "ip-address" => "10.0.0.43", "ip-address-type" => "ipv4", prefix => 24 } ] } ] }; }
-    elsif ($cmd eq "guest-info")                  { return { return => { version => "2.5.3", supported_commands => [ map { "cmd$_" } 1..45 ] } }; }
+    elsif ($cmd eq "guest-info")                  { return { return => { version => "2.5.3", supported_commands => [ map { "cmd$_" } 1..42 ] } }; }
     elsif ($cmd eq "guest-get-memory-block-info") { return { return => { size => 1073741824 } }; }
     elsif ($cmd eq "guest-get-memory-blocks")     { return { return => [ { "phys-index" => 0, online => JSON::PP::true, "can-offline" => JSON::PP::false } ] }; }
     return { error => { class => "GenericError", desc => "unknown command $cmd" } };
@@ -678,7 +678,7 @@ sub respond_to {
     } elsif ($cmd eq "guest-network-get-interfaces") {
         return { return => [ { name => "en0", "hardware-address" => "00:11:22:33:44:55", "ip-addresses" => [ { "ip-address" => "10.0.0.42", "ip-address-type" => "ipv4", prefix => 24 } ] } ] };
     } elsif ($cmd eq "guest-info") {
-        return { return => { version => "2.4.3", supported_commands => [ map { "cmd$_" } 1..45 ] } };
+        return { return => { version => "2.4.3", supported_commands => [ map { "cmd$_" } 1..42 ] } };
     } elsif ($cmd eq "guest-get-memory-block-info") {
         return { return => { size => 1073741824 } };
     } elsif ($cmd eq "guest-get-memory-blocks") {

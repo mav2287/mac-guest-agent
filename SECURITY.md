@@ -19,8 +19,9 @@ Commands that modify system state require the agent to run as root. The agent en
 | Privilege | Commands |
 |---|---|
 | **No root needed** | `guest-ping`, `guest-sync`, `guest-sync-delimited`, `guest-info`, `guest-get-osinfo`, `guest-get-host-name`, `guest-get-hostname`, `guest-get-timezone`, `guest-get-time`, `guest-get-users`, `guest-get-load`, `guest-get-vcpus`, `guest-get-memory-blocks`, `guest-get-memory-block-info`, `guest-get-cpustats`, `guest-get-disks`, `guest-get-fsinfo`, `guest-get-diskstats`, `guest-fsfreeze-status`, `guest-network-get-interfaces`, `guest-file-close`, `guest-file-read`, `guest-file-write`, `guest-file-seek`, `guest-file-flush`, `guest-exec-status` |
-| **Root required** | `guest-set-time`, `guest-shutdown`, `guest-suspend-disk`, `guest-suspend-ram`, `guest-suspend-hybrid`, `guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`, `guest-fsfreeze-thaw`, `guest-file-open`, `guest-exec`, `guest-ssh-get-authorized-keys`, `guest-ssh-add-authorized-keys`, `guest-ssh-remove-authorized-keys`, `guest-set-user-password` |
-| **Returns error** | `guest-set-vcpus`, `guest-set-memory-blocks` (no hardware hotplug on macOS) |
+| **Root required** | `guest-set-time`, `guest-shutdown`, `guest-fsfreeze-freeze`, `guest-fsfreeze-freeze-list`, `guest-fsfreeze-thaw`, `guest-file-open`, `guest-exec`, `guest-ssh-get-authorized-keys`, `guest-ssh-add-authorized-keys`, `guest-ssh-remove-authorized-keys`, `guest-set-user-password` |
+| **Disabled** (`enabled=0` → `CommandNotFound`; opt-in via `allow-rpcs`) | `guest-suspend-disk`, `guest-suspend-ram`, `guest-suspend-hybrid` — no working wake path on QEMU/OpenCore guests; use host-side `qm suspend`/`virsh suspend` |
+| **Not registered** (absent from `guest-info`; `CommandNotFound`) | `guest-fstrim`, `guest-set-vcpus`, `guest-set-memory-blocks` — no equivalent macOS API; matches upstream QEMU `CONFIG_*` gating |
 
 See [docs/COMMAND_STATUS.md](docs/COMMAND_STATUS.md) for full per-command details.
 
