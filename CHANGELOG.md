@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.5.6
+
 ### Changed — `guest-suspend-disk` disabled by default (no QEMU wake path)
 
 `guest-suspend-disk` was `enabled=1` while `guest-suspend-ram`/`-hybrid` were
