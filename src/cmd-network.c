@@ -27,12 +27,28 @@ static char *format_mac(const struct sockaddr_dl *sdl)
     return buf;
 }
 
-/* Parse netstat -ibn output for one interface name. `netstat_out` must
- * have been captured by the caller; this function does NOT fork or
- * free. The handler captures netstat output ONCE per call and passes
- * it to this parser per interface to avoid N forks for N interfaces.
- * Tiger 10.4 does not reach this code path; it uses the sysctl-based
- * tiger_add_stats_from_iflist() helper above. */
+/* True iff s is non-empty and entirely ASCII digits. */
+static int is_all_digits(const char *s)
+{
+    if (!s || !*s) return 0;
+    for (const char *p = s; *p; p++)
+        if (*p < '0' || *p > '9') return 0;
+    return 1;
+}
+
+/* Parse netstat -ibn output for one interface name and attach a "statistics"
+ * object. `netstat_out` is captured ONCE by the caller and passed per
+ * interface (no per-interface fork). Used on every macOS version.
+ *
+ * netstat -ibn columns:
+ *   Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+ * The Address column is BLANK on the <Link#N> summary line of interfaces with
+ * no link-layer address (lo0, gif/stf tunnels). A positional sscanf that
+ * assumes Address is always present then shifts every counter one column to
+ * the left — e.g. lo0 reported Ibytes as rx-errs and Ipkts as rx-bytes. So we
+ * tokenize and anchor on the "<Link" Network token: the counters begin at the
+ * next token, after skipping a link-layer address if one is present (a MAC is
+ * not all-digits; the first counter Ipkts is). */
 static void add_net_stats(cJSON *iface_obj, const char *name,
                           const char *netstat_out)
 {
@@ -47,29 +63,53 @@ static void add_net_stats(cJSON *iface_obj, const char *name,
     char *line = strtok_r(copy, "\n", &save_ptr);
     while (line) {
         char line_name[64];
-        if (sscanf(line, "%63s", line_name) == 1 && strcmp(line_name, name) == 0) {
-            /* netstat -ibn format:
-             * Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll */
-            char n[64];
-            int mtu;
-            char net[64], addr[64];
-            long long ipkts, ierrs, ibytes, opkts, oerrs, obytes;
+        /* Match this interface's <Link#N> aggregate line (carries the
+         * counters); the per-address lines show Ierrs/Oerrs as "-". */
+        if (sscanf(line, "%63s", line_name) == 1 && strcmp(line_name, name) == 0
+                && strstr(line, "<Link")) {
+            char *lcopy = strdup(line);
+            if (!lcopy) break;
+            char *tsave = NULL;
+            char *toks[40];
+            int nt = 0;
+            for (char *tk = strtok_r(lcopy, " \t", &tsave); tk && nt < 40;
+                 tk = strtok_r(NULL, " \t", &tsave))
+                toks[nt++] = tk;
 
-            if (sscanf(line, "%63s %d %63s %63s %lld %lld %lld %lld %lld %lld",
-                       n, &mtu, net, addr, &ipkts, &ierrs, &ibytes, &opkts, &oerrs, &obytes) >= 10) {
-                cJSON *stats = cJSON_CreateObject();
-                cJSON_AddNumberToObject(stats, "rx-bytes", (double)ibytes);
-                cJSON_AddNumberToObject(stats, "rx-packets", (double)ipkts);
-                cJSON_AddNumberToObject(stats, "rx-errs", (double)ierrs);
-                cJSON_AddNumberToObject(stats, "rx-dropped", 0);
-                cJSON_AddNumberToObject(stats, "tx-bytes", (double)obytes);
-                cJSON_AddNumberToObject(stats, "tx-packets", (double)opkts);
-                cJSON_AddNumberToObject(stats, "tx-errs", (double)oerrs);
-                cJSON_AddNumberToObject(stats, "tx-dropped", 0);
-                cJSON_AddItemToObject(iface_obj, "statistics", stats);
-                free(copy);
-                return;
+            int li = -1;
+            for (int k = 0; k < nt; k++)
+                if (strncmp(toks[k], "<Link", 5) == 0) { li = k; break; }
+
+            if (li >= 0) {
+                int j = li + 1;
+                /* skip the Address column iff present (MAC: not all-digits) */
+                if (j < nt && !is_all_digits(toks[j])) j++;
+                if (j + 6 <= nt
+                        && is_all_digits(toks[j])   && is_all_digits(toks[j+1])
+                        && is_all_digits(toks[j+2]) && is_all_digits(toks[j+3])
+                        && is_all_digits(toks[j+4]) && is_all_digits(toks[j+5])) {
+                    long long ipkts  = strtoll(toks[j],   NULL, 10);
+                    long long ierrs  = strtoll(toks[j+1], NULL, 10);
+                    long long ibytes = strtoll(toks[j+2], NULL, 10);
+                    long long opkts  = strtoll(toks[j+3], NULL, 10);
+                    long long oerrs  = strtoll(toks[j+4], NULL, 10);
+                    long long obytes = strtoll(toks[j+5], NULL, 10);
+                    cJSON *stats = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(stats, "rx-bytes", (double)ibytes);
+                    cJSON_AddNumberToObject(stats, "rx-packets", (double)ipkts);
+                    cJSON_AddNumberToObject(stats, "rx-errs", (double)ierrs);
+                    cJSON_AddNumberToObject(stats, "rx-dropped", 0);
+                    cJSON_AddNumberToObject(stats, "tx-bytes", (double)obytes);
+                    cJSON_AddNumberToObject(stats, "tx-packets", (double)opkts);
+                    cJSON_AddNumberToObject(stats, "tx-errs", (double)oerrs);
+                    cJSON_AddNumberToObject(stats, "tx-dropped", 0);
+                    cJSON_AddItemToObject(iface_obj, "statistics", stats);
+                    free(lcopy);
+                    free(copy);
+                    return;
+                }
             }
+            free(lcopy);
         }
         line = strtok_r(NULL, "\n", &save_ptr);
     }
@@ -325,6 +365,7 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
          * classful and CIDR routes without an explicit suffix. */
         int prefix_int;
         const char *prefix_str;
+        char prefix_buf[8] = "";
         char dest_clean[128];
         strncpy(dest_clean, dest, sizeof(dest_clean) - 1);
         dest_clean[sizeof(dest_clean) - 1] = '\0';
@@ -338,10 +379,27 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
             snprintf(dest_clean, sizeof(dest_clean), "%s", in_inet4 ? "0.0.0.0" : "::");
             prefix_str = "0";
             prefix_int = 0;
+        } else if (in_inet4) {
+            /* IPv4 with no explicit /CIDR. macOS `netstat -rn` abbreviates a
+             * network route by dropping trailing zero octets, so the octet
+             * count implies the prefix: "127" = 127.0.0.0/8, "169.254" =
+             * 169.254.0.0/16, "10.0.2" = 10.0.2.0/24, and a full dotted quad
+             * is a /32 host route. Zero-extend the address and derive the
+             * prefix from the octet count (matches BSD netname()). Without
+             * this, "127" and "169.254" were reported as bogus /32 hosts. */
+            int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
+            int oc = sscanf(dest_clean, "%d.%d.%d.%d", &o0, &o1, &o2, &o3);
+            if (oc < 1) oc = 1;
+            if (oc > 4) oc = 4;
+            prefix_int = oc * 8;
+            snprintf(dest_clean, sizeof(dest_clean), "%d.%d.%d.%d", o0, o1, o2, o3);
+            snprintf(prefix_buf, sizeof(prefix_buf), "%d", prefix_int);
+            prefix_str = prefix_buf;
         } else {
-            /* Host route — no CIDR suffix, full-length prefix. */
-            prefix_str = in_inet4 ? "32" : "128";
-            prefix_int = in_inet4 ? 32 : 128;
+            /* IPv6 with no /CIDR is a host route; netstat shows explicit /N
+             * for IPv6 networks. */
+            prefix_str = "128";
+            prefix_int = 128;
         }
 
         char mask[64] = "";

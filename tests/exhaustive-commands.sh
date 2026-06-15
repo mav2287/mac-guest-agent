@@ -39,7 +39,9 @@ cat > "$BATT" <<'BATTERY_END'
 {"execute":"guest-fsfreeze-status"} @@ jq:.=="thawed"
 {"execute":"guest-network-get-interfaces"} @@ jq:(length>=1) and ([.[]|select(.["hardware-address"]? // ""|length>0)]|length>=1)
 {"execute":"guest-network-get-interfaces"} @@ jq:([.[]|select(.name=="lo0")]|length)==1 and ([.[]|select(.name=="lo0")][0]["ip-addresses"]|map(.["ip-address"])|index("127.0.0.1")!=null)
+{"execute":"guest-network-get-interfaces"} @@ jq:([.[]|select(.name=="lo0")][0].statistics) as $s | ($s["rx-errs"]==0 and $s["tx-errs"]==0 and (($s["rx-bytes"]==0) or ($s["rx-packets"]>0)))
 {"execute":"guest-network-get-route"} @@ jq:length>=1
+{"execute":"guest-network-get-route"} @@ jq:([.[]|select(.destination=="127.0.0.0")][0].desprefixlen)=="8"
 {"execute":"guest-sync","arguments":{"id":12345}} @@ jq:. == 12345
 {"execute":"guest-sync-delimited","arguments":{"id":67890}} @@ jq:. == 67890
 {"execute":"guest-fsfreeze-freeze"} @@ ok

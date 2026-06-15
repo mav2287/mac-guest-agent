@@ -2,6 +2,7 @@
 #include "compat.h"
 #include "util.h"
 #include "log.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -61,15 +62,29 @@ static cJSON *handle_file_open(cJSON *args, const char **err_class, const char *
      * symlink-follow for QGA compatibility: a read returns nothing the QGA
      * caller (already root in the guest) could not read directly. O_NOFOLLOW is
      * POSIX and present on macOS since 10.0, so this stays Tiger-compatible. */
-    int flags = O_RDONLY;
-    if (strcmp(mode_str, "w") == 0)
-        flags = O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW;
-    else if (strcmp(mode_str, "a") == 0)
-        flags = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
-    else if (strcmp(mode_str, "r+") == 0)
-        flags = O_RDWR | O_NOFOLLOW;
-    else if (strcmp(mode_str, "w+") == 0)
-        flags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW;
+    /* Map the fopen-style mode to open() flags. A trailing "b" (binary) is
+     * accepted and ignored to match fopen/qemu-ga. Unknown modes are REJECTED
+     * with InvalidParameter rather than silently falling through to read-only —
+     * the old behaviour returned a usable read handle for a typo'd or garbage
+     * mode (e.g. "rw", "x"), masking the caller's error. */
+    char mode_norm[8];
+    snprintf(mode_norm, sizeof(mode_norm), "%s", mode_str);
+    size_t mode_len = strlen(mode_norm);
+    if (mode_len >= 1 && mode_norm[mode_len - 1] == 'b')
+        mode_norm[mode_len - 1] = '\0';
+
+    int flags;
+    if      (strcmp(mode_norm, "r")  == 0) flags = O_RDONLY;
+    else if (strcmp(mode_norm, "r+") == 0) flags = O_RDWR   | O_NOFOLLOW;
+    else if (strcmp(mode_norm, "w")  == 0) flags = O_WRONLY | O_CREAT | O_TRUNC  | O_NOFOLLOW;
+    else if (strcmp(mode_norm, "w+") == 0) flags = O_RDWR   | O_CREAT | O_TRUNC  | O_NOFOLLOW;
+    else if (strcmp(mode_norm, "a")  == 0) flags = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
+    else if (strcmp(mode_norm, "a+") == 0) flags = O_RDWR   | O_CREAT | O_APPEND | O_NOFOLLOW;
+    else {
+        *err_class = "InvalidParameter";
+        *err_desc  = "Invalid 'mode' (expected r, r+, w, w+, a, a+)";
+        return NULL;
+    }
 
     open_file_t *entry = alloc_entry();
     if (!entry) {

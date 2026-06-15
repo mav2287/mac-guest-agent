@@ -80,6 +80,8 @@ static cJSON *handle_get_hostname(cJSON *args, const char **err_class, const cha
         *err_desc = "Failed to get hostname";
         return NULL;
     }
+    /* POSIX does not guarantee NUL-termination if the name fills the buffer. */
+    hostname[sizeof(hostname) - 1] = '\0';
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddStringToObject(result, "host-name", hostname);
@@ -115,7 +117,11 @@ static cJSON *handle_get_time(cJSON *args, const char **err_class, const char **
     (void)args; (void)err_class; (void)err_desc;
 
     struct timeval tv;
-    gettimeofday(&tv, NULL);
+    if (gettimeofday(&tv, NULL) != 0) {
+        *err_class = "GenericError";
+        *err_desc = "Failed to get time of day";
+        return NULL;
+    }
     /* Return nanoseconds since epoch */
     long long ns = (long long)tv.tv_sec * 1000000000LL + (long long)tv.tv_usec * 1000LL;
     return cJSON_CreateNumber((double)ns);

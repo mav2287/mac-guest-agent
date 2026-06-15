@@ -114,13 +114,24 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
     const char *username = user_item->valuestring;
     const char *password = pass_item->valuestring;
 
-    /* If password is base64 encoded (crypted=false means plain base64 in
-     * QGA protocol) — reject invalid base64 rather than silently using
-     * the raw literal as the password (the prior behaviour would have
-     * set the user's password to whatever literal bytes the caller
-     * happened to send, including non-base64 garbage like "!!!!"). */
+    /* crypted=true means the (base64-encoded) payload is a pre-computed crypt
+     * hash. macOS sets passwords via `dscl . -passwd`, which accepts only a
+     * PLAINTEXT password — there is no supported path to install a raw crypt
+     * hash. The prior code skipped base64-decode for crypted=true and passed
+     * the raw base64 text to dscl, silently setting the account password to
+     * that garbage string while returning success. Reject it instead
+     * (fail-secure) so a caller can't unknowingly set an unusable password. */
+    if (cJSON_IsTrue(crypted_item)) {
+        *err_class = "InvalidParameter";
+        *err_desc  = "crypted=true is not supported on macOS (dscl sets plaintext only); send crypted=false with a base64-encoded plaintext password";
+        return NULL;
+    }
+
+    /* QGA sends the password base64-encoded — decode it and reject invalid
+     * base64 rather than silently using the raw literal (which would set the
+     * password to whatever bytes the caller sent, e.g. "!!!!"). */
     char *decoded_pass = NULL;
-    if (!cJSON_IsTrue(crypted_item)) {
+    {
         size_t decoded_len;
         unsigned char *raw = base64_decode(password, &decoded_len);
         if (!raw) {

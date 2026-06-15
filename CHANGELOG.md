@@ -4,6 +4,50 @@
 
 ## 2.5.6
 
+### Fixed — data-truth bugs found by a full ground-truth audit (every command cross-checked against the live OS)
+
+An exhaustive verification pass compared every data-returning command's output
+to an independent authoritative source on each guest (Tiger 10.4 → El Capitan
+10.11), backed by an independent adversarial code review. It surfaced four
+"plausible but wrong" bugs — right shape, wrong values — that every prior
+shape-only test passed:
+
+- **`guest-network-get-interfaces` statistics (all versions): wrong counters for
+  address-less interfaces.** `netstat -ibn` leaves the Address column blank on
+  the `<Link#N>` summary line of interfaces with no link-layer address (lo0,
+  gif/stf tunnels). The positional `sscanf` assumed Address was always present,
+  so every counter shifted one column left — lo0 reported e.g.
+  `rx-errs == tx-errs == 432658` (actually the byte count) with `rx-packets == 0`.
+  Now tokenized and anchored on the `<Link` column, skipping the address only
+  when present. Ethernet interfaces were unaffected (their link line has a MAC).
+- **`guest-network-get-route` (all versions): abbreviated network routes
+  reported as `/32` hosts.** macOS `netstat -rn` abbreviates a network route by
+  dropping trailing zero octets (`127` = 127.0.0.0/8, `169.254` =
+  169.254.0.0/16). Every slashless destination was treated as a `/32`/`/128`
+  host route with a `255.255.255.255` mask. Now the octet count derives the
+  prefix and the destination is zero-extended (matches BSD `netname()`).
+- **`guest-file-open`: unknown mode silently opened read-only.** A typo'd or
+  garbage `mode` (e.g. `"rw"`, `"x"`) fell through to `O_RDONLY` and returned a
+  usable handle, masking the caller's error; `"a+"` was also unmapped. Now all
+  fopen modes (`r r+ w w+ a a+`, optional trailing `b`) are mapped and unknown
+  modes return `InvalidParameter`.
+- **`guest-set-user-password` with `crypted=true`: set a garbage password.** The
+  payload is base64 on the wire; for `crypted=true` the code skipped the decode
+  and passed the raw base64 text to `dscl -passwd`, silently setting the account
+  password to that string while returning success. macOS `dscl` accepts only a
+  plaintext password (no path to install a raw crypt hash), so `crypted=true` is
+  now rejected with `InvalidParameter` (fail-secure) instead of corrupting the
+  password.
+
+Also hardened two fail paths that could emit untrue data: `guest-get-time` now
+errors if `gettimeofday` fails (was returning uninitialized nanoseconds), and
+`guest-get-host-name` force-NUL-terminates the `gethostname` buffer.
+
+The `--safe-test` ship gate gains four data-truth invariants that fail CI on
+regression of any of the above (loopback counter consistency, the 127.0.0.0/8
+route prefix, file-open mode rejection, crypted-password rejection); safe-test
+is now **30/0** (20 read-only + 6 uncallable + 4 data-truth).
+
 ### Changed — `guest-suspend-disk` disabled by default (no QEMU wake path)
 
 `guest-suspend-disk` was `enabled=1` while `guest-suspend-ram`/`-hybrid` were

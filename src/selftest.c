@@ -810,6 +810,105 @@ int safetest_run(int json_output)
         }
     }
 
+    /* Data-truth invariants: guard against "plausible but wrong" data — a
+     * command returning the right SHAPE with WRONG values. Each of these
+     * caught a real bug that all prior shape-only tests passed. */
+
+    /* (a) Loopback interface counters must be internally consistent. A
+     * loopback never accrues interface errors, and any byte/packet counted
+     * implies a non-zero packet count. The old positional `netstat -ibn`
+     * parse shifted columns for address-less interfaces (lo0 has a blank
+     * Address column), reporting Ibytes as rx-errs and 0 as rx-packets —
+     * e.g. rx-errs==tx-errs==432658 with rx-packets==0. */
+    {
+        char *r = commands_dispatch("guest-network-get-interfaces", NULL, NULL);
+        cJSON *parsed = r ? cJSON_Parse(r) : NULL;
+        free(r);
+        cJSON *ret = parsed ? cJSON_GetObjectItem(parsed, "return") : NULL;
+        int ok = 0, saw_lo = 0;
+        if (cJSON_IsArray(ret)) {
+            cJSON *iface;
+            cJSON_ArrayForEach(iface, ret) {
+                cJSON *nm = cJSON_GetObjectItem(iface, "name");
+                if (!nm || !cJSON_IsString(nm) || strcmp(nm->valuestring, "lo0") != 0)
+                    continue;
+                saw_lo = 1;
+                cJSON *st = cJSON_GetObjectItem(iface, "statistics");
+                cJSON *rb = st ? cJSON_GetObjectItem(st, "rx-bytes")   : NULL;
+                cJSON *tb = st ? cJSON_GetObjectItem(st, "tx-bytes")   : NULL;
+                cJSON *rp = st ? cJSON_GetObjectItem(st, "rx-packets") : NULL;
+                cJSON *tp = st ? cJSON_GetObjectItem(st, "tx-packets") : NULL;
+                cJSON *re = st ? cJSON_GetObjectItem(st, "rx-errs")    : NULL;
+                cJSON *te = st ? cJSON_GetObjectItem(st, "tx-errs")    : NULL;
+                if (rb && tb && rp && tp && re && te &&
+                    re->valuedouble == 0 && te->valuedouble == 0 &&
+                    (rb->valuedouble == 0 || rp->valuedouble > 0) &&
+                    (tb->valuedouble == 0 || tp->valuedouble > 0))
+                    ok = 1;
+                break;
+            }
+        }
+        if (parsed) cJSON_Delete(parsed);
+        if (!saw_lo) ok = 0;  /* lo0 must always be present */
+        if (ok) { pass++; if (!json_output) printf("  PASS  lo0 statistics consistent (no column shift)\n"); }
+        else    { fail++; if (!json_output) printf("  FAIL  lo0 statistics inconsistent (netstat -ibn parse)\n"); }
+    }
+
+    /* (b) The loopback network route 127.0.0.0/8 must be reported with prefix
+     * 8, not /32. macOS `netstat -rn` abbreviates it as "127"; the old parser
+     * treated every slashless destination as a /32 host route. */
+    {
+        char *r = commands_dispatch("guest-network-get-route", NULL, NULL);
+        cJSON *parsed = r ? cJSON_Parse(r) : NULL;
+        free(r);
+        cJSON *ret = parsed ? cJSON_GetObjectItem(parsed, "return") : NULL;
+        int ok = 0;
+        if (cJSON_IsArray(ret)) {
+            cJSON *rt;
+            cJSON_ArrayForEach(rt, ret) {
+                cJSON *d = cJSON_GetObjectItem(rt, "destination");
+                cJSON *p = cJSON_GetObjectItem(rt, "desprefixlen");
+                if (d && cJSON_IsString(d) && strcmp(d->valuestring, "127.0.0.0") == 0) {
+                    ok = (p && cJSON_IsString(p) && strcmp(p->valuestring, "8") == 0);
+                    break;
+                }
+            }
+        }
+        if (parsed) cJSON_Delete(parsed);
+        if (ok) { pass++; if (!json_output) printf("  PASS  loopback route 127.0.0.0 has prefix /8\n"); }
+        else    { fail++; if (!json_output) printf("  FAIL  loopback route mis-prefixed (expected 127.0.0.0/8)\n"); }
+    }
+
+    /* (c) guest-file-open with an unknown mode must error, not silently open
+     * read-only. (d) guest-set-user-password with crypted=true must error
+     * rather than set the account password to the raw base64 text. Both are
+     * rejected before any side effect, so they are safe to exercise here. */
+    {
+        struct { const char *name; const char *args; const char *desc; } neg[] = {
+            {"guest-file-open",
+             "{\"path\":\"/tmp\",\"mode\":\"zzz\"}",
+             "file-open rejects unknown mode"},
+            {"guest-set-user-password",
+             "{\"username\":\"root\",\"password\":\"eA==\",\"crypted\":true}",
+             "set-user-password rejects crypted=true"},
+            {NULL, NULL, NULL}
+        };
+        for (int i = 0; neg[i].name; i++) {
+            cJSON *a = cJSON_Parse(neg[i].args);
+            char *r = commands_dispatch(neg[i].name, a, NULL);
+            if (a) cJSON_Delete(a);
+            cJSON *parsed = r ? cJSON_Parse(r) : NULL;
+            free(r);
+            cJSON *err = parsed ? cJSON_GetObjectItem(parsed, "error") : NULL;
+            cJSON *cls = err ? cJSON_GetObjectItem(err, "class") : NULL;
+            int ok = cls && cJSON_IsString(cls) &&
+                     strcmp(cls->valuestring, "InvalidParameter") == 0;
+            if (parsed) cJSON_Delete(parsed);
+            if (ok) { pass++; if (!json_output) printf("  PASS  %s\n", neg[i].desc); }
+            else    { fail++; if (!json_output) printf("  FAIL  %s\n", neg[i].desc); }
+        }
+    }
+
     if (json_output) {
         printf("{\"test\":\"safe-test\",\"agent_version\":\"%s\",\"passes\":%d,\"failures\":%d,\"status\":\"%s\"}\n",
                AGENT_VERSION, pass, fail, fail > 0 ? "fail" : "pass");
