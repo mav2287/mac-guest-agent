@@ -1,6 +1,8 @@
 # Command Status
 
-All 45 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
+All 44 registered commands with their actual status, Linux parity, and requirements. Some commands are restricted during filesystem freeze — see [SECURITY.md](../SECURITY.md#freeze-state-command-restrictions) for details.
+
+> **`guest-fstrim` is intentionally not registered on macOS.** It is on-demand bulk free-space discard (Linux FITRIM), and macOS exposes no volume-level free-extent trim API — so, like upstream QEMU (which gates `guest-fstrim` behind `CONFIG_FSTRIM`/`#ifdef FITRIM`), we don't register it rather than ship a stub that always errors. Calling it returns the standard `CommandNotFound`. To reclaim thin-provisioned space on a macOS guest, see [RECLAIM.md](RECLAIM.md).
 
 ## Status Key
 
@@ -54,7 +56,6 @@ All 45 registered commands with their actual status, Linux parity, and requireme
 | `guest-fsfreeze-freeze-list` | fs | caveated | partial | yes | Subset freeze: filters by supplied `mountpoints` array (freezes only listed paths). Empty/absent list behaves like `guest-fsfreeze-freeze` (all). Subset freezes skip the container-level APFS snapshot. See `docs/BACKUP.md` and `src/cmd-fs.c handle_fsfreeze_freeze_list()`. |
 | `guest-fsfreeze-thaw` | fs | caveated | partial | yes | Cleans up APFS snapshot, runs thaw hooks |
 | `guest-fsfreeze-status` | fs | stable | full | no | Reflects actual freeze state |
-| `guest-fstrim` | fs | error | divergent | — | Returns GenericError — macOS has no on-demand TRIM; it issues TRIM/UNMAP automatically (discard=on + ssd=1). Errors honestly rather than returning a fake empty success. See `src/cmd-fs.c handle_fstrim()`. |
 | `guest-network-get-interfaces` | network | stable | full | no | Via getifaddrs, AF_LINK for MAC addresses |
 | `guest-network-get-route` | network | stable | full | no | Via netstat -rn, IPv4 + IPv6 routes |
 | `guest-file-open` | file | stable | full | yes | Handle table, max 64 open files |
@@ -74,12 +75,12 @@ All 45 registered commands with their actual status, Linux parity, and requireme
 
 - **Stable:** 35 commands
 - **Caveated:** 4 commands (fsfreeze-freeze, fsfreeze-freeze-list, fsfreeze-thaw, set-user-password)
-- **No-op:** 0 commands
-- **Error:** 3 commands (set-vcpus, set-memory-blocks, fstrim)
+- **Error:** 2 commands (set-vcpus, set-memory-blocks)
 - **Alias:** 2 commands (sync-id, get-hostname)
 - **Full Linux parity:** 29 commands
 - **Partial parity:** 12 commands
-- **Divergent:** 4 commands
+- **Divergent:** 3 commands
+- **Not registered** (no macOS equivalent, matches upstream): `guest-fstrim` — see note above + [RECLAIM.md](RECLAIM.md)
 
 ## Runtime Test Evidence
 

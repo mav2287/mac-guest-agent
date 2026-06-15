@@ -16,7 +16,7 @@ SRCS := src/main.c src/agent.c src/channel.c src/protocol.c src/commands.c \
 
 INCLUDES := -Isrc -Isrc/third_party
 
-.PHONY: all build clean install uninstall test help \
+.PHONY: all build clean install uninstall test test-selftest help \
         build-i386 build-x86_64 build-arm64 build-universal build-all plist-header
 
 all: build
@@ -260,7 +260,13 @@ uninstall:
 	@sudo /usr/local/bin/$(PROGRAM_NAME) --uninstall 2>/dev/null || echo "Not installed"
 
 # Run all tests
-test: build test-unit test-proactive test-fuzz test-integration test-verify-transports test-install-flags
+test: build test-selftest test-unit test-proactive test-fuzz test-integration test-verify-transports test-install-flags
+
+# Ship gate: the built binary must PASS its own --self-test-json AND
+# --safe-test-json. Guards against shipping a binary whose own self-tests are
+# red (issue #12). Same check runs in build + release CI.
+test-selftest: build
+	@scripts/check-selftest.sh ./$(BUILD_DIR)/$(PROGRAM_NAME)
 
 # Shell-shim integration tests for scripts/verify.sh (PVE, libvirt,
 # UTM, qga-serial). Mocks the host CLIs and a local QGA socket; no

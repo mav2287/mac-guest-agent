@@ -727,7 +727,9 @@ int safetest_run(int json_output)
         {"guest-fsfreeze-status",          NULL, 0, "Freeze status"},
         {"guest-network-get-interfaces",   NULL, 1, "Network interfaces"},
         {"guest-network-get-route",        NULL, 1, "Routing table"},
-        {"guest-fstrim",                   NULL, 0, "TRIM (no-op)"},
+        /* guest-fstrim is NOT here: it is intentionally not registered on
+         * macOS (no FITRIM equivalent; matches upstream CONFIG_FSTRIM gating).
+         * Its absence is asserted separately below. */
         {NULL, NULL, 0, NULL}
     };
 
@@ -769,6 +771,28 @@ int safetest_run(int json_output)
     } else {
         fail++;
         if (!json_output) printf("  FAIL  Unknown command (no response)\n");
+    }
+
+    /* Capability assertion: guest-fstrim must NOT be registered on macOS (no
+     * FITRIM equivalent; matches upstream CONFIG_FSTRIM gating). Dispatching it
+     * therefore returns the standard CommandNotFound error. This guards against
+     * silently re-introducing a command we cannot honor. */
+    char *trim_resp = commands_dispatch("guest-fstrim", NULL, NULL);
+    if (trim_resp) {
+        cJSON *parsed = cJSON_Parse(trim_resp);
+        free(trim_resp);
+        int unregistered = parsed && cJSON_GetObjectItem(parsed, "error");
+        if (parsed) cJSON_Delete(parsed);
+        if (unregistered) {
+            pass++;
+            if (!json_output) printf("  PASS  guest-fstrim not registered (CommandNotFound)\n");
+        } else {
+            fail++;
+            if (!json_output) printf("  FAIL  guest-fstrim should NOT be registered on macOS\n");
+        }
+    } else {
+        fail++;
+        if (!json_output) printf("  FAIL  guest-fstrim dispatch returned no response\n");
     }
 
     if (json_output) {

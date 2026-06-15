@@ -9,7 +9,7 @@ CI gives strong **static** guarantees — every release goes through the Mach-O 
 | Tier | What we have | What it proves |
 |---|---|---|
 | **Tier 2** (static-validated) | Mach-O verifier passes for the slice that runs on this OS, symbol baseline matches, weak-imports preserved, all CI gates green | The slice is *structurally* loadable: no LC_MAIN on legacy, no forbidden dependencies, no surprise required symbols. dyld on the target should accept it. |
-| **Tier 1** (runtime-confirmed) | Tier 2 **+** the binary actually runs end-to-end on real hardware/VM of the target OS, all 45 commands register, freeze/thaw cycle behaves as documented in `docs/design/FREEZE_SEMANTICS.md`, mount-dispatch matches | The slice is structurally loadable AND the host APIs the binary calls actually exist and behave as expected on that OS version. The thing we can't get from static analysis alone. |
+| **Tier 1** (runtime-confirmed) | Tier 2 **+** the binary actually runs end-to-end on real hardware/VM of the target OS, all 44 commands register, freeze/thaw cycle behaves as documented in `docs/design/FREEZE_SEMANTICS.md`, mount-dispatch matches | The slice is structurally loadable AND the host APIs the binary calls actually exist and behave as expected on that OS version. The thing we can't get from static analysis alone. |
 
 Two harness profiles cover the gap:
 

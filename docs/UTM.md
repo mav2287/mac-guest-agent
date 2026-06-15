@@ -234,7 +234,7 @@ UTM's "Virtualize" mode for arm64 macOS guests uses Apple's `Virtualization.fram
 
 Workarounds, in order of preference:
 
-1. **Switch the VM to UTM's QEMU backend.** Slower (no Virtualization.framework acceleration on arm64 macOS guests, so guest performance drops noticeably) but gets you ISA serial, the supported transport, and the full 45-command surface including freeze. This is the recommended fix if you need this agent's full feature set.
+1. **Switch the VM to UTM's QEMU backend.** Slower (no Virtualization.framework acceleration on arm64 macOS guests, so guest performance drops noticeably) but gets you ISA serial, the supported transport, and the full 44-command surface including freeze. This is the recommended fix if you need this agent's full feature set.
 2. **Live with Apple's 18-command agent.** If you only need ping / get-osinfo / network / shutdown and don't need freeze or guest-exec, Apple's built-in agent is fine — just don't install this one.
 3. **Custom advanced configuration.** Disabling Apple's daemon manually or convincing VZ to expose an additional serial channel is possible but undocumented by Apple and likely to break across macOS updates. Not supported.
 

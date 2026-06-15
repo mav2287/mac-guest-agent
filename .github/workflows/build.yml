@@ -164,13 +164,12 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Self-test
-        run: ./build/mac-guest-agent --self-test
-
-      - name: Self-test JSON
-        run: |
-          ./build/mac-guest-agent --self-test-json 2>/dev/null | python3 -m json.tool > /dev/null
-          echo "JSON output valid"
+      - name: Ship gate — binary must pass its own self-test AND safe-test
+        # Hard gate: refuses to proceed if --self-test-json or --safe-test-json
+        # report status!=pass / any failure. This is the guard for issue #12,
+        # where v2.5.5 shipped while its own --safe-test-json was red (20/1) and
+        # nothing in the pipeline blocked on it.
+        run: scripts/check-selftest.sh ./build/mac-guest-agent
 
       - name: Unit tests
         run: make test-unit

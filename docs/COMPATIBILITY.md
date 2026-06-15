@@ -238,7 +238,7 @@ curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/script
 `scripts/verify.sh` is the single multi-transport verifier — auto-detects PVE (this section), libvirt, or UTM from the host environment, or accepts `--transport <name>` explicitly. On PVE it runs a single end-to-end pass:
 
 - **Preflight** — root check, cluster locality (multi-node clusters: verifier refuses to run if VM lives on a different node), backup lock (refuses to run if `vzdump` is in progress).
-- **Host-side checks** — config (`agent: enabled=1,type=isa`, `discard=on`, `ssd=1`), VM running, `ping`, `get-osinfo`, `network-get-interfaces`, `info` (the 45-command list + version), agent-sourced memory (block-info × blocks).
+- **Host-side checks** — config (`agent: enabled=1,type=isa`, `discard=on`, `ssd=1`), VM running, `ping`, `get-osinfo`, `network-get-interfaces`, `info` (the 44-command list + version), agent-sourced memory (block-info × blocks).
 - **Host Environment capture (schema 2.0)** — `sw_vers`, `sysctl` hardware (model / CPU / memory / brand string), `kextstat` (filtered to `Apple16X50Serial` / `AppleVirtIO` / `IOSerialFamily`), `ioreg` serial / virtio nodes, parsed mount table, `launchctl list com.macos.guest-agent`, agent-log `stat`. All assembled into a single `host_environment` object in the JSON appendix.
 - **Multi-cycle freeze/thaw with behavioural verification by content** — runs `--freeze-cycles N` (default 3) consecutive freeze/thaw cycles to catch state-leak bugs between cycles. Each cycle verifies the agent genuinely gates non-freeze commands while frozen by inspecting *response content* (not `qm` exit code; see [docs/research/UPSTREAM_NOTES.md Target 4](research/UPSTREAM_NOTES.md) for the reasoning) and recovers after thaw. An auto-thaw safety trap fires on Ctrl-C / crash to prevent leaving the VM frozen.
 - **Mount-dispatch cross-check** — compares the captured mount table to the actual frozen count from the last cycle (excluding network / special / read-only mounts the dispatch table categorically skips). Catches dispatch drift between `fs_dispatch_class()` and the live runtime.
@@ -261,6 +261,6 @@ External contributors: paste the `verify.sh` text output and the JSON appendix i
 | Static analysis (clang --analyze) | 0 bugs across 21 source files |
 | Memory leaks (macOS leaks tool) | 0 leaks, 1143 allocations, 173KB |
 | Fuzz testing (ASAN, 210k rounds) | 0 crashes |
-| Linux qemu-ga command parity | 45 registered. 1 Linux-side command not implemented: guest-get-devices (Windows-only). guest-network-get-route now implemented. |
+| Linux qemu-ga command parity | 44 registered. 1 Linux-side command not implemented: guest-get-devices (Windows-only). guest-network-get-route now implemented. |
 | Code coverage | 55.88% line, 80.95% function (remainder requires root, real hardware, or destructive operations) |
 | Test suite | unit + proactive + fuzz (210k rounds) + integration + verify-transports + install-flags (current counts in `make test` output) |

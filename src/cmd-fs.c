@@ -814,26 +814,24 @@ static cJSON *handle_fsfreeze_status(cJSON *args, const char **err_class, const 
     return cJSON_CreateString(freeze_status ? "frozen" : "thawed");
 }
 
-/* ---- Fstrim (honest error: not invocable on macOS) ---- */
-
-static cJSON *handle_fstrim(cJSON *args, const char **err_class, const char **err_desc)
-{
-    (void)args;
-    /* There is NO userspace "trim now" on macOS. macOS issues TRIM/UNMAP
-     * automatically from the storage driver on delete (when the device
-     * advertises it); there is no diskutil/ioctl equivalent of Linux fstrim
-     * to invoke on demand. Returning an empty {"paths":[]} success would be a
-     * lie — it tells the caller (e.g. a PVE post-backup reclaim step) that
-     * free blocks were discarded when the agent did nothing. Fail honestly so
-     * the operator relies on the automatic path (discard=on + ssd=1 on the
-     * virtual disk) instead of a no-op that looks like it worked. */
-    *err_class = "GenericError";
-    *err_desc  = "guest-fstrim is not supported on macOS: TRIM/UNMAP is issued "
-                 "automatically by the storage driver on delete (enable with "
-                 "discard=on + ssd=1 on the virtual disk). There is no on-demand "
-                 "trim to invoke.";
-    return NULL;
-}
+/*
+ * guest-fstrim is intentionally NOT implemented or registered on macOS.
+ *
+ * The QGA command is on-demand bulk free-space discard (Linux FITRIM). macOS
+ * exposes no public volume-level "trim all free extents" API — F_PUNCHHOLE /
+ * F_TRIM_ACTIVE_FILE are file-range only, DKIOCUNMAP needs FS-provided extents
+ * the kernel won't hand userspace, and there is no diskutil/ioctl/fsctl
+ * equivalent of fstrim. So we follow upstream QEMU, which gates guest-fstrim
+ * behind CONFIG_FSTRIM (#ifdef FITRIM) and does NOT register the command on
+ * platforms that lack it, rather than shipping a stub that always errors.
+ *
+ * guest-info therefore does not advertise guest-fstrim on macOS, and a caller
+ * that invokes it gets the standard CommandNotFound error — capability-honest:
+ * we don't claim a command we cannot perform. To reclaim thin-provisioned
+ * space on a macOS guest, see docs/RECLAIM.md (zero free space with
+ * `diskutil secureErase freespace 0` via guest-exec, plus host-side
+ * `detect-zeroes=unmap` or an offline `qemu-img convert`).
+ */
 
 /* ---- Continuous Sync (called from agent.c poll loop) ---- */
 
@@ -925,5 +923,6 @@ void cmd_fs_init(void)
     command_register("guest-fsfreeze-freeze", handle_fsfreeze_freeze, 1);
     command_register("guest-fsfreeze-freeze-list", handle_fsfreeze_freeze_list, 1);
     command_register("guest-fsfreeze-thaw", handle_fsfreeze_thaw, 1);
-    command_register("guest-fstrim", handle_fstrim, 1);
+    /* guest-fstrim intentionally NOT registered on macOS — see the comment
+     * above handle_* / docs/RECLAIM.md. Matches upstream CONFIG_FSTRIM gating. */
 }

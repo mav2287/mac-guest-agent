@@ -110,7 +110,7 @@ Sur) and later the VirtIO console channel is claimed by Apple's own
 so \fItype=isa\fR (or the QEMU equivalent for non\-PVE hypervisors)
 keeps this agent on a dedicated channel.
 .SH SUPPORTED COMMANDS
-The agent registers 45 QGA commands including aliases, macOS-specific
+The agent registers 44 QGA commands including aliases, macOS-specific
 approximations, and documented deviations from Linux qemu-ga.
 See docs/COMMAND_STATUS.md for per-command details.
 .PP

@@ -2,7 +2,7 @@
 
 A native QEMU Guest Agent for macOS and OS X virtual machines. The missing guest agent for Mac — enables Proxmox VE, libvirt, plain QEMU, and UTM to manage macOS guests through the standard QGA protocol.
 
-45 commands, real filesystem freeze, zero dependencies. Supports Mac OS X 10.4 Tiger through macOS 26 Tahoe. Works as both a macOS guest agent and an OS X guest agent for legacy VMs.
+44 commands, real filesystem freeze, zero dependencies. Supports Mac OS X 10.4 Tiger through macOS 26 Tahoe. Works as both a macOS guest agent and an OS X guest agent for legacy VMs.
 
 ## Quick Start (Proxmox VE)
 
@@ -70,7 +70,7 @@ sudo mac-guest-agent --self-test
 
 The agent communicates via an **ISA serial port** (16550 UART) using Apple's built-in `Apple16X50Serial.kext` driver, present on every macOS since 10.4. No custom kexts, no SIP changes, no code signing.
 
-> **Note:** macOS Big Sur and newer ship Apple's own `AppleQEMUGuestAgent` (18 commands, no filesystem freeze). It only launches on Apple Virtualization.framework hosts — its IOKit match (`AppleVirtIOAgentDevice`) is set by the `applevirtio.console` driver, which doesn't load under QEMU/OpenCore — so on Proxmox the VirtIO channel is actually free. We still default to ISA for symmetry across both host classes (see the [Quick Start callout](#quick-start-proxmox-ve) for the trade-off). Our agent provides 45 commands plus a real per-filesystem freeze dispatch — see [docs/design/FREEZE_SEMANTICS.md](docs/design/FREEZE_SEMANTICS.md) for what "freeze" actually does per `f_fstypename`.
+> **Note:** macOS Big Sur and newer ship Apple's own `AppleQEMUGuestAgent` (18 commands, no filesystem freeze). It only launches on Apple Virtualization.framework hosts — its IOKit match (`AppleVirtIOAgentDevice`) is set by the `applevirtio.console` driver, which doesn't load under QEMU/OpenCore — so on Proxmox the VirtIO channel is actually free. We still default to ISA for symmetry across both host classes (see the [Quick Start callout](#quick-start-proxmox-ve) for the trade-off). Our agent provides 44 commands plus a real per-filesystem freeze dispatch — see [docs/design/FREEZE_SEMANTICS.md](docs/design/FREEZE_SEMANTICS.md) for what "freeze" actually does per `f_fstypename`.
 
 ## Compatibility
 
@@ -146,7 +146,7 @@ for the full toolchain story.
 | **[UTM](docs/UTM.md)** | Local macOS VM automation, utmctl integration, CI/CD workflows |
 | [All Platforms](docs/PLATFORMS.md) | Plain QEMU setup, transport priority |
 | **[VM Configs & Troubleshooting](docs/VM_CONFIGS.md)** | Per-OS known-good VM configs, and *is it the VM or the agent?* symptom→fix catalog |
-| [Commands](docs/COMMAND_STATUS.md) | All 45 commands with status, Linux parity, privilege requirements |
+| [Commands](docs/COMMAND_STATUS.md) | All 44 commands with status, Linux parity, privilege requirements |
 | [Compatibility](docs/COMPATIBILITY.md) | Support tiers, kext timeline, verification evidence per version |
 | [Backup & Freeze](docs/BACKUP.md) | Filesystem freeze, APFS snapshots, hook scripts, TRIM |
 | [Freeze Semantics](docs/design/FREEZE_SEMANTICS.md) | What "freeze" actually does per `f_fstypename`; divergences from upstream QGA |

@@ -493,10 +493,10 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# guest-fstrim has no on-demand equivalent on macOS (TRIM is automatic via the
-# storage driver). It MUST error honestly rather than return an empty
-# {"paths":[]} that lies about having reclaimed space.
-test_cmd "guest-fstrim (unsupported on macOS)" \
+# guest-fstrim is intentionally NOT registered on macOS (no FITRIM equivalent;
+# matches upstream CONFIG_FSTRIM gating). Dispatching it must therefore return
+# the standard CommandNotFound error, NOT a {"paths":[]} that fakes reclaim.
+test_cmd "guest-fstrim not registered on macOS" \
     '{"execute":"guest-fstrim"}' \
     "error"
 

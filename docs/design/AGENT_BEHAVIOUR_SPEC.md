@@ -305,7 +305,7 @@ The honest disclosure of this choice lives in the source-file comment and in the
 
 ### The question
 
-Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` once frozen — only `thaw` exits the state. Ours (9) allows idempotent re-freeze. The deeper question: which of our 45 commands should be allowed during freeze? Current 9 was set heuristically.
+Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `guest-fsfreeze-freeze-list` once frozen — only `thaw` exits the state. Ours (9) allows idempotent re-freeze. The deeper question: which of our 44 commands should be allowed during freeze? Current 9 was set heuristically.
 
 ### Evidence
 

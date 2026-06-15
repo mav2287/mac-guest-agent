@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — `guest-fstrim` no longer ships a failing self-test (issue #12)
+
+`--safe-test-json` reported `20 passed, 1 failed, status:fail` on every macOS
+version in v2.5.5 (what vit9696 hit in issue #12). Root cause: `guest-fstrim`
+was changed to return an error, but the built-in self-test still expected it to
+succeed — and **nothing in the pipeline ran the binary's own self-test as a
+ship blocker**, so it escaped.
+
+- **`guest-fstrim` is no longer registered on macOS.** It is on-demand bulk
+  free-space discard (Linux `FITRIM`), and macOS exposes no volume-level
+  free-extent trim API. We now follow upstream QEMU, which gates `guest-fstrim`
+  behind `CONFIG_FSTRIM` and simply does not register it where unavailable,
+  rather than shipping a stub that always errors. `guest-info` no longer
+  advertises it; calling it returns the standard `CommandNotFound`. Command
+  count 45 → 44. To reclaim thin-provisioned space on a macOS guest, see the new
+  `docs/RECLAIM.md` (zero free space with `diskutil secureErase freespace 0`
+  via `guest-exec`, plus host `detect-zeroes=unmap` / `qemu-img convert`).
+- Self-test now asserts `guest-fstrim` is **not** registered (capability test).
+- `--safe-test-json` is `21/0` and `--self-test-json` `15/0/0` on macOS again.
+
+### Added — ship gate so a red binary can never ship again
+
+`scripts/check-selftest.sh` runs the binary's own `--self-test-json` **and**
+`--safe-test-json` and fails unless both report `status:pass` with zero
+failures/errors. Wired into **build CI** (`build.yml`, replacing the prior step
+that only checked the JSON was *parseable*, not that it *passed*, and never ran
+safe-test at all), **release CI** (`release.yml`, so a tagged release cannot
+publish a red artifact), and **`make test`** (`test-selftest`, so it fails
+locally too). This is the direct guard for the issue #12 class of escape.
+
 ## v2.5.5 — 2026-06-13
 
 Two themes: replace the remaining Tiger 10.4 daemon-context *placeholders*

@@ -236,15 +236,17 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# guest-fstrim MUST error on macOS (no on-demand TRIM) rather than return a
-# fake empty success — verify the error, not a "return". See src/cmd-fs.c.
+# guest-fstrim is intentionally NOT registered on macOS (no FITRIM equivalent;
+# matches upstream CONFIG_FSTRIM gating). Dispatching it must return the
+# standard CommandNotFound error, NOT a fake {"paths":[]} success. See
+# src/cmd-fs.c and docs/RECLAIM.md.
 FSTRIM=$(echo '{"execute":"guest-fstrim"}' | "$BINARY" --test 2>/dev/null | awk 'NR==1{sub(/^QMP> /,""); print; exit}')
 if echo "$FSTRIM" | python3 -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null || \
    echo "$FSTRIM" | python -c "import json,sys; assert 'error' in json.load(sys.stdin)" 2>/dev/null; then
-    echo "  PASS: guest-fstrim returns error (no fake no-op success)"
+    echo "  PASS: guest-fstrim not registered (CommandNotFound)"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: guest-fstrim should error, got: ${FSTRIM:0:120}"
+    echo "  FAIL: guest-fstrim should be unregistered (CommandNotFound), got: ${FSTRIM:0:120}"
     FAIL=$((FAIL + 1))
 fi
 

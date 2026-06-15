@@ -46,6 +46,12 @@ jobs:
       - name: Verify legacy slices (load commands, deps, symbol baselines)
         run: ./scripts/verify-legacy-slices.sh build/mac-guest-agent-universal tests
 
+      - name: Ship gate — artifact must pass its own self-test AND safe-test
+        # A tagged release cannot publish a binary that reports failing
+        # self-tests (issue #12 guard). Runs the native slice of the universal
+        # artifact on the runner.
+        run: scripts/check-selftest.sh ./build/mac-guest-agent-universal
+
       - name: Run test suite against the universal artifact
         run: ./tests/run_tests.sh ./build/mac-guest-agent-universal
 

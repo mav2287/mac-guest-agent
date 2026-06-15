@@ -594,7 +594,7 @@ Same path for memory: cgroup RSS, optionally overlaid by `query-balloon` if the 
 
 ### What this means for our project's positioning vs Apple's QGA
 
-Apple's `AppleQEMUGuestAgent` (16 commands) is a minimal QGA — exec, file I/O, sync, ping, time, network-get-interfaces, shutdown. **No freeze, no observability, no OS-info, no SSH, no memory, no CPU stats.** Our 45-command surface is genuine extension, not duplication. PVE backup consistency on a macOS guest is impossible without our agent (or one like it).
+Apple's `AppleQEMUGuestAgent` (16 commands) is a minimal QGA — exec, file I/O, sync, ping, time, network-get-interfaces, shutdown. **No freeze, no observability, no OS-info, no SSH, no memory, no CPU stats.** Our 44-command surface is genuine extension, not duplication. PVE backup consistency on a macOS guest is impossible without our agent (or one like it).
 
 Apple's QGA is also only launched when an `AppleVirtIOAgentDevice` IOKit property is matched, which is set by Apple's `applevirtio.console` driver loaded on Virtualization.framework hosts. On Proxmox/QEMU/OpenCore guests, that property is not set and Apple's QGA never runs. The "ISA-because-Apple-claims-VirtIO" rationale in our README is right for VZ environments but oversimplified for QEMU.
 
@@ -670,7 +670,7 @@ guest-sync-delimited
 
 ### Commands NOT implemented by Apple's agent
 
-Comparing against the QGA spec and our 45-command surface, Apple's QGA explicitly does NOT implement:
+Comparing against the QGA spec and our 44-command surface, Apple's QGA explicitly does NOT implement:
 
 - **No freeze/thaw** — `guest-fsfreeze-freeze`, `-freeze-list`, `-thaw`, `-status` all absent. PVE-style backup consistency on a macOS guest with **only Apple's agent gets no quiesce.**
 - **No `guest-get-osinfo`** — they have `guest-info` (the version handshake) but not the OS-identification command.
