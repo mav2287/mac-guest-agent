@@ -87,3 +87,61 @@ up in ~20 s, and the v2.5.6 i386 battery then ran clean: `--safe-test-json`
 **26/0**, `--self-test-json` **14/0/0**, `guest-info` 42/39 with all six commands
 in their intended state, full battery **57/57** — including the `getifaddrs`
 normal interface path (Darwin 9, not Tiger's SIOCGIFCONF special-case).
+
+---
+
+# Ground-truth audit (2026-06-15) — every command cross-checked against the live OS
+
+After the count/version validation above, a deeper pass verified that each
+data-returning command returns **true** data, not just well-shaped data. Every
+command's output was compared field-by-field to an independent authoritative
+source on the same guest (`uname`, `sw_vers`, `hostname`, `date`, `sysctl`
+hw.logicalcpu/hw.memsize/vm.loadavg, `df -k`, `ifconfig`, `netstat -ibn/-rn`,
+`who`, `diskutil`), backed by an independent adversarial `codex` review of every
+handler. This caught four "plausible but wrong" bugs (right shape, wrong values)
+that every prior shape-only test passed — see the CHANGELOG `## 2.5.6` "Fixed —
+data-truth bugs" entry. All four are fixed and guarded by new `--safe-test`
+invariants (safe-test 26→**30**).
+
+## Fixed-binary coverage matrix (md5 `c60257f5…`, i386 thin `154bb944…`)
+
+| Target | OS / slice | safe-test | ground-truth | command battery | destructive (real side effects) | daemon-side QGA |
+|---|---|---|---|---|---|---|
+| Host (this Mac) | arm64 | **30/0** | `make test` green | — | — | — |
+| Snow Leopard 113 | 10.6.8 x86_64 | **30/0** | **23/23** | **59/59** | **12/12** | **59/59** |
+| El Capitan 107 | 10.11 x86_64 | **30/0** | **23/23** | **59/59** | **12/12** | **59/59** |
+| Leopard 112 | 10.5.8 i386 | **30/0** | **23/23** | **59/59** | **12/12** | **59/59** |
+| Tiger 111 | 10.4.11 i386 | (see note) | (pre-fix 22/23) | — | — | — |
+
+- **ground-truth (23 checks):** kernel-release/machine/version, hostname,
+  timezone offset, wall-clock (0–1 s drift), vCPU count, RAM total
+  (`blocks × block-size == hw.memsize`), cpustats count + live ticks, load,
+  users, disks, fsinfo total (byte-identical to `df`), diskstats, interface
+  MACs/IPs, **lo0 statistics now consistent** (`rx==tx`, `errs==0`), primary IP,
+  **default + loopback routes with correct prefix**, exec pid.
+- **destructive (12 checks):** file write→flush→close→reopen→read (bytes match
+  on disk), read-at-EOF, seek+read, bad-handle errors, ssh authorized-keys
+  add→get→remove with backup/restore, set-user-password round-trip
+  (`crypted=false` base64 path).
+- **daemon-side QGA:** the full 59-case battery driven over the **real ISA
+  serial channel** (`socat` → `.qga` socket) with live async `guest-exec`
+  polling — the production transport, not just `--test`.
+
+## Tiger VM 111 — direct fixed-binary re-test blocked by VM transport (not the agent)
+
+The four bug fixes are version-independent C in `cmd-network.c` / `cmd-file.c` /
+`cmd-user.c`, exercised through the same code on every slice. They are proven on
+the **identical i386 thin slice Tiger runs** — Leopard VM 112 passed all five
+columns above (ground-truth, battery, destructive, daemon-side QGA) on that
+slice — plus two other OSes and the arm64 host. Tiger's own pre-fix ground-truth
+this session showed every other field already correct; the only gaps were the
+lo0 statistics and route prefix, both fixed in that shared code.
+
+A *direct* re-test on VM 111 was blocked this session by the VM's transport, not
+the agent: its slirp sshd stalls on reverse-DNS and fork-storms under repeated
+connections (resets at `kex_exchange_identification`), and its QGA ISA-serial
+channel did not answer after a recovery reboot (the launchd daemon did not
+re-attach; `/tmp` is wiped on boot, so the fixed binary could not be re-staged
+over any channel). This is the documented issue-#10 / slirp fragility. The real
+i386 iMac (real bridge network) is the authoritative i386 bed for a future
+direct confirmation.
