@@ -43,10 +43,35 @@ Also hardened two fail paths that could emit untrue data: `guest-get-time` now
 errors if `gettimeofday` fails (was returning uninitialized nanoseconds), and
 `guest-get-host-name` force-NUL-terminates the `gethostname` buffer.
 
-The `--safe-test` ship gate gains four data-truth invariants that fail CI on
+The `--safe-test` ship gate gains data-truth invariants that fail CI on
 regression of any of the above (loopback counter consistency, the 127.0.0.0/8
-route prefix, file-open mode rejection, crypted-password rejection); safe-test
-is now **30/0** (20 read-only + 6 uncallable + 4 data-truth).
+route prefix, all IPv4 route destinations being full dotted quads, file-open
+mode rejection, crypted-password rejection); safe-test is now **31/0**
+(20 read-only + 6 uncallable + 5 data-truth).
+
+A follow-up independent `codex` audit of the above diff found and fixed several
+more issues (correctness + fail-secure):
+
+- **`guest-network-get-route` slash-form abbreviations** (`10.37.129/24`,
+  `224.0.0/4`) were not zero-extended — destination came back as `"10.37.129"`.
+  Now both slash and slashless forms expand to a full dotted quad; unparseable
+  IPv4 rows are skipped rather than fabricated as `0.0.0.0/8`.
+- **`guest-ssh-get-authorized-keys` / `-remove-authorized-keys` fail-secure
+  (HIGH):** a refused/unsafe read (symlink `ELOOP`, `EACCES`, non-regular file)
+  was reported as "no keys" / "nothing to remove" (success) — indistinguishable
+  from a genuinely empty file, and remove falsely claimed success while keys
+  remained. `ssh_safe_read_file` now preserves a meaningful `errno`; an absent
+  file (`ENOENT`) still yields an empty list / success, but any other failure
+  returns a `GenericError`.
+- **`guest-file-read` / `guest-exec-status`:** a base64-encode failure returned
+  `count>0` with empty `buf-b64` / silently dropped `out-data`/`err-data`. Both
+  now return a `GenericError` instead of losing data under apparent success.
+- **`guest-file-open`** accepts `b` anywhere in the mode (`rb+`, `wb+`, `ab+`).
+- **`guest-set-user-password`** scrubs the secret on the `crypted=true` reject
+  path; the new safe-test guard targets a nonexistent user so a regression
+  cannot touch a real account (e.g. `root`).
+- **`guest-network-get-interfaces`** interface cap raised 32 → 64 and logs if it
+  truncates (modern macOS has many utun/bridge/awdl interfaces).
 
 ### Changed — `guest-suspend-disk` disabled by default (no QEMU wake path)
 

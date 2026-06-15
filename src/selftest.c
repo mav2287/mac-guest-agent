@@ -879,6 +879,35 @@ int safetest_run(int json_output)
         else    { fail++; if (!json_output) printf("  FAIL  loopback route mis-prefixed (expected 127.0.0.0/8)\n"); }
     }
 
+    /* (b2) EVERY IPv4 route destination must be a full dotted quad (3 dots).
+     * macOS abbreviates network routes in both slashless ("127") and slash
+     * ("10.37.129/24") forms; a regression of either leaves a destination with
+     * fewer than 4 octets. This catches the slash-abbreviation case the
+     * 127.0.0.0 check above does not. */
+    {
+        char *r = commands_dispatch("guest-network-get-route", NULL, NULL);
+        cJSON *parsed = r ? cJSON_Parse(r) : NULL;
+        free(r);
+        cJSON *ret = parsed ? cJSON_GetObjectItem(parsed, "return") : NULL;
+        int ok = 1;
+        if (cJSON_IsArray(ret)) {
+            cJSON *rt;
+            cJSON_ArrayForEach(rt, ret) {
+                cJSON *v = cJSON_GetObjectItem(rt, "version");
+                cJSON *d = cJSON_GetObjectItem(rt, "destination");
+                if (v && cJSON_IsNumber(v) && v->valueint == 4 &&
+                    d && cJSON_IsString(d)) {
+                    int dots = 0;
+                    for (const char *c = d->valuestring; *c; c++) if (*c == '.') dots++;
+                    if (dots != 3) { ok = 0; break; }
+                }
+            }
+        } else ok = 0;
+        if (parsed) cJSON_Delete(parsed);
+        if (ok) { pass++; if (!json_output) printf("  PASS  all IPv4 route destinations are full dotted quads\n"); }
+        else    { fail++; if (!json_output) printf("  FAIL  an IPv4 route destination is abbreviated (not zero-extended)\n"); }
+    }
+
     /* (c) guest-file-open with an unknown mode must error, not silently open
      * read-only. (d) guest-set-user-password with crypted=true must error
      * rather than set the account password to the raw base64 text. Both are
@@ -889,7 +918,10 @@ int safetest_run(int json_output)
              "{\"path\":\"/tmp\",\"mode\":\"zzz\"}",
              "file-open rejects unknown mode"},
             {"guest-set-user-password",
-             "{\"username\":\"root\",\"password\":\"eA==\",\"crypted\":true}",
+             /* nonexistent user: crypted=true must be rejected BEFORE any dscl
+              * call, so even if that rejection regressed, no real account
+              * (e.g. root) could be touched. */
+             "{\"username\":\"mga-selftest-no-such-user\",\"password\":\"eA==\",\"crypted\":true}",
              "set-user-password rejects crypted=true"},
             {NULL, NULL, NULL}
         };

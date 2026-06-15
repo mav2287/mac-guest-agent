@@ -144,8 +144,11 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
     cJSON *result = cJSON_CreateArray();
 
     /* First pass: collect unique interface names that are up (loopback
-     * included, to match Linux qemu-ga which reports lo). */
-    char seen_names[32][64];
+     * included, to match Linux qemu-ga which reports lo). Cap is generous —
+     * modern macOS can have many utun/bridge/awdl interfaces; log if we hit it
+     * so a silent truncation can't masquerade as the full set. */
+#define MAX_IFACES 64
+    char seen_names[MAX_IFACES][64];
     int seen_count = 0;
 
     for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
@@ -156,7 +159,11 @@ static cJSON *handle_network_get_interfaces(cJSON *args, const char **err_class,
         for (int i = 0; i < seen_count; i++) {
             if (strcmp(seen_names[i], ifa->ifa_name) == 0) { found = 1; break; }
         }
-        if (!found && seen_count < 32) {
+        if (!found) {
+            if (seen_count >= MAX_IFACES) {
+                LOG_DEBUG("network-get-interfaces: more than %d interfaces; list truncated", MAX_IFACES);
+                break;
+            }
             strncpy(seen_names[seen_count], ifa->ifa_name, 63);
             seen_names[seen_count][63] = '\0';
             seen_count++;
@@ -273,6 +280,18 @@ static void ipv6_prefix_to_mask(int prefix, char *out, size_t outsz)
 }
 
 
+/* Zero-extend an abbreviated IPv4 destination to a full dotted quad:
+ * "10.37.129" -> "10.37.129.0", "127" -> "127.0.0.0". A full 4-octet address
+ * is unchanged. macOS `netstat -rn` abbreviates network routes by dropping
+ * trailing zero octets, in BOTH the slashless ("127") and slash ("10.37.129/24")
+ * forms, so the destination must be expanded in both. */
+static void ipv4_zero_extend(const char *partial, char *out, size_t outsz)
+{
+    int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
+    sscanf(partial, "%d.%d.%d.%d", &o0, &o1, &o2, &o3);
+    snprintf(out, outsz, "%d.%d.%d.%d", o0, o1, o2, o3);
+}
+
 static cJSON *handle_network_get_route(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
@@ -372,8 +391,19 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
         char *slash = strchr(dest_clean, '/');
         if (slash) {
             *slash = '\0';
-            prefix_str = slash + 1;
-            prefix_int = atoi(prefix_str);
+            prefix_int = atoi(slash + 1);
+            /* Copy the prefix into its own buffer: prefix_str must NOT alias
+             * dest_clean, which the zero-extend below overwrites. */
+            snprintf(prefix_buf, sizeof(prefix_buf), "%d", prefix_int);
+            prefix_str = prefix_buf;
+            /* The network part is abbreviated too: "10.37.129/24" and
+             * "224.0.0/4" carry a short destination that must be zero-extended
+             * ("10.37.129.0", "224.0.0.0"). IPv6 destinations aren't octet-based. */
+            if (in_inet4) {
+                char ext[64];
+                ipv4_zero_extend(dest_clean, ext, sizeof(ext));
+                snprintf(dest_clean, sizeof(dest_clean), "%s", ext);
+            }
         } else if (strcmp(dest_clean, "default") == 0) {
             /* "default" is the zero-prefix any-destination route. */
             snprintf(dest_clean, sizeof(dest_clean), "%s", in_inet4 ? "0.0.0.0" : "::");
@@ -389,7 +419,12 @@ static cJSON *handle_network_get_route(cJSON *args, const char **err_class, cons
              * this, "127" and "169.254" were reported as bogus /32 hosts. */
             int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
             int oc = sscanf(dest_clean, "%d.%d.%d.%d", &o0, &o1, &o2, &o3);
-            if (oc < 1) oc = 1;
+            if (oc < 1) {
+                /* Not a parseable IPv4 destination — skip the row rather than
+                 * fabricate a bogus 0.0.0.0/8 route. */
+                line = strtok_r(NULL, "\n", &save_ptr);
+                continue;
+            }
             if (oc > 4) oc = 4;
             prefix_int = oc * 8;
             snprintf(dest_clean, sizeof(dest_clean), "%d.%d.%d.%d", o0, o1, o2, o3);

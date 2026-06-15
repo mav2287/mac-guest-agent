@@ -31,29 +31,30 @@
 char *ssh_safe_read_file(const char *path, size_t *out_len);
 char *ssh_safe_read_file(const char *path, size_t *out_len)
 {
+    /* errno is meaningful on every NULL return so callers can tell an absent
+     * file (ENOENT -> legitimately no keys) from a refused/unsafe read
+     * (ELOOP symlink, EACCES, non-regular -> a real failure that must NOT be
+     * reported as "no keys"). close() can clobber errno, so set it last. */
     int fd = open(path, O_RDONLY | O_NOFOLLOW);
-    if (fd < 0) return NULL;
+    if (fd < 0) return NULL;   /* errno from open(): ENOENT / ELOOP / EACCES */
 
     struct stat st;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
-        close(fd);
-        return NULL;
-    }
+    if (fstat(fd, &st) < 0) { int e = errno; close(fd); errno = e; return NULL; }
+    if (!S_ISREG(st.st_mode)) { close(fd); errno = EINVAL; return NULL; }
     if (st.st_size < 0 || (uintmax_t)st.st_size > (uintmax_t)SIZE_MAX - 1) {
-        close(fd);
-        return NULL;
+        close(fd); errno = EFBIG; return NULL;
     }
 
     size_t size = (size_t)st.st_size;
     char *buf = malloc(size + 1);
-    if (!buf) { close(fd); return NULL; }
+    if (!buf) { close(fd); errno = ENOMEM; return NULL; }
 
     size_t total = 0;
     while (total < size) {
         ssize_t n = read(fd, buf + total, size - total);
         if (n < 0) {
             if (errno == EINTR) continue;
-            free(buf); close(fd); return NULL;
+            { int e = errno; free(buf); close(fd); errno = e; return NULL; }
         }
         if (n == 0) break;
         total += (size_t)n;
@@ -252,8 +253,21 @@ static cJSON *handle_ssh_get_keys(cJSON *args, const char **err_class, const cha
      * even for the read path. An attacker who owns the home dir could
      * point the symlink at /etc/shadow and trick the root-running
      * agent into exposing the content via the QGA response. */
+    errno = 0;
     char *data = ssh_safe_read_file(path, NULL);
+    int read_errno = errno;
     free(path);
+
+    /* A NULL with ENOENT means the file simply doesn't exist -> the user has no
+     * keys (legitimate empty list). Any OTHER failure (ELOOP symlink, EACCES,
+     * non-regular file) must NOT be reported as "no keys" — return an error so
+     * the caller can't mistake a refused read for an empty key set. */
+    if (!data && read_errno != ENOENT) {
+        cJSON_Delete(keys);
+        *err_class = "GenericError";
+        *err_desc = "Could not read authorized_keys (unsafe path or permission denied)";
+        return NULL;
+    }
 
     if (data) {
         char *save_ptr = NULL;
@@ -413,10 +427,19 @@ static cJSON *handle_ssh_remove_keys(cJSON *args, const char **err_class, const 
 
     /* O_NOFOLLOW read — symlink at authorized_keys is rejected
      * before we expose its contents. */
+    errno = 0;
     char *data = ssh_safe_read_file(path, NULL);
+    int read_errno = errno;
     if (!data) {
         free(path);
-        return cJSON_CreateObject(); /* No file = nothing to remove */
+        /* Absent file = nothing to remove (success). But a refused/unsafe read
+         * (ELOOP symlink, EACCES) must NOT report success — that would claim the
+         * keys were removed while they're still present. Fail-secure: error. */
+        if (read_errno == ENOENT)
+            return cJSON_CreateObject();
+        *err_class = "GenericError";
+        *err_desc = "Could not read authorized_keys (unsafe path or permission denied)";
+        return NULL;
     }
 
     /* Filter out keys to remove */

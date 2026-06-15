@@ -122,6 +122,9 @@ static cJSON *handle_set_user_password(cJSON *args, const char **err_class, cons
      * that garbage string while returning success. Reject it instead
      * (fail-secure) so a caller can't unknowingly set an unusable password. */
     if (cJSON_IsTrue(crypted_item)) {
+        /* Scrub the secret even on this early reject path. */
+        if (pass_item->valuestring)
+            secure_zero(pass_item->valuestring, strlen(pass_item->valuestring));
         *err_class = "InvalidParameter";
         *err_desc  = "crypted=true is not supported on macOS (dscl sets plaintext only); send crypted=false with a base64-encoded plaintext password";
         return NULL;

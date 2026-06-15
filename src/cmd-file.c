@@ -62,16 +62,17 @@ static cJSON *handle_file_open(cJSON *args, const char **err_class, const char *
      * symlink-follow for QGA compatibility: a read returns nothing the QGA
      * caller (already root in the guest) could not read directly. O_NOFOLLOW is
      * POSIX and present on macOS since 10.0, so this stays Tiger-compatible. */
-    /* Map the fopen-style mode to open() flags. A trailing "b" (binary) is
-     * accepted and ignored to match fopen/qemu-ga. Unknown modes are REJECTED
-     * with InvalidParameter rather than silently falling through to read-only —
-     * the old behaviour returned a usable read handle for a typo'd or garbage
-     * mode (e.g. "rw", "x"), masking the caller's error. */
+    /* Map the fopen-style mode to open() flags. "b" (binary) is accepted and
+     * ignored anywhere in the string to match fopen/qemu-ga ("rb", "rb+",
+     * "wb+", "ab+"). Unknown modes are REJECTED with InvalidParameter rather
+     * than silently falling through to read-only — the old behaviour returned a
+     * usable read handle for a typo'd or garbage mode (e.g. "rw", "x"), masking
+     * the caller's error. */
     char mode_norm[8];
-    snprintf(mode_norm, sizeof(mode_norm), "%s", mode_str);
-    size_t mode_len = strlen(mode_norm);
-    if (mode_len >= 1 && mode_norm[mode_len - 1] == 'b')
-        mode_norm[mode_len - 1] = '\0';
+    size_t mi = 0;
+    for (const char *p = mode_str; *p && mi < sizeof(mode_norm) - 1; p++)
+        if (*p != 'b') mode_norm[mi++] = *p;
+    mode_norm[mi] = '\0';
 
     int flags;
     if      (strcmp(mode_norm, "r")  == 0) flags = O_RDONLY;
@@ -173,18 +174,25 @@ static cJSON *handle_file_read(cJSON *args, const char **err_class, const char *
         return NULL;
     }
 
+    char *b64 = NULL;
+    if (n > 0) {
+        b64 = base64_encode(buf, (size_t)n);
+        if (!b64) {
+            /* The read happened but we cannot encode it. Returning count>0 with
+             * an empty buf-b64 would silently lose data while looking like a
+             * successful partial read — fail-secure with an error instead. */
+            free(buf);
+            *err_class = "GenericError";
+            *err_desc = "Failed to base64-encode read data";
+            return NULL;
+        }
+    }
+
     cJSON *result = cJSON_CreateObject();
     cJSON_AddNumberToObject(result, "count", (double)n);
     cJSON_AddBoolToObject(result, "eof", n == 0);
-
-    if (n > 0) {
-        char *b64 = base64_encode(buf, (size_t)n);
-        cJSON_AddStringToObject(result, "buf-b64", b64 ? b64 : "");
-        free(b64);
-    } else {
-        cJSON_AddStringToObject(result, "buf-b64", "");
-    }
-
+    cJSON_AddStringToObject(result, "buf-b64", b64 ? b64 : "");
+    free(b64);
     free(buf);
     return result;
 }

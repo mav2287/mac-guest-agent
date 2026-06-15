@@ -515,19 +515,31 @@ static cJSON *handle_exec_status(cJSON *args, const char **err_class, const char
          * accumulated buffers are raw bytes; one encode per status call
          * is cheap and lets the truncation flags reflect everything up
          * to and including the final drain. */
+        /* If encoding fails (allocation failure), error rather than silently
+         * dropping captured output — omitting out-data/err-data would look
+         * like the process produced none. The process is not reaped here, so a
+         * retry remains possible. */
         if (proc->out_buf && proc->out_len > 0) {
             char *b64 = base64_encode((unsigned char *)proc->out_buf, proc->out_len);
-            if (b64) {
-                cJSON_AddStringToObject(result, "out-data", b64);
-                free(b64);
+            if (!b64) {
+                cJSON_Delete(result);
+                *err_class = "GenericError";
+                *err_desc = "Failed to base64-encode captured stdout";
+                return NULL;
             }
+            cJSON_AddStringToObject(result, "out-data", b64);
+            free(b64);
         }
         if (proc->err_buf && proc->err_len > 0) {
             char *b64 = base64_encode((unsigned char *)proc->err_buf, proc->err_len);
-            if (b64) {
-                cJSON_AddStringToObject(result, "err-data", b64);
-                free(b64);
+            if (!b64) {
+                cJSON_Delete(result);
+                *err_class = "GenericError";
+                *err_desc = "Failed to base64-encode captured stderr";
+                return NULL;
             }
+            cJSON_AddStringToObject(result, "err-data", b64);
+            free(b64);
         }
         if (proc->out_truncated) cJSON_AddBoolToObject(result, "out-truncated", 1);
         if (proc->err_truncated) cJSON_AddBoolToObject(result, "err-truncated", 1);
