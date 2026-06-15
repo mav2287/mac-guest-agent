@@ -62,30 +62,34 @@ static cJSON *handle_file_open(cJSON *args, const char **err_class, const char *
      * symlink-follow for QGA compatibility: a read returns nothing the QGA
      * caller (already root in the guest) could not read directly. O_NOFOLLOW is
      * POSIX and present on macOS since 10.0, so this stays Tiger-compatible. */
-    /* Map the fopen-style mode to open() flags. "b" (binary) is accepted and
-     * ignored anywhere in the string to match fopen/qemu-ga ("rb", "rb+",
-     * "wb+", "ab+"). Unknown modes are REJECTED with InvalidParameter rather
-     * than silently falling through to read-only — the old behaviour returned a
-     * usable read handle for a typo'd or garbage mode (e.g. "rw", "x"), masking
-     * the caller's error. */
-    char mode_norm[8];
-    size_t mi = 0;
-    for (const char *p = mode_str; *p && mi < sizeof(mode_norm) - 1; p++)
-        if (*p != 'b') mode_norm[mi++] = *p;
-    mode_norm[mi] = '\0';
-
-    int flags;
-    if      (strcmp(mode_norm, "r")  == 0) flags = O_RDONLY;
-    else if (strcmp(mode_norm, "r+") == 0) flags = O_RDWR   | O_NOFOLLOW;
-    else if (strcmp(mode_norm, "w")  == 0) flags = O_WRONLY | O_CREAT | O_TRUNC  | O_NOFOLLOW;
-    else if (strcmp(mode_norm, "w+") == 0) flags = O_RDWR   | O_CREAT | O_TRUNC  | O_NOFOLLOW;
-    else if (strcmp(mode_norm, "a")  == 0) flags = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
-    else if (strcmp(mode_norm, "a+") == 0) flags = O_RDWR   | O_CREAT | O_APPEND | O_NOFOLLOW;
-    else {
+    /* Parse the fopen-style mode strictly. Valid: a primary letter r/w/a,
+     * optionally followed by '+' and/or a binary 'b' (in either order) — e.g.
+     * "r","rb","r+","rb+","r+b","w","wb+","a+". The 'b' is accepted and ignored.
+     * Anything else (typo/garbage like "rw","x","br","rbb") is REJECTED with
+     * InvalidParameter rather than silently falling through to read-only, which
+     * would return a usable read handle and mask the caller's error. */
+    char primary = mode_str[0];
+    if (primary != 'r' && primary != 'w' && primary != 'a') {
         *err_class = "InvalidParameter";
         *err_desc  = "Invalid 'mode' (expected r, r+, w, w+, a, a+)";
         return NULL;
     }
+    int has_plus = 0, has_b = 0, bad = 0;
+    for (const char *p = mode_str + 1; *p; p++) {
+        if      (*p == '+') has_plus++;
+        else if (*p == 'b') has_b++;
+        else bad = 1;
+    }
+    if (bad || has_plus > 1 || has_b > 1) {
+        *err_class = "InvalidParameter";
+        *err_desc  = "Invalid 'mode' (expected r, r+, w, w+, a, a+)";
+        return NULL;
+    }
+
+    int flags;
+    if (primary == 'r') flags = has_plus ? (O_RDWR | O_NOFOLLOW) : O_RDONLY;
+    else if (primary == 'w') flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC  | O_NOFOLLOW;
+    else /* 'a' */          flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND | O_NOFOLLOW;
 
     open_file_t *entry = alloc_entry();
     if (!entry) {
