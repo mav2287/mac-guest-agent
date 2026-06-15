@@ -1,5 +1,11 @@
 # v2.5.5 live deploy + test matrix
 
+> **Historical (v2.5.5 artifact).** Reflects v2.5.5 behavior — notably
+> `guest-fstrim` returning `GenericError` and `guest-suspend-disk` `enabled:true`.
+> Both changed afterward: fstrim is now unregistered and the suspend trio is
+> disabled (all → `CommandNotFound`); count 45 → 42. See COMMAND_STATUS.md /
+> CHANGELOG for current state.
+
 Binary under test: tri-fat `dist/mac-guest-agent` v2.5.5,
 md5 `4d482a4fbc1b30f1e61e0ef39ee20fd9` (i386 + x86_64 + arm64), byte-identical
 artifact deployed to every target.

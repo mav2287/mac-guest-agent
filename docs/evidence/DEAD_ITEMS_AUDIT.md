@@ -1,10 +1,13 @@
 # Dead-item audit — QGA commands
 
-> **Superseded (issue #12):** the `guest-fstrim` row below records the v2.5.5
-> decision (turn the dead no-op into an honest error). That was itself reverted —
-> `guest-fstrim` is now **not registered at all** on macOS (matches upstream
-> `CONFIG_FSTRIM` gating; calling it returns `CommandNotFound`). Command count is
-> now 44. See `docs/RECLAIM.md`.
+> **Superseded — historical (v2.5.5 snapshot).** The findings below reflect
+> v2.5.5; several were later changed. Current state (v2.5.6): `guest-fstrim`,
+> `guest-set-vcpus`, and `guest-set-memory-blocks` are **not registered** at all
+> (no macOS equivalent; matches upstream `CONFIG_*` gating → `CommandNotFound`);
+> `guest-suspend-disk`/`-ram`/`-hybrid` are registered but **disabled by
+> default** (`enabled=0` → `CommandNotFound`; no QEMU wake path). Registered
+> command count is now **42**. See `docs/RECLAIM.md`, `docs/COMMAND_STATUS.md`,
+> and the CHANGELOG Unreleased section.
 
 
 Goal: find every command that returns success/data without actually doing the

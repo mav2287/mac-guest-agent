@@ -49,7 +49,7 @@ allow-rpcs = guest-ping,guest-sync,guest-sync-delimited,guest-info,guest-get-osi
 
 ### Full Admin (all capabilities)
 
-All commands enabled. This is the default when no `--allow-rpcs` or `--block-rpcs` is set. Equivalent to the Linux `qemu-ga` default.
+All *callable* commands enabled. This is the default when no `--allow-rpcs` or `--block-rpcs` is set. Equivalent to the Linux `qemu-ga` default — except the commands macOS can't honor are never callable regardless: `guest-fstrim`, `guest-set-vcpus`, `guest-set-memory-blocks` are not registered, and `guest-suspend-disk`/`-ram`/`-hybrid` are registered but disabled by default (opt-in via `allow-rpcs` only on a guest with a proven wake path). All other commands are enabled.
 
 If you want full admin but want to block specific dangerous commands:
 

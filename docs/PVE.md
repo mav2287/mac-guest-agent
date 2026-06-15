@@ -222,7 +222,7 @@ allow-rpcs = guest-ping,guest-sync,guest-sync-delimited,guest-info,guest-get-osi
 
 ### Full Admin
 
-All commands enabled (default). Equivalent to Linux qemu-ga defaults.
+All *callable* commands enabled (default). Equivalent to Linux qemu-ga defaults. (The 3 not-registered and 3 disabled-by-default commands stay unavailable regardless — see [COMMAND_STATUS.md](../docs/COMMAND_STATUS.md).)
 
 ## Host-Side Validation Checklist
 
@@ -297,7 +297,7 @@ echo '{"execute":"guest-get-load"}' | sudo mac-guest-agent --test
 echo '{"execute":"guest-get-cpustats"}' | sudo mac-guest-agent --test
 ```
 
-All 42 commands work regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction.
+All 42 *registered* commands are reachable regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction. (The suspend trio is registered but disabled by default and returns `CommandNotFound` until opted in.)
 
 ## Troubleshooting
 

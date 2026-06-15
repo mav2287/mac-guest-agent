@@ -100,30 +100,27 @@ static cJSON *handle_suspend_disk(cJSON *args, const char **err_class, const cha
     return do_suspend("25", err_class, err_desc);
 }
 
-/* guest-suspend-ram / -hybrid are GATED on macOS guests.
- *
- * suspend-disk (hibernatemode 25) writes RAM to the hibernation image and
- * powers the VM off cleanly — the host can cold-start it again, so it behaves
- * like a resumable shutdown and is safe.
- *
- * suspend-ram (hibernatemode 0) and suspend-hybrid (hibernatemode 3) instead
- * tell Darwin to enter S3-style sleep with RAM kept powered, then wait for a
- * hardware wake event. Under QEMU there is no PM wake path back into the guest:
- * `pmset sleepnow` parks the vCPU and the VM wedges with no way to resume from
- * inside the guest. The correct way to suspend a VM to RAM is host-side
- * (`qm suspend <vmid>` on PVE, or `virsh suspend <dom>` on libvirt), which
- * freezes the whole VM at the hypervisor and is resumed with `qm resume` /
- * `virsh resume`. Refuse cleanly here rather than hang the guest. */
+/* All three in-guest suspend variants are DISABLED by default (enabled=0; see
+ * cmd_power_init below) and so normally return CommandNotFound before these
+ * handlers run. The handlers remain as the implementation for an operator who
+ * explicitly re-enables a variant via allow-rpcs on a guest with a proven wake
+ * path. None of them have a working wake path on a typical QEMU/OpenCore guest:
+ * suspend-disk (hibernatemode 25) truly hibernates but OpenCore/OVMF doesn't
+ * restore the image → no resume; suspend-ram (0) / suspend-hybrid (3) enter S3
+ * with RAM powered and wait for a hardware wake event that never arrives. Either
+ * way the VM wedges. The reliable suspend for a managed VM is host-side
+ * (`qm suspend`/`virsh suspend`, resumed with `qm resume`/`virsh resume`). The
+ * ram/hybrid handlers refuse cleanly (a generic error) rather than attempt the
+ * sleep at all; suspend-disk's handler does run the pmset sequence if enabled. */
 static cJSON *handle_suspend_ram(cJSON *args, const char **err_class, const char **err_desc)
 {
     (void)args;
     LOG_INFO("Suspend to RAM requested — refused (gated on macOS guest)");
     *err_class = "GenericError";
     *err_desc = "guest-suspend-ram is not supported on a macOS guest: in-guest "
-                "S3 sleep has no QEMU wake path and wedges the VM. Suspend to "
-                "RAM from the host instead (PVE: 'qm suspend <vmid>' / libvirt: "
-                "'virsh suspend <domain>'; resume with 'qm resume' / 'virsh "
-                "resume'). For a resumable in-guest suspend use guest-suspend-disk.";
+                "S3 sleep has no QEMU wake path and wedges the VM. Suspend from "
+                "the host instead (PVE: 'qm suspend <vmid>' / libvirt: 'virsh "
+                "suspend <domain>'; resume with 'qm resume' / 'virsh resume').";
     return NULL;
 }
 
@@ -135,8 +132,7 @@ static cJSON *handle_suspend_hybrid(cJSON *args, const char **err_class, const c
     *err_desc = "guest-suspend-hybrid is not supported on a macOS guest: it "
                 "relies on in-guest S3 sleep, which has no QEMU wake path and "
                 "wedges the VM. Suspend from the host instead (PVE: 'qm suspend "
-                "<vmid>' / libvirt: 'virsh suspend <domain>'). For a resumable "
-                "in-guest suspend use guest-suspend-disk.";
+                "<vmid>' / libvirt: 'virsh suspend <domain>').";
     return NULL;
 }
 

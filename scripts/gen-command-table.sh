@@ -88,8 +88,11 @@ if [ -n "$DOC_TOTAL_CLAIM" ] && [ "$DOC_TOTAL_CLAIM" != "$BINARY_COUNT" ]; then
     ERRORS=1
 fi
 
-# Check README command count
-README_CLAIM=$(grep "[0-9]* registered QGA commands" README.md | grep -oE '[0-9]+' | head -1)
+# Check README command count. The README tagline (line ~5) reads "<N> commands,
+# real filesystem freeze, ...". Match that exact phrasing — the old regex
+# ("registered QGA commands") never matched the actual README wording, so README
+# count drift went uncaught.
+README_CLAIM=$(grep -oE '^[0-9]+ commands, real filesystem freeze' README.md | grep -oE '[0-9]+' | head -1)
 if [ -n "$README_CLAIM" ] && [ "$README_CLAIM" != "$BINARY_COUNT" ]; then
     echo "ERROR: README claims $README_CLAIM commands but binary has $BINARY_COUNT"
     ERRORS=1

@@ -33,9 +33,11 @@ cJSON *commands_get_list(void);
 /* Get the number of registered commands */
 int commands_count(void);
 
-/* Returns non-zero if `name` is a registered command. Lets callers (e.g. the
- * freeze gate) distinguish "unknown command" from "known but disallowed". */
-int command_exists(const char *name);
+/* Returns non-zero if `name` is a registered AND enabled (callable) command.
+ * Lets the freeze gate apply only to commands that would actually run — an
+ * unregistered or disabled (enabled=0) command falls through to
+ * commands_dispatch() and returns CommandNotFound. */
+int command_is_callable(const char *name);
 
 /* Register a single command. Called by cmd-*.c init functions. */
 void command_register(const char *name, command_handler_fn handler, int enabled);

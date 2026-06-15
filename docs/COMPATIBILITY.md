@@ -261,6 +261,6 @@ External contributors: paste the `verify.sh` text output and the JSON appendix i
 | Static analysis (clang --analyze) | 0 bugs across 21 source files |
 | Memory leaks (macOS leaks tool) | 0 leaks, 1143 allocations, 173KB |
 | Fuzz testing (ASAN, 210k rounds) | 0 crashes |
-| Linux qemu-ga command parity | 42 registered. Intentionally not registered on macOS (no equivalent API, matches upstream gating): `guest-fstrim` (no on-demand TRIM; see RECLAIM.md), `guest-get-devices` (Windows-only). `guest-network-get-route` is implemented. |
+| Linux qemu-ga command parity | 42 registered. Intentionally not registered on macOS (no equivalent API, matches upstream gating): `guest-fstrim` (no on-demand TRIM; see RECLAIM.md), `guest-set-vcpus` / `guest-set-memory-blocks` (no CPU/memory hotplug), `guest-get-devices` (Windows-only). Registered but disabled by default (no QEMU wake path): `guest-suspend-disk` / `-ram` / `-hybrid`. `guest-network-get-route` is implemented. |
 | Code coverage | 55.88% line, 80.95% function (remainder requires root, real hardware, or destructive operations) |
 | Test suite | unit + proactive + fuzz (210k rounds) + integration + verify-transports + install-flags (current counts in `make test` output) |

@@ -1356,6 +1356,28 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Regression: an UNCALLABLE command (unregistered OR disabled) during freeze must
+# return CommandNotFound, NOT the misleading "not allowed while frozen". The
+# freeze gate must only apply to commands that would actually run.
+FROZEN_UNCALLABLE=$(printf '%s\n%s\n%s\n%s\n' \
+    '{"execute":"guest-fsfreeze-freeze"}' \
+    '{"execute":"guest-fstrim"}' \
+    '{"execute":"guest-suspend-disk"}' \
+    '{"execute":"guest-fsfreeze-thaw"}' \
+    | "$BINARY" --test 2>/dev/null | sed 's/^QMP> //')
+FU_OK=1
+for n in 2 3; do
+    LINE=$(echo "$FROZEN_UNCALLABLE" | awk "NR==$n")
+    echo "$LINE" | python3 -c "import json,sys; assert json.load(sys.stdin).get('error',{}).get('class')=='CommandNotFound'" 2>/dev/null || FU_OK=0
+done
+if [ $FU_OK -eq 1 ]; then
+    echo "  PASS: uncallable command during freeze returns CommandNotFound (not frozen-error)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: uncallable command during freeze returned wrong error"
+    FAIL=$((FAIL + 1))
+fi
+
 # =========================================================
 echo ""
 echo "--- Audit Fix: Command Injection Prevention ---"
