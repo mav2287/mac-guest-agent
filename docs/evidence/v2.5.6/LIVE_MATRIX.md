@@ -202,7 +202,7 @@ Every user-invocable CLI flag of the binary, exercised on the guests.
 | unknown flag → rc1 + hint | ✓ | ✓ | ✓ | ✓ |
 | `--install --virtio` when installed → refuse | ✓ | ✓ | ✓ | — |
 | `--upgrade --dry-run` → rc0 + backup step | ✓ | ✓ | ✓ | ✓ |
-| **`--upgrade` (real, 2.5.5→2.5.6)** | ✓ | ✓ | ✓ | see note |
+| **`--upgrade` (real, 2.5.5→2.5.6)** | ✓ | ✓ | ✓ | ✓ binary placed; live restart on reboot (see note) |
 | **`--uninstall` (removes binary+plist)** | ✓ | ✓ | ✓ | (= Leopard slice) |
 | **`--install` (places 2.5.6 + plist)** | ✓ | ✓ | ✓ | (= Leopard slice) |
 
@@ -212,14 +212,32 @@ after the real `--upgrade`/`--install`, all three now run a freshly-installed
 
 Tiger 111: the low-output CLI commands (version/help/dump-conf/flag-errors/
 dry-run) were verified **9/9 over QGA** (`guest-exec`). The heavy `--self-test`/
-`--safe-test` overrun Tiger's serial channel (issue-#10 UART drain), and the
-real `--upgrade`/`--uninstall`/`--install` cannot be exercised on the Tiger VM:
-its SSH is unusable (slirp reverse-DNS sshd resets), so the only way to invoke
-them is `guest-exec` — but that makes the command a **child of the agent
-daemon**, and `--upgrade`/`--install` kill that daemon to let launchd respawn the
-new binary, which interrupts the command before placement completes (binary mtime
-never changes, channel wedges). This is a Tiger-VM test-harness limitation, not a
-binary defect: the **byte-identical i386 slice** runs the full lifecycle 5/5 from
-a shell on Leopard 112, and the exec-free upgrade is proven on the real i386 iMac
-(see v2.5.5 evidence). Tiger's daemon is left at its original 2.5.5; the 2.5.6
-command logic itself is proven on Tiger via `--test`/QGA above.
+`--safe-test` overrun Tiger's serial channel (issue-#10 UART drain), so those are
+covered via Leopard's byte-identical i386 slice.
+
+**Correction (root-caused after a controlled experiment): `--upgrade` works on
+Tiger — it DOES place the new binary.** An earlier note here claimed it "didn't
+persist"; that was wrong. The on-disk `/usr/local/bin/mac-guest-agent` was in
+fact replaced with the 2.5.6 i386 binary, and after a VM reboot the running
+daemon reports **2.5.6** (verified). What misled the first pass: Tiger's SSH is
+dead (slirp reverse-DNS resets), so `--upgrade` can only be invoked via
+`guest-exec`, i.e. as a **child of the running daemon**. `--upgrade` places the
+binary and then SIGTERMs the stale daemon so launchd KeepAlive respawns it; on
+Tiger that daemon is serial-wedge-prone and does not exit/respawn promptly, so
+the *live* daemon keeps serving the OLD version until the next reboot — and the
+SIGTERM cascade also kills the `guest-exec` child before it can log. So checking
+the *running* version (still old) looked like failure, while the *on-disk* binary
+had already been upgraded.
+
+Controlled experiment that isolated this: the SAME `guest-exec --upgrade` on
+SL 113 (working channel) completed live — binary replaced AND the daemon
+respawned to 2.5.6 immediately, channel intact. So the deferred live-restart is
+specific to Tiger's daemon/serial fragility (issue-#10), not the upgrade logic.
+Net for Tiger: `--upgrade` correctly installs the new binary; the live daemon
+picks it up on the next launchd start (e.g. reboot). Tiger now runs **2.5.6**.
+
+Possible hardening (not a bug): `scan_daemon_processes()` SIGTERMs the stale
+daemon; escalating to SIGKILL after a short timeout could force the live restart
+even when the Tiger daemon is wedged on the serial channel — though a process
+blocked in kernel serial I/O may not die promptly even on SIGKILL, so this needs
+validation before adopting.
