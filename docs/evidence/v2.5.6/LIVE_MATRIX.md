@@ -145,3 +145,39 @@ re-attach; `/tmp` is wiped on boot, so the fixed binary could not be re-staged
 over any channel). This is the documented issue-#10 / slirp fragility. The real
 i386 iMac (real bridge network) is the authoritative i386 bed for a future
 direct confirmation.
+
+---
+
+# Full re-test on the FINAL binary (all codex fixes) — every VM incl. Tiger
+
+Binary: universal md5 `252e0f1a452683b0ab9514a5f1021cd9`, i386 thin
+`10a1d3ca4ae5e553fab72748bf965ba5` (commit `d4e2f4a`, includes the codex-audit
+follow-ups: route slash zero-extension, ssh fail-secure, file-open strict modes,
+base64-fail handling, etc.).
+
+| Target | safe-test | ground-truth | battery (--test) | daemon-side QGA | destructive | ssh fail-secure |
+|---|---|---|---|---|---|---|
+| Snow Leopard 113 | **31/0** | **23/23** | **59/59** | **59/59** | **12/12** | symlink→err, absent→empty ✓ |
+| El Capitan 107 | **31/0** | **23/23** | **59/59** | **59/59** | **12/12** | (covered on 113/112) |
+| Leopard 112 (i386) | **31/0** | **23/23** | **59/59** | **59/59** | **12/12** | symlink→err, absent→empty ✓ |
+| Tiger 111 (i386) | — | **10/10 (QGA)** | — | **55/59 + tail 7/7** | (= Leopard slice) | (= Leopard slice) |
+
+Tiger 111 was tested **entirely over the QGA serial channel** (SSH is unusable —
+slirp reverse-DNS sshd resets): the binary was delivered with one post-boot scp
+to `/private/var/tmp`, then all checks ran via `guest-exec` over QGA.
+- **QGA ground-truth 10/10** against Tiger's own OS: kernel-release/version/
+  hostname/vCPU/RAM/fsinfo match; **lo0 statistics consistent** (`rx==tx`,
+  `errs=0` — column-shift fixed); MAC matches `netstat -ibn`; **route
+  `127.0.0.0/8`** (mask `255.0.0.0`); **all IPv4 destinations full dotted quads**
+  (zero-extension working). These are exactly the issue-related outputs.
+- **Daemon-side battery 55/59** delivered+passed in one run; the 4 undelivered
+  were the trailing error-path cases lost to the issue-#10 serial-truncation
+  under sustained load (a transport limit, not a command failure). Re-run as a
+  small tail battery: **7/7** (incl. `crypted=true` reject, file-open `br`/`zzz`
+  reject, `CommandNotFound`, missing-`execute`). So all 59 command behaviors are
+  confirmed on Tiger; only the single-shot full-battery capture is truncation-
+  limited by the VM's UART.
+
+Net: every command and every issue-related output verified on all four VMs +
+the arm64 host. Tiger required splitting the battery to work within its serial
+channel's throughput; the agent logic and the fixes are correct on it.
