@@ -181,3 +181,45 @@ to `/private/var/tmp`, then all checks ran via `guest-exec` over QGA.
 Net: every command and every issue-related output verified on all four VMs +
 the arm64 host. Tiger required splitting the battery to work within its serial
 channel's throughput; the agent logic and the fixes are correct on it.
+
+---
+
+# CLI surface test (user-invocable command-line flags) — final binary
+
+Every user-invocable CLI flag of the binary, exercised on the guests.
+
+| CLI command | SL 113 | El Cap 107 | Leopard 112 (i386) | Tiger 111 (i386, QGA) |
+|---|---|---|---|---|
+| `--version` (→ 2.5.6) | ✓ | ✓ | ✓ | ✓ |
+| `--help` (→ Usage) | ✓ | ✓ | ✓ | ✓ |
+| `--self-test` / `--self-test-json` | ✓ | ✓ | ✓ | (= Leopard slice) |
+| `--safe-test` / `--safe-test-json` (31/0) | ✓ | ✓ | ✓ | (= Leopard slice) |
+| `--dump-conf` | ✓ | ✓ | ✓ | ✓ |
+| `--update <bad path>` → rc1 | ✓ | ✓ | ✓ | ✓ |
+| `--virtio` without `--install` → rc1 | ✓ | ✓ | ✓ | ✓ |
+| `--virtio --virtio-force` → rc1 | ✓ | ✓ | ✓ | ✓ |
+| `--upgrade --install` (combo) → rc1 | ✓ | ✓ | ✓ | ✓ |
+| unknown flag → rc1 + hint | ✓ | ✓ | ✓ | ✓ |
+| `--install --virtio` when installed → refuse | ✓ | ✓ | ✓ | — |
+| `--upgrade --dry-run` → rc0 + backup step | ✓ | ✓ | ✓ | ✓ |
+| **`--upgrade` (real, 2.5.5→2.5.6)** | ✓ | ✓ | ✓ | see note |
+| **`--uninstall` (removes binary+plist)** | ✓ | ✓ | ✓ | (= Leopard slice) |
+| **`--install` (places 2.5.6 + plist)** | ✓ | ✓ | ✓ | (= Leopard slice) |
+
+SL 113 / El Cap 107 / Leopard 112: **CLI non-mutating 12/12 + lifecycle 5/5**;
+after the real `--upgrade`/`--install`, all three now run a freshly-installed
+**2.5.6** daemon (was 2.5.5).
+
+Tiger 111: the low-output CLI commands (version/help/dump-conf/flag-errors/
+dry-run) were verified **9/9 over QGA** (`guest-exec`). The heavy `--self-test`/
+`--safe-test` overrun Tiger's serial channel (issue-#10 UART drain), and the
+real `--upgrade`/`--uninstall`/`--install` cannot be exercised on the Tiger VM:
+its SSH is unusable (slirp reverse-DNS sshd resets), so the only way to invoke
+them is `guest-exec` — but that makes the command a **child of the agent
+daemon**, and `--upgrade`/`--install` kill that daemon to let launchd respawn the
+new binary, which interrupts the command before placement completes (binary mtime
+never changes, channel wedges). This is a Tiger-VM test-harness limitation, not a
+binary defect: the **byte-identical i386 slice** runs the full lifecycle 5/5 from
+a shell on Leopard 112, and the exec-free upgrade is proven on the real i386 iMac
+(see v2.5.5 evidence). Tiger's daemon is left at its original 2.5.5; the 2.5.6
+command logic itself is proven on Tiger via `--test`/QGA above.
