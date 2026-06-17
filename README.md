@@ -16,18 +16,20 @@ qm stop <vmid> && sleep 5 && qm start <vmid>
 
 **2. In the macOS VM:**
 ```bash
-# Download the tri-fat binary (i386 + x86_64 + arm64 in one file) — covers
-# macOS 10.4 Tiger through 26 Tahoe; one URL for every host.
+# Download the tri-fat binary to /tmp (i386 + x86_64 + arm64 in one file) —
+# covers macOS 10.4 Tiger through 26 Tahoe; one URL for every host.
 # Note: on Tiger / Leopard / older Snow Leopard guests, the VM's TLS stack
 # usually cannot reach GitHub directly. Download on a modern machine and
-# transfer the file (scp / shared folder / USB).
-curl -fLO https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
+# copy the file to /tmp on the VM (scp / shared folder / USB).
+curl -fL -o /tmp/mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
 
-# Install — run it from wherever you downloaded it. --install does everything:
-# extracts the host-native slice in-process (no lipo, no Developer Tools),
-# places it at /usr/local/bin, then writes and loads the LaunchDaemon.
-chmod +x mac-guest-agent
-sudo ./mac-guest-agent --install
+# Install. --install does everything: extracts the host-native slice in-process
+# (no lipo, no Developer Tools), places it at /usr/local/bin, then writes and
+# loads the LaunchDaemon. The /tmp file is only the source — it is NOT the
+# install location; delete it afterwards or let it clear on the next reboot.
+chmod +x /tmp/mac-guest-agent
+sudo /tmp/mac-guest-agent --install
+rm -f /tmp/mac-guest-agent           # optional: the daemon now lives in /usr/local/bin
 ```
 
 The download is one tri-fat binary so a single URL covers every host; the
@@ -44,14 +46,6 @@ supports `--local PATH` for air-gapped installs and the VirtIO override):
 curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
 ```
 
-**Updates:** transfer the new binary, then run it with `--upgrade`:
-```bash
-# Transfer the new binary (e.g., scp from the build machine)
-# Then on the VM:
-sudo /tmp/mac-guest-agent --upgrade
-```
-The running binary self-sources — no need to specify a path. Backs up the current binary, regenerates the plist, restarts, and verifies. Rolls back to the backup on verify failure.
-
 **VirtIO override (unsupported):** if your orchestrator hardcodes VirtIO (kubevirt-style) and ISA isn't available, see [`docs/NO_ISA_OVERRIDE.md`](docs/NO_ISA_OVERRIDE.md) — `sudo /usr/local/bin/mac-guest-agent --install --virtio` runs the gated override path (macOS 11+ only, requires SIP disabled).
 
 **3. Verify:**
@@ -63,6 +57,22 @@ qm agent <vmid> get-osinfo
 # From inside VM
 sudo mac-guest-agent --self-test
 ```
+
+## Updating
+
+To upgrade an existing install, download the new binary the same way and run it
+with `--upgrade` — the running daemon self-sources, so you don't pass a path:
+```bash
+# Download (or transfer) the new release to /tmp, then on the VM:
+curl -fL -o /tmp/mac-guest-agent https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
+chmod +x /tmp/mac-guest-agent
+sudo /tmp/mac-guest-agent --upgrade
+rm -f /tmp/mac-guest-agent
+```
+`--upgrade` backs up the current binary, extracts the native slice to
+`/usr/local/bin`, regenerates the plist, restarts the daemon, and verifies it —
+rolling back to the backup on verify failure. (`--install` on top of an existing
+install is refused; use `--upgrade`.)
 
 ## How It Works
 
