@@ -76,16 +76,19 @@ scp mac-guest-agent user@<vm-ip>:/tmp/
 ### Inside the macOS VM
 
 ```bash
-sudo cp /tmp/mac-guest-agent /usr/local/bin/mac-guest-agent
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+sudo chmod +x /tmp/mac-guest-agent
+sudo /tmp/mac-guest-agent --install
 ```
 
-The `--install` command:
+Run `--install` from wherever the binary sits (e.g. `/tmp`); it places the
+binary itself — don't pre-copy it into `/usr/local/bin`. The `--install` command:
+- Extracts the **host-native slice in-process** and places it at
+  `/usr/local/bin/mac-guest-agent` (a single thin slice — on Tiger that's i386,
+  so the daemon's arch matches the system tools it must `exec`). No `lipo`, no
+  `cp`/`mv`.
 - Copies the LaunchDaemon plist to `/Library/LaunchDaemons/`
 - Creates the freeze hooks directory at `/etc/qemu/fsfreeze-hook.d/`
-- Installs a default config at `/etc/qemu/qemu-ga.conf.default`
-- Sets up log rotation via newsyslog
+- Sets up log rotation via newsyslog (`/etc/newsyslog.d/`)
 - Starts the service
 
 ### Verify Installation

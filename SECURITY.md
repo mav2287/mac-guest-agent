@@ -104,7 +104,7 @@ sudo mac-guest-agent --self-test
 
 ## Command Injection Prevention
 
-- Disk name inputs are validated against `[a-zA-Z0-9_-]` before use
+- Disk name inputs are validated by `is_safe_disk_name()` (`src/cmd-disk.c`): the name must begin with the literal `/dev/disk`, after which only digits `0-9` and `s` (the partition separator, e.g. `/dev/disk0s1`) are permitted — anything else is rejected
 - `diskutil` commands use `run_command_v()` (explicit argv) instead of shell interpolation
 - Password changes use stdin pipe to `dscl`, not command-line arguments
 - All `popen()`/`system()` calls use static command strings or validated inputs

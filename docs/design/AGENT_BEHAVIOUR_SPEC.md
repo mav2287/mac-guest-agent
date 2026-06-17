@@ -196,7 +196,7 @@ Today the freeze response is a single integer `frozen_volume_count`. With Q1's p
 
 - **A. Keep int wire response; log breakdown only.** Spec-conformant. The structured detail lives only in `/var/log/mac-guest-agent.log`, which isn't reachable from the host without an out-of-band fetch.
 - **B. Extend wire response with a structured breakdown** (e.g. `{"return": {"count": 3, "by_treatment": {...}}}`). Breaks spec — the contract says `int`, we'd be returning an object. Most clients ignore unknown fields but strict ones may reject.
-- **C. Keep int wire response; emit a structured INFO log line; surface breakdown via `--safe-test-json` / `--self-test-json` / `pve-verify.sh` log fetch.**
+- **C. Keep int wire response; emit a structured INFO log line; surface breakdown via `--safe-test-json` / `--self-test-json` / `verify.sh` log fetch.**
 
 ### Decision
 
@@ -211,7 +211,7 @@ Per-treatment detail surfaces in three places:
    Freeze complete: 1 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 1 flushed_only, 4 skipped (2 network, 1 special, 1 readonly)
    ```
 2. **`--self-test-json` env diagnostic** — extend the `freeze` section to expose: (a) the dispatch table this build implements, (b) the log file path so external tooling knows where to fetch the per-event line. Doesn't actually run a freeze — just states what would happen.
-3. **`pve-verify.sh`** — after the freeze round-trip, use `qm agent <vmid> exec` to `tail -n 50 <log_path> | grep "Freeze complete"` and embed the line in the host-side report. This is the path Phase 3 will wire up.
+3. **`verify.sh`** — after the freeze round-trip, use `qm agent <vmid> exec` to `tail -n 50 <log_path> | grep "Freeze complete"` and embed the line in the host-side report. This is the path Phase 3 will wire up.
 
 This keeps the spec contract clean (PVE and any other QGA consumer gets the int they expect) while giving contributors and operators full visibility into what actually happened. The `--self-test-json` static description means anyone can see the dispatch policy even without running a freeze.
 
@@ -220,11 +220,11 @@ This keeps the spec contract clean (PVE and any other QGA consumer gets the int 
 - `src/cmd-fs.c handle_fsfreeze_freeze()` / `handle_fsfreeze_freeze_list()` — keep returning `cJSON_CreateNumber(frozen_volume_count)`. No wire-shape change.
 - `src/cmd-fs.c sync_all_volumes()` — populate a stack-allocated struct of counters; log a single INFO line with the full breakdown at the end of the freeze loop.
 - `src/selftest.c emit_system_info()` — add a `freeze_dispatch` object summarising the per-FS treatment table and the log file path. Static description, no real freeze run.
-- `scripts/pve-verify.sh` (Phase 3 task) — after `qm guest cmd <vmid> fsfreeze-freeze`, run `qm agent <vmid> exec --path tail --arg -n50 --arg /var/log/mac-guest-agent.log`, poll exec-status, base64-decode, grep for the `Freeze complete` line, embed in report.
+- `scripts/verify.sh` (Phase 3 task) — after `qm guest cmd <vmid> fsfreeze-freeze`, run `qm agent <vmid> exec --path tail --arg -n50 --arg /var/log/mac-guest-agent.log`, poll exec-status, base64-decode, grep for the `Freeze complete` line, embed in report.
 
 ### Failure modes
 
-- Log file unreadable / missing → `pve-verify.sh` reports "freeze breakdown unavailable (log path: ...)" and continues; the int response still tells the operator the rollup count.
+- Log file unreadable / missing → `verify.sh` reports "freeze breakdown unavailable (log path: ...)" and continues; the int response still tells the operator the rollup count.
 - Log file rotated mid-test → the breakdown line may not appear in the most recent N lines; fall back to "breakdown unavailable, last known: <previous run>." Not a freeze failure, just a reporting gap.
 
 ---
@@ -290,7 +290,7 @@ The honest disclosure of this choice lives in the source-file comment and in the
 - Keep the registration in `cmd_hardware_init()` — same command name, fixed shape.
 - `--self-test-json` env block (`emit_system_info()` in `src/selftest.c`) — add a brief note describing the cpustats shape and the `type:"linux"` discriminator-choice rationale, so anyone tracing where the `"linux"` came from finds the explanation without having to read source.
 - No removal from `docs/COMMAND_STATUS.md` for this (cpustats) decision; it leaves the count unchanged. (The overall registered count is now **42**, not 45 — `guest-fstrim` was later removed; see RECLAIM.md.)
-- No test changes needed — `--safe-test` doesn't currently exercise `guest-get-cpustats` (verified in `src/selftest.c:626-627`: the array has `Memory block size` and `Memory blocks`, no cpustats entry).
+- (Historical note: at the time this was written `--safe-test` didn't exercise `guest-get-cpustats`. It does now — `{"guest-get-cpustats", NULL, 1, "CPU statistics"}` is in the safe-test array in `src/selftest.c`.)
 
 ### Failure modes
 
@@ -322,7 +322,7 @@ Upstream's freeze-allowed list (6 commands) blocks `guest-fsfreeze-freeze` and `
 
 - **A. Align with upstream's 6.** Maximum conformance; loses idempotent re-freeze (regression for any caller that depended on it — likely none, but possible) and blocks read-only inspection during freeze (annoying for backup tools that want to query state).
 - **B. Keep current 9.** Status quo. The read-only "get" commands remain blocked, including useful ones like `guest-get-fsinfo`, `guest-get-osinfo`, `guest-network-get-interfaces`.
-- **C. Adopt a principled rule: allow during freeze iff handler is read-only, doesn't execute external programs, doesn't change agent state except via the freeze-status flag.** Enumerate the resulting allowlist (~27 commands). Larger than upstream's 6, smaller than the full 44. Documented divergence.
+- **C. Adopt a principled rule: allow during freeze iff handler is read-only, doesn't execute external programs, doesn't change agent state except via the freeze-status flag.** Enumerate the resulting allowlist (~27 commands). Larger than upstream's 6, smaller than the full 42. Documented divergence.
 
 ### Decision
 
@@ -453,7 +453,7 @@ Replace with text along these lines:
 > qm agent <vmid> get-memory-blocks        # block list (used = online * size)
 > ```
 >
-> `scripts/pve-verify.sh` translates these into a human-readable "~X GB used / ~Y GB total" report.
+> `scripts/verify.sh` translates these into a human-readable "~X GB used / ~Y GB total" report.
 
 Avoids the word "accurate" entirely — replaces it with a description of what we actually provide and the path to consume it.
 
@@ -595,7 +595,7 @@ _(to be filled)_
 |---|---|---|
 | 1 | Per-FS freeze strategy | **Hybrid:** explicit deny-list for skip categories (network / special / autofs / RDONLY); generic try-`F_FULLFSYNC`-with-`ENOTSUP`-tolerance for the rest. APFS gets `tmutil localsnapshot` + `F_FULLFSYNC` (defence in depth). ZFS gets `zfs snapshot` (if `zfs` CLI present), else falls through to `F_FULLFSYNC`. Per-treatment counters: `snapshotted`, `zfs_snapshotted`, `fullfsynced`, `flushed_only`, `skipped_network`, `skipped_special`, `skipped_readonly`. |
 | 2 | `freeze-list` mountpoints | **Implement subset behaviour.** Distinct handler parses `args.mountpoints`; filters the dispatch loop; same per-FS strategy per Q1; same counters; same wire response. |
-| 3 | Freeze response shape | **Keep `int` wire response (spec-conformant).** Per-treatment breakdown surfaces in (a) the agent log INFO line, (b) `--self-test-json`'s `freeze_dispatch` description, (c) `pve-verify.sh` which fetches the log line via `qm agent exec tail \| grep`. |
+| 3 | Freeze response shape | **Keep `int` wire response (spec-conformant).** Per-treatment breakdown surfaces in (a) the agent log INFO line, (b) `--self-test-json`'s `freeze_dispatch` description, (c) `verify.sh` which fetches the log line via `qm agent exec tail \| grep`. |
 | 4 | `guest-get-cpustats` shape | **Fix shape to spec-conformant per-CPU array with `type: "linux"` discriminator.** Use `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` for per-CPU data. `type: "linux"` chosen over `"darwin"` because the upstream `GuestCpuStatsType` enum has no `"darwin"` value (strict parsers would reject it); over omitting `type` because the field is part of the union's required `base` and omitting it is a more severe spec violation. Honest disclosure in code comment + `--self-test-json` env block. |
 | 5 | Allowlist alignment | **Keep current 9-command allowlist.** No expansion. Our 9 = upstream's 6 + `guest-sync-id` (extension) + idempotent `freeze` / `freeze-list` (deliberate divergence). Document the principled-restrictive rule; expand only when a concrete consumer needs a specific command. One allowlist regardless of per-FS dispatch type. |
 | 6 | Frozen-state persistence | **No change; document divergence.** Our pseudo-freeze isn't a true I/O suspension, so the upstream marker + logging-disable protections aren't needed. Existing APFS snapshot orphan-cleanup already handles the only piece of crash-time state that matters. Windows VSS (same semantic class as us) inherits the same upstream protections without needing them either; we're consistent with that pattern. Documented in `FREEZE_SEMANTICS.md`. |
@@ -614,4 +614,4 @@ Each item below is intended as a focused commit. Ordering: Q1's code change intr
 5. **Q5 — allowlist comment + unit test.** No allowlist change. Update the comment on `fsfreeze_command_allowed()` to state the principled-restrictive rule and reference the spec doc. Add a unit test covering representative commands from each category (locks the contract).
 6. **Q3 (`--self-test-json`) — `freeze_dispatch` block.** Extend `emit_system_info()` to describe the per-FS dispatch policy, the log path, and the cpustats-discriminator-choice note from Q4.
 7. **Q7 — documentation honesty.** All three doc revisions (memory claim, ISA rationale, new `FREEZE_SEMANTICS.md`) in one commit, landing after the code is in.
-8. **Phase 3 entry — `pve-verify.sh` enhancements.** Q3's log-fetch wiring, the behavioural-check rewrite (content-not-exit-code per Phase 1 Target 4), the one-shot wrap. Tracked in Phase 3 of `PLAN.md`.
+8. **Phase 3 entry — `verify.sh` enhancements.** Q3's log-fetch wiring, the behavioural-check rewrite (content-not-exit-code per Phase 1 Target 4), the one-shot wrap. Tracked in Phase 3 of `PLAN.md`.

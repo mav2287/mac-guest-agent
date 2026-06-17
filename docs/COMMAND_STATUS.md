@@ -46,7 +46,7 @@ All 42 registered commands with their actual status, Linux parity, and requireme
 | `guest-suspend-ram` | power | disabled | partial | yes | `enabled=0` → `CommandNotFound`. No wake-from-S3 path on QEMU/OpenCore. Host-side suspend instead. |
 | `guest-suspend-hybrid` | power | disabled | partial | yes | `enabled=0` → `CommandNotFound`. Same — no QEMU wake path. Host-side suspend instead. |
 | `guest-get-vcpus` | hardware | stable | partial | no | All reported online, can-offline=false |
-| `guest-get-memory-blocks` | hardware | stable | partial | no | Synthetic blocks derived from real memory usage |
+| `guest-get-memory-blocks` | hardware | stable | partial | no | Every block reported `online:true, can-offline:false` (macOS RAM is never hot-unpluggable). Block count = total memory ÷ block size — NOT derived from memory *usage* (that older behavior was removed). |
 | `guest-get-memory-block-info` | hardware | stable | partial | no | Block size derived from total memory |
 | `guest-get-cpustats` | hardware | stable | partial | no | Via Mach host_statistics (not /proc/stat) |
 | `guest-get-disks` | disk | stable | partial | no | Via diskutil, no PCI address mapping |

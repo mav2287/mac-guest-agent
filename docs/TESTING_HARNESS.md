@@ -69,9 +69,12 @@ On 10.6 Snow Leopard and 10.7 Lion, this is the EXACT command that crashed in v2
 **Step 5 — Install + self-test.**
 
 ```bash
-sudo mv /tmp/mac-guest-agent /usr/local/bin/
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+# Run --install from /tmp; it extracts the host-native slice in-process and
+# places it at /usr/local/bin. Do NOT pre-mv the fat binary into place — that
+# skips slice extraction and leaves a fat binary (which grades to x86_64 and
+# breaks exec on Tiger).
+sudo chmod +x /tmp/mac-guest-agent
+sudo /tmp/mac-guest-agent --install
 sudo launchctl list com.macos.guest-agent | grep -E '"PID"|"LastExitStatus"'
 # Expect: numeric PID (not "-"), LastExitStatus = 0
 

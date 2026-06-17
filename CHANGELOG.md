@@ -127,7 +127,7 @@ ship blocker**, so it escaped.
   `docs/RECLAIM.md` (zero free space with `diskutil secureErase freespace 0`
   via `guest-exec`, plus host `detect-zeroes=unmap` / `qemu-img convert`).
 - Self-test now asserts `guest-fstrim` is **not** registered (capability test).
-- `--safe-test-json` is green (`26/0` — 20 read-only checks + 6 "uncallable" assertions for the 3 unregistered + 3 disabled commands) and `--self-test-json` `15/0/0` on macOS again.
+- `--safe-test-json` is green again on macOS — this fix took it from `20/1`-fail back to pass (`26/0` at this point: 20 read-only checks + 6 "uncallable" assertions for the 3 unregistered + 3 disabled commands). The shipped 2.5.6 safe-test is **`31/0`** after the 5 data-truth invariants added in the "data-truth bugs" entry above; `--self-test-json` is `15/0/0`.
 
 ### Added — ship gate so a red binary can never ship again
 

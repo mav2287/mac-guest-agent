@@ -30,10 +30,11 @@ The guest agent turns a UTM VM from a "window with a desktop" into a **managed v
 ### 2. Install the Agent
 
 ```bash
-# Inside the macOS VM
-sudo mv mac-guest-agent /usr/local/bin/
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+# Inside the macOS VM — run --install from where the binary sits; it extracts
+# the host-native slice in-process and places it at /usr/local/bin itself
+# (no manual mv/cp, no lipo).
+chmod +x mac-guest-agent
+sudo ./mac-guest-agent --install
 ```
 
 ### 3. Verify (in-VM quick check)

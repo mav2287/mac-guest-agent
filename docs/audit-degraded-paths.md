@@ -22,25 +22,24 @@ the test is testing the wrong thing.
 
 ## Audited subsystems
 
-### `src/cmd-network.c` — Tiger short-circuits
+### `src/cmd-network.c` — Tiger short-circuits — RESOLVED (v2.5.5)
 
 Originally three "return empty thing" branches keyed on Darwin 8.x.
-All three have been replaced with real implementations in
-v2.5.5-dev. See `tiger_get_interfaces_ioctl()` (SIOCGIFCONF +
-per-name SIOCGIFFLAGS/SIOCGIFNETMASK + AF_LINK MAC extraction) and
-`tiger_get_routes_sysctl()` (sysctl(NET_RT_DUMP, AF_INET)) and
-`tiger_add_stats_from_iflist()` (sysctl(NET_RT_IFLIST) for
-per-interface counters). All three bypass libc's hanging
-`getifaddrs()` / slow daemon-context `popen()` paths by going
-straight to the kernel via the BSD primitives `ifconfig(8)` /
-`netstat(1)` themselves use.
-
-**Boundary:** the Tiger paths handle IPv4 only. Tiger 10.4 ships
-IPv6 disabled by default; the IPv6 ioctl story is messy on Tiger
-and adding an untested path would re-introduce the "looks correct
-but isn't" failure mode. If an operator running Tiger with IPv6
-manually enabled needs IPv6 here, they should open an issue with a
-repro and the v2.5.6 work can pull in the AF_INET6 ioctl pass.
+A v2.5.5-dev intermediate replaced them with dedicated Tiger helpers
+(SIOCGIFCONF / `sysctl(NET_RT_DUMP)` / `sysctl(NET_RT_IFLIST)`), but
+that special-case was **removed before v2.5.5 shipped** once the real
+root cause was found: the empty-array shim only existed because the
+daemon ran the **x86_64** slice on a Tiger 10.4.7+ VM, where
+`getifaddrs()` hangs. The actual fix was to install the **i386** slice
+on Tiger (in-process slice extraction), under which native
+`getifaddrs(3)` returns instantly. So the current code uses plain
+`getifaddrs(3)` + `netstat -ibn`/`netstat -rn` on **all** OS versions
+— there is no Tiger special-case and no `tiger_get_interfaces_ioctl()`
+/ `tiger_get_routes_sysctl()` / `tiger_add_stats_from_iflist()` helper
+(those names no longer exist; see the comments in
+`src/cmd-network.c` `handle_network_get_interfaces` /
+`handle_network_get_route`). Confirmed returning real data on the
+real i386 iMac and the QEMU i386 Tiger VM.
 
 ### `src/cmd-hardware.c` — memory-stats fallback
 
@@ -92,11 +91,15 @@ errors surface as errors.
 
 **Action:** none.
 
-### `src/relauncher.c` — i386 vs x86_64 re-exec on Tiger/Leopard
+### Slice selection on Tiger/Leopard — RESOLVED (v2.5.5)
 
-Re-execs the correct slice. Code path is "load right architecture
-or fail loudly" — not "silently degrade to wrong arch." Not
-deceptive.
+There is no `src/relauncher.c` (the standalone re-exec relauncher was
+removed in v2.5.5). The arch problem is now solved at install time, not
+runtime: `--install`/`--upgrade` extract and place the **host-native
+slice** in-process (`extract_native_slice`/`place_binary_atomic` in
+`src/service.c`), so on Tiger the installed daemon is i386 and there is
+nothing to re-exec. "Load the right architecture or fail loudly" still
+holds — it just happens once, at install, rather than on every launch.
 
 **Action:** none.
 

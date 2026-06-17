@@ -7,6 +7,16 @@ host)**, with working SSH access for validation work.
 Last verified: 2026-06-04 on PVE 9.1.1, QEMU 10.1.2, host Xserve3,1
 (Intel Xeon W5590 / Nehalem).
 
+> **⚠️ Superseded CPU guidance — read this first.** This recipe pins the guest to
+> a single core (`boot-args ... cpus=1`, `--cores 1`). Later testing found that
+> `cpus=1` is what *causes* the permanent serial-channel wedge under load: it caps
+> the kernel to one core regardless of `cores`, re-creating the single-vCPU wedge.
+> **Current guidance (see [docs/VM_CONFIGS.md](VM_CONFIGS.md)): use `cores: 2`,
+> REMOVE `cpus=1` from OpenCore `config.plist`** (it re-injects via NVRAM each boot
+> otherwise), and keep `idlehalt=1` on Tiger. Tiger/Leopard/Snow Leopard all run
+> SMP stably with `cpus=1` removed. Treat the `cpus=1` / `--cores 1` steps below as
+> historical; everything else in this guide still applies.
+
 ---
 
 ## What this guide gets you

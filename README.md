@@ -156,7 +156,7 @@ for the full toolchain story.
 | **[Proxmox VE](docs/PVE.md)** | VM settings, backup config, TRIM, security profiles, troubleshooting |
 | **[libvirt / virt-manager](docs/LIBVIRT.md)** | Domain XML, virsh commands, quiesced snapshots, troubleshooting |
 | **[UTM](docs/UTM.md)** | Local macOS VM automation, utmctl integration, CI/CD workflows |
-| [All Platforms](docs/PLATFORMS.md) | Plain QEMU setup, transport priority |
+| [All Platforms](docs/PLATFORMS.md) | Plain QEMU setup, ISA serial transport |
 | **[VM Configs & Troubleshooting](docs/VM_CONFIGS.md)** | Per-OS known-good VM configs, and *is it the VM or the agent?* symptom→fix catalog |
 | [Commands](docs/COMMAND_STATUS.md) | All 42 commands with status, Linux parity, privilege requirements |
 | [Compatibility](docs/COMPATIBILITY.md) | Support tiers, kext timeline, verification evidence per version |

@@ -41,6 +41,12 @@ Compatible with the Linux `qemu-ga`:
                          argument needed. v2.5.3+.
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
+      --safe-test        Run the read-only command validation suite (exercises
+                         every read-only command against the live system and
+                         asserts the removed/disabled commands are uncallable
+                         plus data-truth invariants). Makes no modifications.
+      --safe-test-json   Same as --safe-test but output JSON. This is the
+                         ship-gate check (CI fails on any non-pass).
       --update PATH      DEPRECATED in v2.5.3+; delegates to --upgrade
                          internally. Will be removed in a future release.
       --dry-run          Combined with --install/--uninstall/--update/

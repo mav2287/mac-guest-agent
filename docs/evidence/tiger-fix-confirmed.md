@@ -1,5 +1,18 @@
 # Tiger 10.4.11 — issue #11 fix confirmed live on real hardware
 
+> **Superseded — historical (v2.5.5-dev snapshot, 2026-06-07).** This records an
+> INTERMEDIATE approach that did NOT ship. The helper functions named below
+> (`tiger_get_interfaces_ioctl()`, `tiger_get_routes_sysctl()`,
+> `tiger_add_stats_from_iflist()`) and their SIOCGIFCONF / `sysctl(NET_RT_*)`
+> code paths were **removed before v2.5.5 released**. The shipped fix is simpler:
+> the daemon installs as the **i386** slice on Tiger (in-process slice
+> extraction), under which native `getifaddrs(3)` returns instantly — so the
+> current code uses plain `getifaddrs(3)` + `netstat` on all OS versions, with NO
+> Tiger special-case. The "may hang / may panic Tiger" caveats below about
+> `sysctl(NET_RT_DUMP)` describe code that no longer exists; `network-get-route`
+> returns real data via `netstat -rn`. See `src/cmd-network.c` and
+> `docs/evidence/v2.5.5/`. Kept for issue-history context only.
+
 **Date:** 2026-06-07 (PVE host time 21:18 UTC).
 
 ## Pre-fix v2.5.4 behavior

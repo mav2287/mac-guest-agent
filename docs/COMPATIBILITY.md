@@ -95,7 +95,7 @@ Notes:
 Installer images are analyzed by `scripts/verify-installer.sh` which checks:
 
 - **Apple16X50Serial.kext** presence, bundle version, and IOPCIClassMatch (must be `0x07000000&0xFFFF0000` = PCI class 0x0700 Serial Controller, which matches QEMU ISA serial)
-- **All required libc symbols** as defined by the agent's checked-in undefined-symbol baseline (`tests/legacy_slice_symbols_x86_64.txt` and `…_i386.txt`, ~133 libc symbols after framework and weak imports are separated out). Versioning suffixes (`$INODE64`, `$1050`, etc.) are stripped during the check because nm reports the unversioned name. The installer verifier derives the required-symbol list directly from this baseline rather than hand-curating it — the baseline IS the source of truth for what the agent links against, and an installer that lacks any of those symbols will fail to host the agent.
+- **All required libc symbols** as defined by the agent's checked-in undefined-symbol baseline (`tests/legacy_slice_symbols_x86_64.txt` and `…_i386.txt`, ~133 libc symbols after framework and weak imports are separated out). Versioning suffixes (`$INODE64`, `$1050`, etc.) are stripped during the check because nm reports the unversioned name. The installer verifier derives the required-symbol list directly from this baseline rather than hand-curating it — the baseline IS the source of truth for what the agent links against, and an installer that lacks any of those symbols will fail to host the agent. (Note: the per-OS matrix rows below that read "20/20 symbols" predate this approach — they reflect an earlier verifier that checked 20 hand-picked critical symbols; it was replaced by the full baseline diff described here. The "20/20" figures are historical and not the current check.)
 - **1 weak-imported symbol**: `host_statistics64` — present on 10.6+, absent on 10.4 Tiger. Agent's i386 and x86_64 slices weak-import this via `__attribute__((weak_import))` in `src/cmd-hardware.c` so dyld resolves it to NULL on Tiger instead of refusing to load; the agent falls back to `vm_stat` text parsing when the symbol is absent. The verifier reports present/absent without failing.
 - **14 framework symbols** in the baseline (`_CF*`, `_kCF*`, `_IO*`) — checked at the framework-directory level (CoreFoundation.framework, IOKit.framework presence) rather than per-symbol, since the framework binaries are stable Apple-managed surfaces.
 - **CoreFoundation.framework** and **IOKit.framework** presence
@@ -179,7 +179,7 @@ QEMU can emulate PowerPC Macs via its `mac99` (G4) and `g3beige` (G3) machine ty
 
 2. **Serial transport investigation.** QEMU's PPC mac99 machine emulates a Zilog 85C30 ESCC (Enhanced Serial Communications Controller), not the 16550 UART that `Apple16X50Serial.kext` matches. The agent would need to connect via ESCC serial paths (likely `/dev/cu.modem` or `/dev/tty.serial`) or USB serial (`-device usb-serial`). This needs testing on an actual PPC VM.
 
-3. **API compatibility audit.** Mac OS X 10.0–10.3 may be missing POSIX/Mach APIs the agent depends on (`getifaddrs`, `getutxent`, `host_statistics64`, etc.). The 20 critical symbol checks from our installer verification would need to pass.
+3. **API compatibility audit.** Mac OS X 10.0–10.3 may be missing POSIX/Mach APIs the agent depends on (`getifaddrs`, `getutxent`, `host_statistics64`, etc.). The full undefined-symbol baseline check from our installer verification would need to pass.
 
 4. **Testing infrastructure.** PPC VMs for each target version, ability to SCP binaries in and run tests.
 
@@ -213,7 +213,7 @@ Installer verification is the primary path for expanding this matrix. It proves 
 
 A version is promoted to **Tier 2** when all four core checks pass:
 - Apple16X50Serial.kext present with PCI class 0x0700
-- All 20 critical C library symbols present
+- All required C library symbols present (full undefined-symbol baseline diff)
 - CoreFoundation and IOKit frameworks present
 - Required tools present (sw_vers, diskutil, sysctl, shutdown, launchctl)
 
@@ -224,9 +224,10 @@ Boot a VM from the installer on PVE, install the agent, then run a single host-s
 **Inside the VM — install the agent (one-time):**
 
 ```bash
-sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+# --install extracts the host-native slice in-process and places it at
+# /usr/local/bin itself — run it from where the binary sits; don't pre-cp it.
+chmod +x mac-guest-agent
+sudo ./mac-guest-agent --install
 ```
 
 **From the PVE host — run the unified verifier (single command):**

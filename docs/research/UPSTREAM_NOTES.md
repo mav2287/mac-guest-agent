@@ -129,7 +129,7 @@ Also note `'if': 'CONFIG_LINUX'`: in upstream QEMU, this command is **Linux-only
 ### Other CPU-adjacent commands the spec defines
 
 - `guest-get-vcpus` → `['GuestLogicalProcessor']`, gated on `CONFIG_LINUX || CONFIG_WIN32`. We register it.
-- `guest-set-vcpus` → `CONFIG_LINUX`-only. We register it as unsupported (returns error).
+- `guest-set-vcpus` → `CONFIG_LINUX`-only. **Not registered** (updated v2.5.6): there is no CPU hotplug on macOS, so — matching upstream's `CONFIG_*` gating — we omit it entirely rather than register a stub; calling it returns `CommandNotFound`. (Same treatment as `guest-set-memory-blocks` and `guest-fstrim`.)
 - `guest-get-load` → `GuestLoadAverage`, gated on `CONFIG_WIN32 || CONFIG_GETLOADAVG`. We register it.
 
 ### Verdict
