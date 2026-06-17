@@ -42,8 +42,8 @@ Compatible with the Linux `qemu-ga`:
       --self-test        Check environment and report readiness
       --self-test-json   Same as --self-test but output JSON
       --safe-test        Run the read-only command validation suite (exercises
-                         every read-only command against the live system and
-                         asserts the removed/disabled commands are uncallable
+                         a battery of read-only commands against the live system
+                         and asserts the removed/disabled commands are uncallable
                          plus data-truth invariants). Makes no modifications.
       --safe-test-json   Same as --safe-test but output JSON. This is the
                          ship-gate check (CI fails on any non-pass).

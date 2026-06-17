@@ -57,10 +57,13 @@ registered = 42, enabled = 39
 ```
 
 The battery confirms each of the 6 returns `CommandNotFound` on call, and that
-the 36 callable commands return correct data on each OS — including Tiger's
-SIOCGIFCONF `guest-network-get-interfaces` (asserts `lo0` + a hardware-address
-interface) and `ioreg` `guest-get-diskstats`/`guest-get-disks` paths, which exist
-specifically because `getifaddrs`/`IOServiceMatching` hang in the Tiger daemon.
+the 36 callable commands return correct data on each OS — including, on Tiger,
+`guest-network-get-interfaces` (asserts `lo0` + a hardware-address interface) and
+`guest-get-diskstats`/`guest-get-disks`. On Tiger these run the same native paths
+as every other version (`getifaddrs(3)` + `netstat`, IOKit) — the old
+SIOCGIFCONF/`ioreg`-popen special-cases were removed in v2.5.5 once the daemon
+started installing as the i386 slice (under which those native calls return
+instantly; the hangs were an x86_64-on-Tiger artifact).
 
 ## Issue #12 reproduction — fixed
 

@@ -58,8 +58,10 @@ For kubevirt, this is automatic — every VMI gets a `<channel type='unix'><targ
 After SIP is off and the VM is back up:
 
 ```bash
-# On the guest, after copying the binary to /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install --virtio
+# On the guest, with the downloaded binary at /tmp/mac-guest-agent — run it
+# from there; --install extracts the native slice and places it itself.
+chmod +x /tmp/mac-guest-agent
+sudo /tmp/mac-guest-agent --install --virtio
 ```
 
 (Or, equivalently, via the bootstrap wrapper:  `sudo bash install.sh --virtio` — same end result; the wrapper just downloads the binary first.)
@@ -81,7 +83,7 @@ A marker file at `/var/db/mac-guest-agent/.virtio-mode` (content: `mode=full`) i
 For operators who've already arranged for Apple's daemon to not own the channel (SIP off by hand, AppleQEMUGuestAgent unloaded by hand, possibly a non-standard device path) and want a one-line install without re-running the same checks:
 
 ```bash
-sudo /usr/local/bin/mac-guest-agent --install --virtio-force
+sudo /tmp/mac-guest-agent --install --virtio-force
 ```
 
 `--virtio-force` bypasses every prereq check, doesn't unload Apple's daemon, doesn't print the warning, doesn't prompt. It just writes the override config and drops the marker with `mode=force` so `--uninstall` knows NOT to touch Apple's daemon (since we didn't).

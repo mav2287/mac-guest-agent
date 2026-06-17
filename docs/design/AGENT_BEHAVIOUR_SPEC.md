@@ -208,7 +208,7 @@ Per-treatment detail surfaces in three places:
 
 1. **Agent log, INFO level, single line per freeze event:**
    ```
-   Freeze complete: 1 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 1 flushed_only, 4 skipped (2 network, 1 special, 1 readonly)
+   Filesystem frozen: 1 snapshotted, 0 zfs_snapshotted, 2 fullfsynced, 1 flushed_only, 4 skipped (2 network, 1 special, 1 readonly)
    ```
 2. **`--self-test-json` env diagnostic** — extend the `freeze` section to expose: (a) the dispatch table this build implements, (b) the log file path so external tooling knows where to fetch the per-event line. Doesn't actually run a freeze — just states what would happen.
 3. **`verify.sh`** — after the freeze round-trip, use `qm agent <vmid> exec` to `tail -n 50 <log_path> | grep "Freeze complete"` and embed the line in the host-side report. This is the path Phase 3 will wire up.
@@ -219,7 +219,7 @@ This keeps the spec contract clean (PVE and any other QGA consumer gets the int 
 
 - `src/cmd-fs.c handle_fsfreeze_freeze()` / `handle_fsfreeze_freeze_list()` — keep returning `cJSON_CreateNumber(frozen_volume_count)`. No wire-shape change.
 - `src/cmd-fs.c sync_all_volumes()` — populate a stack-allocated struct of counters; log a single INFO line with the full breakdown at the end of the freeze loop.
-- `src/selftest.c emit_system_info()` — add a `freeze_dispatch` object summarising the per-FS treatment table and the log file path. Static description, no real freeze run.
+- `src/selftest.c` — a `freeze_dispatch` object summarising the per-FS treatment table and the log file path (as shipped: `emit_freeze_dispatch()`, called from `output_json()`). Static description, no real freeze run.
 - `scripts/verify.sh` (Phase 3 task) — after `qm guest cmd <vmid> fsfreeze-freeze`, run `qm agent <vmid> exec --path tail --arg -n50 --arg /var/log/mac-guest-agent.log`, poll exec-status, base64-decode, grep for the `Freeze complete` line, embed in report.
 
 ### Failure modes
@@ -450,7 +450,7 @@ Replace with text along these lines:
 >
 > ```bash
 > qm agent <vmid> get-memory-block-info   # block size
-> qm agent <vmid> get-memory-blocks        # block list (used = online * size)
+> qm agent <vmid> get-memory-blocks        # block list; every block online:true, can-offline:false (total RAM = count * size)
 > ```
 >
 > `scripts/verify.sh` translates these into a human-readable "~X GB used / ~Y GB total" report.

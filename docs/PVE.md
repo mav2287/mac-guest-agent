@@ -273,7 +273,7 @@ Proxmox's per-VM memory gauge in the web UI for a macOS guest reflects the **QEM
 
 This agent does not change that. Installing it does not move the PVE web UI gauge.
 
-What the agent *does* provide is the **guest's** memory view, on a separate query path. The `guest-get-memory-blocks` and `guest-get-memory-block-info` commands report the guest's memory blocks (block size × online block count), derived from macOS's Mach VM statistics. PVE's `pvestatd` and web UI don't call those — they're not in the cgroup/balloon code path the gauge reads — but you can call them yourself:
+What the agent *does* provide is the **guest's** memory view, on a separate query path. The `guest-get-memory-blocks` and `guest-get-memory-block-info` commands report the guest's total RAM as memory blocks (block size × block count, derived from `sysctl hw.memsize`); every block is reported `online:true, can-offline:false` (macOS RAM is never hot-unpluggable). PVE's `pvestatd` and web UI don't call those — they're not in the cgroup/balloon code path the gauge reads — but you can call them yourself:
 
 ```bash
 qm agent <vmid> get-memory-block-info   # block size in bytes
@@ -300,7 +300,7 @@ echo '{"execute":"guest-get-load"}' | sudo mac-guest-agent --test
 echo '{"execute":"guest-get-cpustats"}' | sudo mac-guest-agent --test
 ```
 
-All 42 *registered* commands are reachable regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. libvirt's `virsh qemu-agent-command` has no such restriction. (The suspend trio is registered but disabled by default and returns `CommandNotFound` until opted in.)
+All 42 *registered* commands are reachable regardless of PVE's allowlist — PVE just can't invoke them through `qm agent` until they update their command list. (`virsh qemu-agent-command` doesn't allowlist commands the way `qm agent` does, but note it can't reach this ISA agent over libvirt's *native* QGA channel at all — that path targets VirtIO; see [docs/LIBVIRT.md](LIBVIRT.md) for the direct-socket method.) (The suspend trio is registered but disabled by default and returns `CommandNotFound` until opted in.)
 
 ## Troubleshooting
 

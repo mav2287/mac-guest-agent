@@ -46,7 +46,7 @@ supports `--local PATH` for air-gapped installs and the VirtIO override):
 curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
 ```
 
-**VirtIO override (unsupported):** if your orchestrator hardcodes VirtIO (kubevirt-style) and ISA isn't available, see [`docs/NO_ISA_OVERRIDE.md`](docs/NO_ISA_OVERRIDE.md) — `sudo /usr/local/bin/mac-guest-agent --install --virtio` runs the gated override path (macOS 11+ only, requires SIP disabled).
+**VirtIO override (unsupported):** if your orchestrator hardcodes VirtIO (kubevirt-style) and ISA isn't available, see [`docs/NO_ISA_OVERRIDE.md`](docs/NO_ISA_OVERRIDE.md) — `sudo ./mac-guest-agent --install --virtio` runs the gated override path (macOS 11+ only, requires SIP disabled).
 
 **3. Verify:**
 ```bash

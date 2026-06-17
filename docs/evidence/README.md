@@ -65,9 +65,8 @@ Short version (Profile B — the most common case):
 **One-time setup inside the VM (install the agent):**
 
 ```bash
-sudo cp mac-guest-agent /usr/local/bin/mac-guest-agent
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+chmod +x mac-guest-agent
+sudo ./mac-guest-agent --install   # extracts the native slice + places it itself; no manual cp
 ```
 
 **On the host (one command — drives the in-VM diagnostics for you):**

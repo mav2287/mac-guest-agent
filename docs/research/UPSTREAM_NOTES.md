@@ -4,7 +4,7 @@
 
 This document captures evidence — quoted source, schema excerpts, line numbers, URLs — for questions our implementation needs to answer before we touch code. Each section ends with a **Verdict** that states what the finding means for `mac-guest-agent`.
 
-Nothing in this file is a fix proposal. Decisions flow from here into `../design/FREEZE_AND_GATING.md` in Phase 2.
+Nothing in this file is a fix proposal. Decisions flow from here into the design docs `../design/AGENT_BEHAVIOUR_SPEC.md` and `../design/FREEZE_SEMANTICS.md`.
 
 ## Method
 
@@ -143,6 +143,17 @@ Three concrete issues identified by the schema alone:
 3. **Several commands we register are `CONFIG_LINUX`-only in upstream QEMU.** That's not strictly a bug — we ship an agent the spec doesn't acknowledge for macOS — but we should be deliberate about which commands we expose and whether our shape on each one is in-spec or extended.
 
 Memory commands' shapes are already correct.
+
+> **Update (post-research):** Verdict items 1 and 2 were subsequently
+> implemented. `guest-get-cpustats` now returns the spec-shaped per-CPU array
+> (`[{type:"linux", cpu, user, nice, system, idle}]`) via
+> `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` — not the flat aggregate
+> described above. `guest-fsfreeze-freeze-list` now has its own handler
+> (`handle_fsfreeze_freeze_list`) that honours the `mountpoints` subset rather
+> than freezing everything. The present-tense findings above are the Phase-1
+> snapshot that drove those changes; see `docs/COMMAND_STATUS.md` /
+> `docs/design/FREEZE_SEMANTICS.md` and `src/cmd-hardware.c` / `src/cmd-fs.c` for
+> the shipped behavior.
 
 These findings inform Phase 2's command-gating + intent design, and shape the `--safe-test-json` / `--self-test-json` output that Phase 3 wraps.
 
@@ -594,7 +605,7 @@ Same path for memory: cgroup RSS, optionally overlaid by `query-balloon` if the 
 
 ### What this means for our project's positioning vs Apple's QGA
 
-Apple's `AppleQEMUGuestAgent` (16 commands) is a minimal QGA — exec, file I/O, sync, ping, time, network-get-interfaces, shutdown. **No freeze, no observability, no OS-info, no SSH, no memory, no CPU stats.** Our 42-command surface is genuine extension, not duplication. PVE backup consistency on a macOS guest is impossible without our agent (or one like it).
+Apple's `AppleQEMUGuestAgent` (18 commands) is a minimal QGA — exec, file I/O, sync, ping, time, network-get-interfaces, shutdown. **No freeze, no observability, no OS-info, no SSH, no memory, no CPU stats.** Our 42-command surface is genuine extension, not duplication. PVE backup consistency on a macOS guest is impossible without our agent (or one like it).
 
 Apple's QGA is also only launched when an `AppleVirtIOAgentDevice` IOKit property is matched, which is set by Apple's `applevirtio.console` driver loaded on Virtualization.framework hosts. On Proxmox/QEMU/OpenCore guests, that property is not set and Apple's QGA never runs. The "ISA-because-Apple-claims-VirtIO" rationale in our README is right for VZ environments but oversimplified for QEMU.
 

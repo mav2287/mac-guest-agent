@@ -11,7 +11,7 @@ The agent works with any QEMU-based hypervisor via ISA serial (`type=isa`).
 
 ## Why ISA Serial (Not VirtIO)
 
-macOS Big Sur and newer ship with Apple's own built-in VirtIO guest agent (`AppleVirtIO`, ~18 commands). When the default VirtIO serial channel is configured, Apple's agent claims it — not ours. Apple's agent lacks freeze support, memory reporting, routing, and most of the 42 commands we provide.
+macOS Big Sur and newer ship with Apple's own built-in guest agent, `AppleQEMUGuestAgent` (18 commands). It is IOKit-launched on the VirtIO console channel via the `applevirtio.console` driver — but **only on Apple Virtualization.framework hosts**; under plain QEMU/OpenCore (Proxmox, libvirt, raw QEMU) that driver doesn't load, so on those hosts the VirtIO channel is actually free. Either way, Apple's agent lacks freeze support, memory reporting, routing, and most of the 42 commands we provide.
 
 Using `type=isa` (ISA serial) creates a separate channel via `Apple16X50Serial.kext` that Apple's agent does not claim. This is required on **all** macOS versions for our agent to work.
 
@@ -40,7 +40,7 @@ qemu-ga-client --address=/tmp/qga.sock ping
 
 ## Apple's Built-in VirtIO Agent
 
-Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part of `AppleVirtIO.kext`. This agent claims the default VirtIO serial channel (`org.qemu.guest_agent.0`) and speaks a subset of the QGA protocol.
+Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent, `AppleQEMUGuestAgent`, launched via an IOKit match (`AppleVirtIOAgentDevice`) set by the `applevirtio.console` driver. Where that driver loads (Apple Virtualization.framework hosts) it claims the default VirtIO serial channel (`org.qemu.guest_agent.0`) and speaks a subset of the QGA protocol. Under plain QEMU/OpenCore the driver doesn't load, so the channel is free.
 
 **Confirmed version:** `1.4-AppleVirtIO-230.100.3~3768` (observed on Sequoia 15.7.5, PR #1)
 
@@ -102,9 +102,9 @@ Starting with macOS Big Sur (11.0), Apple ships a built-in guest agent as part o
 
 ### Coexistence
 
-Both agents can run simultaneously — Apple's on VirtIO, ours on ISA serial. They do not conflict. PVE communicates with whichever agent is on the configured channel:
+On an Apple Virtualization.framework host both agents can coexist — Apple's on VirtIO, ours on ISA serial — without conflict. PVE communicates with whichever agent is on the configured channel:
 
-- `agent: enabled=1` → talks to Apple's agent (18 commands)
+- `agent: enabled=1` (default VirtIO) → talks to Apple's agent (18 commands) **on a Virtualization.framework host**; under plain QEMU/OpenCore Apple's agent isn't launched, so this channel has no agent at all
 - `agent: enabled=1,type=isa` → talks to our agent (42 commands)
 
 ### Why Not Just Use Apple's Agent?

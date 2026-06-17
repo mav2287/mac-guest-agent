@@ -115,8 +115,10 @@ check.
   ICH9-LPC.disable_s3=1` (the QEMU-macOS standard; El Cap effectively does this
   and "instant-wakes"). **Fix (host):** suspend at the hypervisor with
   `qm suspend` / `virsh suspend`, which freezes+resumes the whole VM.
-- **Agent stance:** `guest-suspend-ram`/`-hybrid` are gated off and point to the
-  host-side path; `guest-suspend-disk` is the open gating decision.
+- **Agent stance:** all three suspend commands (`guest-suspend-ram`/`-hybrid`/
+  `-disk`) are registered but disabled by default (`enabled=0` →
+  `CommandNotFound`) and point to the host-side path — there's no reliable
+  QEMU/OpenCore wake path, so in-guest suspend isn't relied on.
 - **Evidence:** [`evidence/v2.5.5/os-level-destructive.md`](evidence/v2.5.5/os-level-destructive.md).
 
 ### `guest-exec` → `EBADEXEC`, or `network-get-interfaces` empty (Tiger only)
