@@ -16,32 +16,30 @@ qm stop <vmid> && sleep 5 && qm start <vmid>
 
 **2. In the macOS VM:**
 ```bash
-# Download the universal binary — one slice (i386 / x86_64 / arm64) loads at runtime.
-# Covers macOS 10.4 Tiger through 26 Tahoe.
+# Download the tri-fat binary (i386 + x86_64 + arm64 in one file) — covers
+# macOS 10.4 Tiger through 26 Tahoe; one URL for every host.
 # Note: on Tiger / Leopard / older Snow Leopard guests, the VM's TLS stack
 # usually cannot reach GitHub directly. Download on a modern machine and
 # transfer the file (scp / shared folder / USB).
 curl -fLO https://github.com/mav2287/mac-guest-agent/releases/latest/download/mac-guest-agent
 
-# Install — thin to host arch with lipo, then install
-# (saves ~340 KB on disk vs the fat binary; per @vit9696's suggestion in
-# issue #9. The download stays fat so one URL covers every host.)
-sudo lipo -thin "$(uname -m)" mac-guest-agent -output /usr/local/bin/mac-guest-agent
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
+# Install — run it from wherever you downloaded it. --install does everything:
+# extracts the host-native slice in-process (no lipo, no Developer Tools),
+# places it at /usr/local/bin, then writes and loads the LaunchDaemon.
+chmod +x mac-guest-agent
+sudo ./mac-guest-agent --install
 ```
 
-If you'd rather keep the fat binary on disk (e.g. for testing the relauncher
-path on Tiger 10.4 explicitly), the original `mv` recipe still works:
-```bash
-sudo mv mac-guest-agent /usr/local/bin/
-sudo chmod +x /usr/local/bin/mac-guest-agent
-sudo /usr/local/bin/mac-guest-agent --install
-```
-The agent is byte-for-byte identical at runtime either way — the lipo-thin
-version just doesn't keep the slices your kernel will never choose.
+The download is one tri-fat binary so a single URL covers every host; the
+*installed* file at `/usr/local/bin/mac-guest-agent` is the single slice your
+kernel actually runs (e.g. i386 on Tiger), extracted in-process. That matters
+beyond saving disk: the installed daemon's arch then matches the system tools it
+must `exec` — on a Tiger 10.4.7+ guest XNU would otherwise grade the x86_64
+slice of a fat binary, which can't `execve` Tiger's i386-only `/bin` (issue #9).
+Don't hand-place the binary with `lipo`/`mv`/`cp`; let `--install` do it.
 
-Or use the bootstrap wrapper (does the same thing, plus VirtIO override and upgrade orchestration):
+Or use the bootstrap wrapper (downloads, then runs `--install` for you; also
+supports `--local PATH` for air-gapped installs and the VirtIO override):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mav2287/mac-guest-agent/main/scripts/install.sh | sudo bash
 ```
@@ -87,8 +85,12 @@ Open an issue at https://github.com/mav2287/mac-guest-agent/issues/new with as m
 **Loader-safe (no execution needed):**
 
 1. `sw_vers` — macOS version, build
-2. `file /usr/local/bin/mac-guest-agent` — confirms it's a Mach-O fat binary
-3. `lipo -info /usr/local/bin/mac-guest-agent` — shows the slice list
+2. `file /usr/local/bin/mac-guest-agent` — shows the installed native slice
+   (e.g. `Mach-O executable i386` on Tiger). `--install` thins the download to a
+   single slice, so this is *not* a fat binary; the wrong arch here (or a fat
+   binary) points at a slice-extraction problem.
+3. `file ./mac-guest-agent` on the downloaded file (before install) — confirms
+   the tri-fat download is intact (`Mach-O universal binary with 3 architectures`).
 
 **If the binary starts:**
 
