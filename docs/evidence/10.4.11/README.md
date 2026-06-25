@@ -1,7 +1,7 @@
 # macOS 10.4.11 (Tiger) — evidence
 
-**Contributor:** [@vit9696](https://github.com/vit9696) via [PR #3](https://github.com/mav2287/mac-guest-agent/pull/3).
-**Captured against:** mac-guest-agent v2.4.3.
+**Contributor:** [@vit9696](https://github.com/vit9696).
+**Captured against:** mac-guest-agent v2.5.6.
 **Result:** 35 passed, 0 failed.
 
 ---
@@ -35,6 +35,10 @@ vga: vmware
 ```
 
 ### OpenCore specifics
+
+#### General
+
+1. Preferred `SystemProductName` is `MacPro2,1`.
 
 #### `Booter` quirks
 
