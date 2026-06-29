@@ -1,7 +1,7 @@
 # macOS 10.5.8 (Leopard) — evidence
 
 **Contributor:** [@vit9696](https://github.com/vit9696).
-**Captured against:** mac-guest-agent v2.4.3.
+**Captured against:** mac-guest-agent v2.5.6.
 **Result:** 35 passed, 0 failed.
 
 ---
@@ -33,6 +33,10 @@ vga: vmware
 ```
 
 ### OpenCore specifics
+
+#### General
+
+1. Preferred `SystemProductName` is `MacPro2,1`.
 
 #### `Booter` quirks
 

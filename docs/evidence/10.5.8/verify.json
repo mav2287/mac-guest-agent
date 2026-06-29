@@ -9,7 +9,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 1,
-         "freeze_log_line" : "2026-05-25 13:18:25 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-06-25 12:45:44 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -18,7 +18,7 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 2,
-         "freeze_log_line" : "2026-05-25 13:18:35 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-06-25 12:45:51 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
@@ -27,15 +27,15 @@
       {
          "behavioural_check" : "pass",
          "cycle" : 3,
-         "freeze_log_line" : "2026-05-25 13:18:44 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "freeze_log_line" : "2026-06-25 12:45:58 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "frozen_n" : 1,
          "fsfreeze_status" : "pass",
          "post_thaw_check" : "pass",
          "thawed_n" : 1
       }
    ],
-   "freeze_log_tail" : "2026-05-25 13:18:44 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
-   "generated_at" : "Mon May 25 09:18:59 2026 UTC",
+   "freeze_log_tail" : "2026-06-25 12:45:58 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+   "generated_at" : "Thu Jun 25 08:46:09 2026 UTC",
    "host_checks" : [
       {
          "detail" : "",
@@ -46,13 +46,13 @@
       {
          "detail" : "",
          "level" : "info",
-         "name" : "discard not enabled (optional — needed for guest-fstrim)",
+         "name" : "discard not enabled (optional — needed for thin-disk reclaim; see docs/RECLAIM.md)",
          "section" : "Configuration"
       },
       {
          "detail" : "",
          "level" : "info",
-         "name" : "ssd=1 not set (optional — needed for guest-fstrim)",
+         "name" : "ssd=1 not set (optional — helps thin-disk reclaim; see docs/RECLAIM.md)",
          "section" : "Configuration"
       },
       {
@@ -76,19 +76,19 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "network-get-interfaces — 1 interface(s), IP <REDACTED-IPV4>",
+         "name" : "network-get-interfaces — 2 interface(s), IP <REDACTED-IPV4>",
          "section" : "Agent Communication"
       },
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "info — 45 commands registered, agent v2.4.3",
+         "name" : "info — 42 commands registered, agent v2.5.6",
          "section" : "Agent Communication"
       },
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "memory — agent reports ~1.0 GB used / ~8.0 GB total (2/16 blocks online)",
+         "name" : "memory — agent reports ~8.0 GB used / ~8.0 GB total (16/16 blocks online)",
          "section" : "Memory (guest agent)"
       },
       {
@@ -130,7 +130,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "log-file stat: size=3739 mtime=2026-05-25T13:18:22 name=/var/log/mac-guest-agent.log",
+         "name" : "log-file stat: size=17660 mtime=2026-06-25T12:45:42 name=/var/log/mac-guest-agent.log",
          "section" : "Host Environment"
       },
       {
@@ -166,7 +166,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "cycle 1: freeze log — 2026-05-25 13:18:25 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "name" : "cycle 1: freeze log — 2026-06-25 12:45:44 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "section" : "Freeze / Thaw (3 cycle(s))"
       },
       {
@@ -202,7 +202,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "cycle 2: freeze log — 2026-05-25 13:18:35 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "name" : "cycle 2: freeze log — 2026-06-25 12:45:51 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "section" : "Freeze / Thaw (3 cycle(s))"
       },
       {
@@ -238,7 +238,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "cycle 3: freeze log — 2026-05-25 13:18:44 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
+         "name" : "cycle 3: freeze log — 2026-06-25 12:45:58 [INFO] Filesystem frozen: 0 snapshotted, 0 zfs_snapshotted, 1 fullfsynced, 0 flushed_only (=1 total); skipped 4 (0 network, 4 special, 0 readonly)",
          "section" : "Freeze / Thaw (3 cycle(s))"
       },
       {
@@ -250,7 +250,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "--self-test-json — agent v2.4.3: 19 pass / 1 warn / 0 err",
+         "name" : "--self-test-json — agent v2.5.6: 19 pass / 1 warn / 0 err",
          "section" : "In-VM Diagnostics"
       },
       {
@@ -262,7 +262,7 @@
       {
          "detail" : "",
          "level" : "pass",
-         "name" : "--safe-test-json — 21/21 read-only commands passed (status=pass)",
+         "name" : "--safe-test-json — 31/31 read-only commands passed (status=pass)",
          "section" : "In-VM Diagnostics"
       }
    ],
@@ -275,26 +275,26 @@
       },
       "kexts" : [
          {
-            "load_index" : 68,
+            "load_index" : 69,
             "name" : "com.apple.iokit.IOSerialFamily",
             "version" : "9.4"
          },
          {
-            "load_index" : 69,
+            "load_index" : 70,
             "name" : "com.apple.driver.Apple16X50Serial",
             "version" : "1.9"
          },
          {
-            "load_index" : 70,
+            "load_index" : 71,
             "name" : "com.apple.driver.Apple16X50ACPI",
             "version" : "1.9"
          }
       ],
       "launchd_status" : "{\n\t\"Label\" = \"com.macos.guest-agent\";\n\t\"LimitLoadToSessionType\" = \"System\";\n\t\"OnDemand\" = false;\n\t\"LastExitStatus\" = 0;\n\t\"PID\" = 65;\n\t\"TimeOut\" = 30;\n\t\"Program\" = \"/usr/local/bin/mac-guest-agent\";\n\t\"StandardOutPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"StandardErrorPath\" = \"/var/log/mac-guest-agent.log\";\n\t\"ProgramArguments\" = (\n\t\t\"/usr/local/bin/mac-guest-agent\";\n\t\t\"--daemonize\";\n\t);\n};",
       "log_file" : {
-         "mtime" : "2026-05-25T13:18:22",
+         "mtime" : "2026-06-25T12:45:42",
          "path" : "/var/log/mac-guest-agent.log",
-         "size_bytes" : 3739
+         "size_bytes" : 17660
       },
       "mounts" : [
          {
@@ -324,14 +324,14 @@
       }
    },
    "in_vm_safetest" : {
-      "agent_version" : "2.4.3",
+      "agent_version" : "2.5.6",
       "failures" : 0,
-      "passes" : 21,
+      "passes" : 31,
       "status" : "pass",
       "test" : "safe-test"
    },
    "in_vm_selftest" : {
-      "agent_version" : "2.4.3",
+      "agent_version" : "2.5.6",
       "checks" : [
          {
             "detail" : "10.5.8",
@@ -400,7 +400,7 @@
             "section" : "hooks"
          },
          {
-            "detail" : "45 registered",
+            "detail" : "42 registered",
             "level" : "pass",
             "name" : "commands",
             "section" : "commands"
@@ -536,7 +536,7 @@
       "status" : "pass",
       "system_info" : {
          "arch" : "i386",
-         "command_count" : 45,
+         "command_count" : 42,
          "cpu_count" : 4,
          "freeze_method" : "sync_only",
          "has_apfs" : false,
@@ -547,6 +547,7 @@
          "memory_bytes" : 8589934592,
          "os_version" : "10.5.8",
          "root_fs_type" : "journaled",
+         "selected_arch" : "i386",
          "serial_kext_version" : "1.9"
       },
       "warnings" : 1
