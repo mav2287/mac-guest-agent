@@ -1,0 +1,66 @@
+mac-guest-agent — Host-side Verification
+==========================================
+Transport: pve (qm — Proxmox VE host-side CLI); VMID=<REDACTED-VMID>
+VM ID: <REDACTED-VMID>
+Started: 2026-08-23T17:41:47+03:00
+
+
+--- Preflight ---
+
+--- Configuration ---
+  PASS  agent: enabled=1, type=isa
+  PASS  discard=on (thin reclaim enabled)
+  PASS  ssd=1 (SSD emulation)
+
+--- VM State ---
+  PASS  VM <REDACTED-VMID> is running
+
+--- Agent Communication ---
+  PASS  ping
+  PASS  get-osinfo — macOS 15.7.9
+  PASS  network-get-interfaces — 6 interface(s), IP <REDACTED-IPV4>
+  PASS  info — 42 commands registered, agent v2.5.6
+
+--- Memory (guest agent) ---
+  PASS  memory — agent reports ~16.0 GB used / ~16.0 GB total (16/16 blocks online)
+
+--- Host Environment ---
+  PASS  sw_vers captured (ProductName:		macOS ProductVersion:		15.7.9 BuildVersion:		24G830...)
+  PASS  sysctl captured (Macmini8,1|4|17179869184|Intel Core Processor (Haswell, no TSX))
+  PASS  kextstat captured (3 matching kext line(s))
+  PASS  ioreg serial nodes captured (5777 bytes)
+  PASS  mount table captured (7 mount lines)
+  PASS  launchd job state captured
+  PASS  log-file stat: size=1990 mtime=2026-08-23T07:42:07 name=/var/log/mac-guest-agent.log
+
+--- Freeze / Thaw (3 cycle(s)) ---
+  PASS  cycle 1: fsfreeze-freeze — 5 filesystem(s) frozen
+  PASS  cycle 1: fsfreeze-status — reports frozen
+  PASS  cycle 1: frozen state — non-freeze command rejected by content
+  PASS  cycle 1: fsfreeze-thaw — 5 filesystem(s) thawed
+  PASS  cycle 1: post-thaw — agent answers get-osinfo normally again
+  PASS  cycle 1: freeze log — 2026-08-23 07:42:31 [INFO] Filesystem frozen: 1 snapshotted, 0 zfs_snapshotted, 4 fullfsynced, 0 flushed_only (=5 total); skipped 4 (0 network, 2 special, 2 readonly)
+  PASS  cycle 2: fsfreeze-freeze — 5 filesystem(s) frozen
+  PASS  cycle 2: fsfreeze-status — reports frozen
+  PASS  cycle 2: frozen state — non-freeze command rejected by content
+  PASS  cycle 2: fsfreeze-thaw — 5 filesystem(s) thawed
+  PASS  cycle 2: post-thaw — agent answers get-osinfo normally again
+  PASS  cycle 2: freeze log — 2026-08-23 07:42:41 [INFO] Filesystem frozen: 1 snapshotted, 0 zfs_snapshotted, 4 fullfsynced, 0 flushed_only (=5 total); skipped 4 (0 network, 2 special, 2 readonly)
+  PASS  cycle 3: fsfreeze-freeze — 5 filesystem(s) frozen
+  PASS  cycle 3: fsfreeze-status — reports frozen
+  PASS  cycle 3: frozen state — non-freeze command rejected by content
+  PASS  cycle 3: fsfreeze-thaw — 5 filesystem(s) thawed
+  PASS  cycle 3: post-thaw — agent answers get-osinfo normally again
+  PASS  cycle 3: freeze log — 2026-08-23 07:42:48 [INFO] Filesystem frozen: 1 snapshotted, 0 zfs_snapshotted, 4 fullfsynced, 0 flushed_only (=5 total); skipped 4 (0 network, 2 special, 2 readonly)
+
+--- Mount-Dispatch Cross-Check ---
+  PASS  mount-dispatch cross-check — 5 mount(s) frozen vs ~4 expected (within 1..2x range)
+
+--- In-VM Diagnostics ---
+  PASS  --self-test-json — agent v2.5.6: 22 pass / 0 warn / 0 err
+  PASS  freeze_dispatch contract — apfs=tmutil_snapshot+f_fullfsync, cpustats=linux, zfs_cli=0
+  PASS  --safe-test-json — 31/31 read-only commands passed (status=pass)
+
+===================================
+Results: 38 passed, 0 failed
+Status: ALL CHECKS PASSED
